@@ -1,0 +1,3 @@
+build --package_path %workspace%:/srv/server --spawn_strategy=standalone --genrule_strategy=standalone --verbose_failures
+fetch --package_path %workspace%:/srv/server
+query --package_path %workspace%:/srv/server
