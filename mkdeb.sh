@@ -8,9 +8,15 @@ function cleanup() {
   fi
 }
 
+function fail() {
+  echo "$@" >&2
+  exit 1
+}
+
 trap cleanup EXIT
 
 mkdir -p $pkg_dir/usr/bin $pkg_dir/etc/bash_completion.d
+
 # Do some hacking to support multiple java installations.
 cp ./output/bazel $pkg_dir/usr/bin/bazel-bin
 cp bazel.sh $pkg_dir/usr/bin/bazel
@@ -18,8 +24,8 @@ chmod +x $pkg_dir/usr/bin/bazel
 
 cp bazel.bazelrc $pkg_dir/etc
 
-#./output/bazel build //scripts:bash_completion
-cp ./bazel-bin/scripts/bazel-complete.bash $pkg_dir/etc/bash_completion.d/bazel
+./output/bazel --batch build scripts:bash_completion
+cp ./bazel-bin/scripts/bazel-complete.bash $pkg_dir/etc/bash_completion.d/bazel || fail "Can't package bash_completion"
 
 # oracle-java8-jdk
 # oracle-java8-installer
