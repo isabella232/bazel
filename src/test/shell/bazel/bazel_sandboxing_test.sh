@@ -210,6 +210,21 @@ function test_sandboxed_genrule_with_tools() {
     || fail "Genrule didn't produce output: examples/genrule:tools_work"
 }
 
+# Make sure that sandboxed execution doesn't accumulate files in the
+# sandbox directory.
+function test_sandbox_cleanup() {
+  bazel --batch clean &> $TEST_log \
+    || fail "bazel clean failed"
+  bazel build \
+    examples/genrule:tools_work \
+    || fail "Hermetic genrule failed: examples/genrule:tools_work"
+  bazel shutdown &> $TEST_log || fail "bazel shutdown failed"
+  ls -la "$(bazel info execution_root)/bazel-sandbox"
+  if [[ "$(ls -A "$(bazel info execution_root)"/bazel-sandbox)" ]]; then
+    fail "Build left files around afterwards"
+  fi
+}
+
 # Test for #400: Linux sandboxing and relative symbolic links.
 #
 # let A = examples/genrule/symlinks/a/b/x.txt -> ../x.txt
@@ -349,6 +364,8 @@ EOF
   kill_nc
 }
 
-check_kernel_version
+# The test shouldn't fail if the environment doesn't support running it.
+check_supported_platform || exit 0
 check_sandbox_allowed || exit 0
+
 run_suite "sandbox"

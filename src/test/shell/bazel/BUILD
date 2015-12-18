@@ -63,7 +63,7 @@ filegroup(
         "//tools:srcs",
     ],
     visibility = [
-        "//src/test/shell/bazel:__subpackages__",
+        "//src/test/shell:__subpackages__",
     ],
 )
 
@@ -144,6 +144,12 @@ sh_test(
     size = "large",
     srcs = ["bazel_docgen_test.sh"],
     data = ["//src/main/java/com/google/devtools/build/lib:gen_buildencyclopedia"],
+)
+
+sh_test(
+    name = "external_correctness_test",
+    srcs = ["external_correctness_test.sh"],
+    data = [":test-deps"],
 )
 
 sh_test(

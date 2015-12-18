@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.packages;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -36,6 +35,7 @@ import com.google.devtools.build.lib.packages.AttributeMap.AcceptsLabelAttribute
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.packages.PackageFactory.Globber;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Canonicalizer;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -60,16 +60,6 @@ import java.util.Set;
  * annotation here.
  */
 public class Package {
-
-  public static PackageIdentifier EXTERNAL_PACKAGE_IDENTIFIER;
-
-  static {
-    try {
-      Package.EXTERNAL_PACKAGE_IDENTIFIER = PackageIdentifier.parse("//external");
-    } catch (LabelSyntaxException e) {
-      throw new IllegalStateException();
-    }
-  }
 
   /**
    * Common superclass for all name-conflict exceptions.
@@ -728,7 +718,7 @@ public class Package {
   }
 
   public static LegacyBuilder newExternalPackageBuilder(Path workspacePath, String runfilesPrefix) {
-    LegacyBuilder b = new LegacyBuilder(EXTERNAL_PACKAGE_IDENTIFIER, runfilesPrefix);
+    LegacyBuilder b = new LegacyBuilder(Label.EXTERNAL_PACKAGE_IDENTIFIER, runfilesPrefix);
     b.setFilename(workspacePath);
     b.setMakeEnv(new MakeEnvironment.Builder());
     return b;
@@ -811,7 +801,7 @@ public class Package {
 
     /** Determine if we are in the WORKSPACE file or not */
     public boolean isWorkspace() {
-      return pkg.getPackageIdentifier().equals(EXTERNAL_PACKAGE_IDENTIFIER);
+      return pkg.getPackageIdentifier().equals(Label.EXTERNAL_PACKAGE_IDENTIFIER);
     }
 
     /**

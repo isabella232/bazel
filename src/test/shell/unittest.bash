@@ -81,6 +81,23 @@
   { echo "unittest.bash only works with bash!" >&2; exit 1; }
 
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+#### Configuration variables (may be overridden by testenv.sh or the suite):
+
+# This function may be called by testenv.sh or a test suite to enable errexit
+# in a way that enables us to print pretty stack traces when something fails.
+function enable_errexit() {
+  set -o errtrace
+  set -eu
+  trap __test_terminated_err ERR
+}
+
+function disable_errexit() {
+  set +o errtrace
+  set +eu
+  trap - ERR
+}
+
 source ${DIR}/testenv.sh || { echo "testenv.sh not found!" >&2; exit 1; }
 
 #### Global variables:
@@ -92,7 +109,7 @@ TEST_log=$TEST_TMPDIR/log       # The log file over which the
                                 # be absolute to be robust against
                                 # tests invoking 'cd'!
 
-TEST_passed=true                # The result of the current test;
+TEST_passed="true"              # The result of the current test;
                                 # failed assertions cause this to
                                 # become false.
 
@@ -113,7 +130,7 @@ if [ $# -gt 0 ]; then
   fi
 fi
 
-TEST_verbose=true               # Whether or not to be verbose.  A
+TEST_verbose="true"             # Whether or not to be verbose.  A
                                 # command; "true" or "false" are
                                 # acceptable.  The default is: true.
 
@@ -122,8 +139,8 @@ TEST_script="$(pwd)/$0"         # Full path to test script
 #### Internal functions
 
 function __show_log() {
-    echo "-- Actual output: ------------------------------------------------------"
-    cat $TEST_log
+    echo "-- Test log: -----------------------------------------------------------"
+    [[ -e $TEST_log ]] && cat $TEST_log || echo "(Log file did not exist.)"
     echo "------------------------------------------------------------------------"
 }
 
@@ -183,7 +200,7 @@ function fail() {
     __show_log >&2
     echo "$TEST_name FAILED: $1." >&2
     echo "$1" >$TEST_TMPDIR/__fail
-    TEST_passed=false
+    TEST_passed="false"
     __show_stack
     # Cleanup as we are leaving the subshell now
     tear_down
@@ -404,11 +421,38 @@ function __update_shards() {
 # Usage: __test_terminated <signal-number>
 # Handler that is called when the test terminated unexpectedly
 function __test_terminated() {
-   __show_log >&2
+    __show_log >&2
     echo "$TEST_name FAILED: terminated by signal $1." >&2
-    TEST_passed=false
+    TEST_passed="false"
     __show_stack
     timeout
+    exit 1
+}
+
+# Usage: __test_terminated_err
+# Handler that is called when the test terminated unexpectedly due to "errexit".
+function __test_terminated_err() {
+    # When a subshell exits due to signal ERR, its parent shell also exits,
+    # thus the signal handler is called recursively and we print out the
+    # error message and stack trace multiple times. We're only interested
+    # in the first one though, as it contains the most information, so ignore
+    # all following.
+    if [[ -f $TEST_TMPDIR/__err_handled ]]; then
+      exit 1
+    fi
+    __show_log >&2
+    if [[ ! -z "$TEST_name" ]]; then
+      echo -n "$TEST_name "
+    fi
+    echo "FAILED: terminated because this command returned a non-zero status:" >&2
+    touch $TEST_TMPDIR/__err_handled
+    TEST_passed="false"
+    __show_stack
+    # If $TEST_name is still empty, the test suite failed before we even started
+    # to run tests, so we shouldn't call tear_down.
+    if [[ ! -z "$TEST_name" ]]; then
+      tear_down
+    fi
     exit 1
 }
 
@@ -513,10 +557,12 @@ function run_suite() {
 
     for TEST_name in ${TESTS[@]}; do
       >$TEST_log # Reset the log.
-      TEST_passed=true
+      TEST_passed="true"
 
       total=$(($total + 1))
-      $TEST_verbose && __pad $TEST_name '*' >&2
+      if [[ "$TEST_verbose" == "true" ]]; then
+          __pad $TEST_name '*' >&2
+      fi
 
       local run_time="0.0"
 
@@ -526,14 +572,15 @@ function run_suite() {
         ATEXIT=
 
         # Run test in a subshell.
+        rm -f $TEST_TMPDIR/__err_handled
         __trap_with_arg __test_terminated INT KILL PIPE TERM ABRT FPE ILL QUIT SEGV
         (
           timestamp >$TEST_TMPDIR/__ts_start
           set_up
           eval $TEST_name
-          timestamp >$TEST_TMPDIR/__ts_end
           tear_down
-          test $TEST_passed == true
+          timestamp >$TEST_TMPDIR/__ts_end
+          test $TEST_passed == "true"
         ) 2>&1 | tee $TEST_TMPDIR/__log
         # Note that tee will prevent the control flow continuing if the test
         # spawned any processes which are still running and have not closed
@@ -541,7 +588,7 @@ function run_suite() {
 
         test_subshell_status=${PIPESTATUS[0]}
         if [ "$test_subshell_status" != 0 ]; then
-          TEST_passed=false
+          TEST_passed="false"
           # Ensure that an end time is recorded in case the test subshell
           # terminated prematurely.
           [ -f $TEST_TMPDIR/__ts_end ] || timestamp >$TEST_TMPDIR/__ts_end
@@ -562,19 +609,25 @@ function run_suite() {
       fi
 
       local testcase_tag=""
-      if $TEST_passed; then
-        $TEST_verbose && echo "PASSED: $TEST_name" >&2
+
+      if [[ "$TEST_passed" == "true" ]]; then
+        if [[ "$TEST_verbose" == "true" ]]; then
+          echo "PASSED: $TEST_name" >&2
+        fi
         passed=$(($passed + 1))
         testcase_tag="<testcase name=\"$TEST_name\" status=\"run\" time=\"$run_time\" classname=\"\"></testcase>"
       else
         echo "FAILED: $TEST_name" >&2
         # end marker in CDATA cannot be escaped, we need to split the CDATA sections
         log=$(cat $TEST_TMPDIR/__log | sed 's/]]>/]]>]]&gt;<![CDATA[/g')
-        fail_msg=$(cat $TEST_TMPDIR/__fail || echo "No failure message")
+        fail_msg=$(cat $TEST_TMPDIR/__fail 2> /dev/null || echo "No failure message")
         testcase_tag="<testcase name=\"$TEST_name\" status=\"run\" time=\"$run_time\" classname=\"\"><error message=\"$fail_msg\"><![CDATA[$log]]></error></testcase>"
       fi
-      $TEST_verbose && echo >&2
-    __log_to_test_report "<\/testsuite>" "$testcase_tag"
+
+      if [[ "$TEST_verbose" == "true" ]]; then
+          echo >&2
+      fi
+      __log_to_test_report "<\/testsuite>" "$testcase_tag"
     done
 
     __finish_test_report $total $passed

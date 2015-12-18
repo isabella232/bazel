@@ -15,6 +15,9 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.util.StringUtilities.joinLines;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 
 import com.google.common.base.Function;
 import com.google.common.base.Predicate;
@@ -27,6 +30,11 @@ import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -38,15 +46,11 @@ import java.util.Set;
  * Tests how generated header dependencies make up a little middlemen +
  * headers DAG which hangs off of cc_library nodes.
  */
+@RunWith(JUnit4.class)
 public class CcTransitiveGeneratedHeaderDepsTest extends BuildViewTestCase {
 
-  @Override
-  protected void setUp() throws Exception {
-    super.setUp();
-    writeFiles();
-  }
-
-  private void writeFiles() throws Exception {
+  @Before
+  public final void writeFiles() throws Exception {
     scratch.file("foo/BUILD", "cc_library(name = 'foo',",
                                       "          srcs = ['foo.cc'],",
                                       "          deps = ['//bar', '//boo'])");
@@ -93,6 +97,7 @@ public class CcTransitiveGeneratedHeaderDepsTest extends BuildViewTestCase {
     return createTargets();
   }
 
+  @Test
   public void testQuoteIncludeDirs() throws Exception {
     ConfiguredTarget fooLib = setupWithOptions();
     ImmutableList<PathFragment> quoteIncludeDirs =
@@ -113,6 +118,7 @@ public class CcTransitiveGeneratedHeaderDepsTest extends BuildViewTestCase {
         });
   }
 
+  @Test
   public void testGeneratesTreeOfMiddlemenAndGeneratedHeaders() throws Exception {
     ConfiguredTarget fooLib = setupWithOptions("--noextract_generated_inclusions");
     Set<Artifact> middlemen = fooLib.getProvider(CppCompilationContext.class)
@@ -135,6 +141,7 @@ public class CcTransitiveGeneratedHeaderDepsTest extends BuildViewTestCase {
         ""), new MiddlemenRenderer(middlemen).toString());
   }
 
+  @Test
   public void testExtractInclusionsInActionGraph() throws Exception {
     ConfiguredTarget fooLib = setupWithOptions("--extract_generated_inclusions");
 

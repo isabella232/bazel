@@ -21,7 +21,6 @@ import com.google.devtools.build.lib.analysis.OutputGroupProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -43,8 +42,6 @@ import com.google.devtools.build.lib.rules.java.ProguardSpecProvider;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
-import java.util.List;
-
 /**
  * An implementation for the "android_library" rule.
  */
@@ -60,12 +57,11 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
     if (!AndroidSdkProvider.verifyPresence(ruleContext)) {
       return null;
     }
-    List<? extends TransitiveInfoCollection> deps =
-        ruleContext.getPrerequisites("deps", Mode.TARGET);
     checkResourceInlining(ruleContext);
     NestedSetBuilder<Aar> transitiveAars = collectTransitiveAars(ruleContext);
     NestedSet<LinkerInput> transitiveNativeLibraries =
-        AndroidCommon.collectTransitiveNativeLibraries(deps);
+        AndroidCommon.collectTransitiveNativeLibraries(
+            AndroidCommon.collectTransitiveInfo(ruleContext, Mode.TARGET));
     NestedSet<Artifact> transitiveProguardConfigs =
         new ProguardLibrary(ruleContext).collectProguardSpecs();
     JavaCommon javaCommon = new JavaCommon(ruleContext, javaSemantics);
@@ -83,25 +79,21 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
       if (applicationManifest == null) {
         return null;
       }
-      try {
-        resourceApk = applicationManifest.packWithDataAndResources(
-            ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_RESOURCES_APK),
-            ruleContext,
-            ResourceDependencies.fromRuleDeps(ruleContext, JavaCommon.isNeverLink(ruleContext)),
-            ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_R_TXT),
-            ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_SYMBOLS_TXT),
-            ImmutableList.<String>of(), /* configurationFilters */
-            ImmutableList.<String>of(), /* uncompressedExtensions */
-            ImmutableList.<String>of(), /* densities */
-            null /* applicationId */,
-            null /* versionCode */,
-            null /* versionName */,
-            false,
-            null /* proguardCfgOut */);
-
-      } catch (RuleConfigurationException e) {
-        // RuleConfigurations exceptions will only be thrown after the RuleContext is updated.
-        // So, exit.
+      resourceApk = applicationManifest.packWithDataAndResources(
+          ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_RESOURCES_APK),
+          ruleContext,
+          ResourceDependencies.fromRuleDeps(ruleContext, JavaCommon.isNeverLink(ruleContext)),
+          ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_R_TXT),
+          ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_SYMBOLS_TXT),
+          ImmutableList.<String>of(), /* configurationFilters */
+          ImmutableList.<String>of(), /* uncompressedExtensions */
+          ImmutableList.<String>of(), /* densities */
+          null /* applicationId */,
+          null /* versionCode */,
+          null /* versionName */,
+          false,
+          null /* proguardCfgOut */);
+      if (ruleContext.hasErrors()) {
         return null;
       }
     } else {
@@ -219,11 +211,10 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
 
   private NestedSetBuilder<Aar> collectTransitiveAars(RuleContext ruleContext) {
     NestedSetBuilder<Aar> builder = NestedSetBuilder.naiveLinkOrder();
-    for (AndroidLibraryAarProvider library :
-        ruleContext.getPrerequisites("deps", Mode.TARGET, AndroidLibraryAarProvider.class)) {
+    for (AndroidLibraryAarProvider library : AndroidCommon.getTransitivePrerequisites(
+        ruleContext, Mode.TARGET, AndroidLibraryAarProvider.class)) {
       builder.addTransitive(library.getTransitiveAars());
     }
     return builder;
   }
 }
-

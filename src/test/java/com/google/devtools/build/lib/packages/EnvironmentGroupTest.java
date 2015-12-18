@@ -14,6 +14,9 @@
 package com.google.devtools.build.lib.packages;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -38,10 +41,7 @@ public class EnvironmentGroupTest extends PackageLoadingTestCase {
   private EnvironmentGroup group;
 
   @Before
-  @Override
-  public void setUp() throws Exception {
-    super.setUp();
-
+  public final void createPackage() throws Exception {
     Path buildfile =
         scratch.file(
             "pkg/BUILD",

@@ -22,8 +22,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -121,11 +121,8 @@ public abstract class ScopeEscapableFileSystemTest extends SymlinkAwareFileSyste
   private Path dirLink;
   private PathFragment dirLinkTarget;
 
-  @Override
   @Before
-  public void setUp() throws Exception {
-    super.setUp();
-
+  public final void createLinks() throws Exception  {
     Preconditions.checkState(
         testFS instanceof ScopeEscapableFileSystem, "Not ScopeEscapable: %s", testFS);
     ((ScopeEscapableFileSystem) testFS).enableScopeChecking(false);

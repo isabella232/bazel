@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
-
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.skyframe.FileArtifactValue.create;
 import static org.junit.Assert.assertArrayEquals;
@@ -34,9 +33,12 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.MissingInputFileException;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.actions.util.TestAction.DummyAction;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.events.NullEventHandler;
+import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.skyframe.ActionLookupValue.ActionLookupKey;
+import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.Pair;
@@ -89,28 +91,39 @@ public class ArtifactFunctionTest {
   private TimestampGranularityMonitor tsgm = new TimestampGranularityMonitor(BlazeClock.instance());
 
   @Before
-  public void setUp() throws Exception {
-    
+  public final void setUp() throws Exception  {
     setupRoot(new CustomInMemoryFs());
-    AtomicReference<PathPackageLocator> pkgLocator =
-        new AtomicReference<>(PathPackageLocator.EMPTY);
-    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator);
+    AtomicReference<PathPackageLocator> pkgLocator = new AtomicReference<>(new PathPackageLocator(
+        root.getFileSystem().getPath("/outputbase"), ImmutableList.of(root)));
+    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator, false);
     differencer = new RecordingDifferencer();
     evaluator =
         new InMemoryMemoizingEvaluator(
-            ImmutableMap.of(
-                SkyFunctions.FILE_STATE, new FileStateFunction(tsgm, externalFilesHelper),
-                SkyFunctions.FILE, new FileFunction(pkgLocator, tsgm, externalFilesHelper),
-                SkyFunctions.ARTIFACT, new ArtifactFunction(Predicates.<PathFragment>alwaysFalse()),
-                SkyFunctions.ACTION_EXECUTION, new SimpleActionExecutionFunction()),
+            ImmutableMap.<SkyFunctionName, SkyFunction>builder()
+                .put(SkyFunctions.FILE_STATE, new FileStateFunction(tsgm, externalFilesHelper))
+                .put(SkyFunctions.FILE, new FileFunction(pkgLocator))
+                .put(SkyFunctions.ARTIFACT,
+                    new ArtifactFunction(Predicates.<PathFragment>alwaysFalse()))
+                .put(SkyFunctions.ACTION_EXECUTION, new SimpleActionExecutionFunction())
+                .put(SkyFunctions.PACKAGE,
+                    new PackageFunction(null, null, null, null, null, null, null))
+                .put(SkyFunctions.PACKAGE_LOOKUP, new PackageLookupFunction(null))
+                .put(SkyFunctions.WORKSPACE_FILE,
+                    new WorkspaceFileFunction(TestRuleClassProvider.getRuleClassProvider(),
+                        new PackageFactory(TestRuleClassProvider.getRuleClassProvider()),
+                        new BlazeDirectories(root, root, root)))
+                .build(),
             differencer);
     driver = new SequentialBuildDriver(evaluator);
     PrecomputedValue.BUILD_ID.set(differencer, UUID.randomUUID());
+    PrecomputedValue.PATH_PACKAGE_LOCATOR.set(differencer, pkgLocator.get());
     actions = new HashSet<>();
   }
 
-  private void setupRoot(CustomInMemoryFs fs) {
+  private void setupRoot(CustomInMemoryFs fs) throws IOException {
     root = fs.getPath(TestUtils.tmpDir());
+    FileSystemUtils.createDirectoryAndParents(root);
+    FileSystemUtils.createEmptyFile(root.getRelative("WORKSPACE"));
   }
 
   private void assertFileArtifactValueMatches(boolean expectDigest) throws Throwable {

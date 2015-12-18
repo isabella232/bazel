@@ -15,6 +15,8 @@ package com.google.devtools.build.lib.ideinfo;
 
 import static com.google.common.collect.Iterables.transform;
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
 import com.google.devtools.build.lib.ideinfo.androidstudio.AndroidStudioIdeInfo.ArtifactLocation;
 import com.google.devtools.build.lib.ideinfo.androidstudio.AndroidStudioIdeInfo.JavaRuleIdeInfo;
@@ -22,13 +24,19 @@ import com.google.devtools.build.lib.ideinfo.androidstudio.AndroidStudioIdeInfo.
 import com.google.devtools.build.lib.ideinfo.androidstudio.AndroidStudioIdeInfo.RuleIdeInfo.Kind;
 import com.google.devtools.build.lib.vfs.Path;
 
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 import java.util.Map;
 
 /**
  * Tests for {@link AndroidStudioInfoAspect} validating proto's contents.
  */
+@RunWith(JUnit4.class)
 public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase {
 
+  @Test
   public void testSimpleJavaLibrary() throws Exception {
     Path buildFilePath =
         scratch.file(
@@ -58,6 +66,25 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
+  public void testPackageManifestCreated() throws Exception {
+    scratch.file(
+        "com/google/example/BUILD",
+        "java_library(",
+        "    name = 'simple',",
+        "    srcs = ['simple/Simple.java']",
+        ")");
+    Map<String, RuleIdeInfo> ruleIdeInfos = buildRuleIdeInfo("//com/google/example:simple");
+    assertThat(ruleIdeInfos.size()).isEqualTo(1);
+    RuleIdeInfo ruleIdeInfo = getRuleInfoAndVerifyLabel(
+        "//com/google/example:simple", ruleIdeInfos);
+    
+    ArtifactLocation packageManifest = ruleIdeInfo.getJavaRuleIdeInfo().getPackageManifest();
+    assertNotNull(packageManifest);
+    assertEquals(packageManifest.getRelativePath(), "com/google/example/simple.manifest");
+  }
+  
+  @Test
   public void testJavaLibraryProtoWithDependencies() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -83,7 +110,8 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     assertThat(complexRuleIdeInfo.getDependenciesList())
         .containsExactly("//com/google/example:simple");
   }
-
+  
+  @Test
   public void testJavaLibraryWithTransitiveDependencies() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -128,6 +156,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testJavaLibraryWithDiamondDependencies() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -166,6 +195,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         .containsExactly("//com/google/example:complex", "//com/google/example:complex1");
   }
 
+  @Test
   public void testJavaLibraryWithExports() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -213,6 +243,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testJavaLibraryWithTransitiveExports() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -256,6 +287,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         .inOrder();
   }
 
+  @Test
   public void testJavaImport() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -291,6 +323,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testJavaImportWithExports() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -321,6 +354,35 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         .inOrder();
   }
 
+  @Test
+  public void testNoPackageManifestForExports() throws Exception {
+    scratch.file(
+        "com/google/example/BUILD",
+        "java_library(",
+        "   name = 'foobar',",
+        "   srcs = ['FooBar.java'],",
+        ")",
+        "java_import(",
+        "   name = 'imp',",
+        "   jars = ['a.jar', 'b.jar'],",
+        "   deps = [':foobar'],",
+        "   exports = [':foobar'],",
+        ")",
+        "java_library(",
+        "   name = 'lib',",
+        "   srcs = ['Lib.java'],",
+        "   deps = [':imp'],",
+        ")");
+    
+    Map<String, RuleIdeInfo> ruleIdeInfos = buildRuleIdeInfo("//com/google/example:lib");
+    RuleIdeInfo libInfo = getRuleInfoAndVerifyLabel("//com/google/example:lib", ruleIdeInfos);
+    RuleIdeInfo impInfo = getRuleInfoAndVerifyLabel("//com/google/example:imp", ruleIdeInfos);
+   
+    assertThat(!impInfo.getJavaRuleIdeInfo().hasPackageManifest()).isTrue();
+    assertThat(libInfo.getJavaRuleIdeInfo().hasPackageManifest()).isTrue();
+  }
+
+  @Test
   public void testGeneratedJavaImportFilesAreAddedToOutputGroup() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -346,6 +408,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testAspectIsPropagatedAcrossExports() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -363,6 +426,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     getRuleInfoAndVerifyLabel("//com/google/example:foobar", ruleIdeInfos);
   }
 
+  @Test
   public void testJavaTest() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -397,6 +461,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testJavaBinary() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -430,6 +495,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testAndroidLibrary() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -481,6 +547,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testAndroidBinary() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -535,6 +602,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testAndroidInferredPackage() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -556,6 +624,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     assertThat(lRuleInfo.getAndroidRuleIdeInfo().getJavaPackage()).isEqualTo("com.google.example");
   }
 
+  @Test
   public void testAndroidLibraryWithoutAidlHasNoIdlJars() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -571,6 +640,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     assertThat(noIdlRuleInfo.getAndroidRuleIdeInfo().getHasIdlSources()).isFalse();
   }
 
+  @Test
   public void testAndroidLibraryWithAidlHasIdlJars() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -598,6 +668,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testAndroidLibraryGeneratedManifestIsAddedToOutputGroup() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -622,6 +693,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     );
   }
 
+  @Test
   public void testJavaLibraryWithoutGeneratedSourcesHasNoGenJars() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -638,6 +710,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         .isEmpty();
   }
 
+  @Test
   public void testJavaLibraryWithGeneratedSourcesHasGenJars() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -673,7 +746,8 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         "java/com/google/example/libtest-gensrc.jar"
     );
   }
-  
+
+  @Test
   public void testNonConformingPackageName() throws Exception {
     scratch.file(
         "bad/package/google/example/BUILD",
@@ -690,6 +764,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         .isEqualTo("bad.package.google.example");
   }
 
+  @Test
   public void testTags() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -704,6 +779,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         .containsExactly("a", "b", "c", "d");
   }
 
+  @Test
   public void testAndroidLibraryWithoutSourcesExportsDependencies() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",
@@ -728,6 +804,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         "//java/com/google/example:lib");
   }
 
+  @Test
   public void testSourceFilesAreCorrectlyMarkedAsSourceOrGenerated() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -755,6 +832,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
             .build());
   }
 
+  @Test
   public void testAspectIsPropagatedAcrossRuntimeDeps() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -776,6 +854,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     assertThat(libInfo.getDependenciesList()).isEmpty();
   }
 
+  @Test
   public void testAndroidLibraryGeneratesResourceClass() throws Exception {
     scratch.file(
         "java/com/google/example/BUILD",

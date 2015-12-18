@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
@@ -21,6 +20,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
 import java.util.Collection;
@@ -197,12 +197,11 @@ public final class AndroidIdeInfoProvider implements TransitiveInfoProvider {
     }
 
     public Builder addResourceSource(Artifact resource) {
+      PathFragment resourceDir = LocalResourceContainer.Builder.findResourceDir(resource);
       resourceDirs.add(
           new SourceDirectory(
               resource.getRoot().getPath().asFragment(),
-              trimTo(
-                  resource.getRootRelativePath(),
-                  LocalResourceContainer.Builder.findResourceDir(resource)),
+              trimTo(resource.getRootRelativePath(), resourceDir),
               resource.isSourceArtifact()));
       return this;
     }

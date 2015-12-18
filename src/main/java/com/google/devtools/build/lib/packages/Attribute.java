@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
@@ -25,15 +24,16 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.NativeAspectClass.NativeAspectFactory;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkCallbackFunction;
-import com.google.devtools.build.lib.syntax.SkylarkModule;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.syntax.Type.ConversionException;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.StringUtil;
 
 import java.util.Arrays;
@@ -477,6 +477,10 @@ public final class Attribute implements Comparable<Attribute> {
       value = type.convert(defaultValue, "attribute " + name);
       valueSet = true;
       return this;
+    }
+
+    public boolean isValueSet() {
+      return valueSet;
     }
 
     /**

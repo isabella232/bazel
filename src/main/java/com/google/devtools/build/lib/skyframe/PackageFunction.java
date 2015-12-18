@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.base.Preconditions;
 import com.google.common.cache.Cache;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
@@ -53,6 +52,7 @@ import com.google.devtools.build.lib.syntax.LoadStatement;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
 import com.google.devtools.build.lib.syntax.Statement;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -394,10 +394,10 @@ public class PackageFunction implements SkyFunction {
       }
     }
 
-    if (packageId.equals(Package.EXTERNAL_PACKAGE_IDENTIFIER)) {
+    if (packageId.equals(Label.EXTERNAL_PACKAGE_IDENTIFIER)) {
       return getExternalPackage(env, packageLookupValue.getRoot());
     }
-    SkyKey externalPackageKey = PackageValue.key(Package.EXTERNAL_PACKAGE_IDENTIFIER);
+    SkyKey externalPackageKey = PackageValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER);
     PackageValue externalPackage = (PackageValue) env.getValue(externalPackageKey);
     if (externalPackage == null) {
       return null;
@@ -405,7 +405,7 @@ public class PackageFunction implements SkyFunction {
     Package externalPkg = externalPackage.getPackage();
     if (externalPkg.containsErrors()) {
       throw new PackageFunctionException(
-          new BuildFileContainsErrorsException(Package.EXTERNAL_PACKAGE_IDENTIFIER),
+          new BuildFileContainsErrorsException(Label.EXTERNAL_PACKAGE_IDENTIFIER),
           Transience.PERSISTENT);
     }
 
@@ -947,7 +947,7 @@ public class PackageFunction implements SkyFunction {
   private static class BadWorkspaceFileException extends NoSuchPackageException {
     private BadWorkspaceFileException(String message) {
       super(
-          Package.EXTERNAL_PACKAGE_IDENTIFIER,
+          Label.EXTERNAL_PACKAGE_IDENTIFIER,
           "Error encountered while dealing with the WORKSPACE file: " + message);
     }
   }

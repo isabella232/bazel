@@ -13,13 +13,12 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelValidator;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
-import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.vfs.Path;
@@ -58,7 +57,7 @@ public class PackageLookupFunction implements SkyFunction {
     if (!packageKey.getRepository().equals(PackageIdentifier.MAIN_REPOSITORY_NAME)
         && !packageKey.getRepository().isDefault()) {
       return computeExternalPackageLookupValue(skyKey, env, packageKey);
-    } else if (packageKey.equals(Package.EXTERNAL_PACKAGE_IDENTIFIER)) {
+    } else if (packageKey.equals(Label.EXTERNAL_PACKAGE_IDENTIFIER)) {
       return computeWorkspaceLookupValue(env, packageKey);
     }
 
@@ -178,14 +177,11 @@ public class PackageLookupFunction implements SkyFunction {
     if (fileValue == null) {
       return null;
     }
-    Optional<FileValue> overlaidBuildFile = repositoryValue.getOverlaidBuildFile();
+
     if (fileValue.isFile()) {
-      if (overlaidBuildFile.isPresent()) {
-        return PackageLookupValue.overlaidBuildFile(repositoryValue.getPath(), overlaidBuildFile);
-      } else {
         return PackageLookupValue.success(repositoryValue.getPath());
-      }
     }
+
     return PackageLookupValue.NO_BUILD_FILE_VALUE;
   }
 

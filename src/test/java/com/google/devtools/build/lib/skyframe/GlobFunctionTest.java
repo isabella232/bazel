@@ -99,8 +99,7 @@ public abstract class GlobFunctionTest {
   private static final PackageIdentifier PKG_PATH_ID = PackageIdentifier.createInDefaultRepo("pkg");
 
   @Before
-  public void setUp() throws Exception {
-    
+  public final void setUp() throws Exception  {
     fs = new CustomInMemoryFs(new ManualClock());
     root = fs.getRootDirectory().getRelative("root/workspace");
     writableRoot = fs.getRootDirectory().getRelative("writableRoot/workspace");
@@ -126,7 +125,7 @@ public abstract class GlobFunctionTest {
   private Map<SkyFunctionName, SkyFunction> createFunctionMap() {
     AtomicReference<ImmutableSet<PackageIdentifier>> deletedPackages =
         new AtomicReference<>(ImmutableSet.<PackageIdentifier>of());
-    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator);
+    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator, false);
 
     Map<SkyFunctionName, SkyFunction> skyFunctions = new HashMap<>();
     skyFunctions.put(SkyFunctions.GLOB, new GlobFunction(alwaysUseDirListing()));
@@ -141,7 +140,7 @@ public abstract class GlobFunctionTest {
         SkyFunctions.FILE_STATE,
         new FileStateFunction(
             new TimestampGranularityMonitor(BlazeClock.instance()), externalFilesHelper));
-    skyFunctions.put(SkyFunctions.FILE, new FileFunction(pkgLocator, tsgm, externalFilesHelper));
+    skyFunctions.put(SkyFunctions.FILE, new FileFunction(pkgLocator));
     return skyFunctions;
   }
 

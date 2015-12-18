@@ -15,9 +15,14 @@ package com.google.devtools.build.lib.analysis.util;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.getFirstArtifactEndingWith;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.base.Splitter;
@@ -123,6 +128,7 @@ import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -133,6 +139,8 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
+
+import org.junit.Before;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -176,11 +184,9 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected WorkspaceStatusAction.Factory workspaceStatusActionFactory;
 
   private MutableActionGraph mutableActionGraph;
-  protected boolean enableLoading = true;
 
-  @Override
-  protected void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void initializeSkyframeExecutor() throws Exception {
     AnalysisMock mock = getAnalysisMock();
     directories = new BlazeDirectories(outputBase, outputBase, rootDirectory);
     binTools = BinTools.forUnitTesting(directories, TestConstants.EMBEDDED_TOOLS);
@@ -203,7 +209,6 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
             binTools,
             workspaceStatusActionFactory,
             ruleClassProvider.getBuildInfoFactories(),
-            ImmutableSet.<Path>of(),
             ImmutableList.<DiffAwareness.Factory>of(),
             Predicates.<PathFragment>alwaysFalse(),
             getPreprocessorFactorySupplier(),
@@ -294,7 +299,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   private void setUpSkyframe() {
     PathPackageLocator pkgLocator = PathPackageLocator.create(
-        null, packageCacheOptions.packagePath, reporter, rootDirectory, rootDirectory);
+        outputBase, packageCacheOptions.packagePath, reporter, rootDirectory, rootDirectory);
     skyframeExecutor.preparePackageLoading(pkgLocator,
         packageCacheOptions.defaultVisibility, true,
         7, ruleClassProvider.getDefaultsPackageContent(optionsParser),
@@ -1324,7 +1329,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         Collections.unmodifiableSet(ruleClassProvider.getRuleClassMap().keySet()));
     LoadingResult loadingResult = runner.execute(reporter, eventBus, targets, loadingOptions,
         getTargetConfiguration().getAllLabels(), viewOptions.keepGoing,
-        enableLoading, /*determineTests=*/false, /*callback=*/null);
+        isLoadingEnabled(), /*determineTests=*/false, /*callback=*/null);
     if (!doAnalysis) {
       // TODO(bazel-team): What's supposed to happen in this case?
       return null;
@@ -1337,7 +1342,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         AnalysisTestUtil.TOP_LEVEL_ARTIFACT_CONTEXT,
         reporter,
         eventBus,
-        enableLoading);
+        isLoadingEnabled());
   }
 
   protected static Predicate<Artifact> artifactNamed(final String name) {
@@ -1658,9 +1663,5 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     }
 
     return result.build();
-  }
-
-  protected void disableLoading() {
-    enableLoading = false;
   }
 }

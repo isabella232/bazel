@@ -27,6 +27,7 @@ In order of priority:
 """
 
 _DEFAULT_LIB = "go_default_library"
+
 _VENDOR_PREFIX = "/vendor/"
 
 go_filetype = FileType([".go"])
@@ -53,11 +54,11 @@ def _go_prefix(ctx):
   return prefix
 
 _go_prefix_rule = rule(
-  _go_prefix_impl,
-  attrs = {
-    "prefix": attr.string(mandatory=True),
+    _go_prefix_impl,
+    attrs = {
+        "prefix": attr.string(mandatory = True),
     },
-  )
+)
 
 def go_prefix(prefix):
   """go_prefix sets the Go import name to be used for this workspace."""
@@ -95,7 +96,34 @@ def symlink_tree_commands(dest_dir, artifact_dict):
     ]
   return cmds
 
+def go_environment_vars(ctx):
+  """Return a map of environment variables for use with actions, based on
+  the arguments. Uses the ctx.fragments.cpp.cpu attribute, if present,
+  and picks a default of target_os="linux" and target_arch="amd64"
+  otherwise.
 
+  Args:
+    The skylark Context.
+
+  Returns:
+    A dict of environment variables for running Go tool commands that build for
+    the target OS and architecture.
+  """
+  bazel_to_go_toolchain = {"k8": {"GOOS": "linux",
+                                  "GOARCH": "amd64"},
+                           "piii": {"GOOS": "linux",
+                                    "GOARCH": "386"},
+                           "darwin": {"GOOS": "darwin",
+                                      "GOARCH": "amd64"},
+                           "freebsd": {"GOOS": "freebsd",
+                                       "GOARCH": "amd64"},
+                           "armeabi-v7a": {"GOOS": "linux",
+                                           "GOARCH": "arm"},
+                           "arm": {"GOOS": "linux",
+                                   "GOARCH": "arm"}}
+  return bazel_to_go_toolchain.get(ctx.fragments.cpp.cpu,
+                                   {"GOOS": "linux",
+                                    "GOARCH": "amd64"})
 
 def emit_go_compile_action(ctx, sources, deps, out_lib):
   """Construct the command line for compiling Go code.
@@ -160,8 +188,8 @@ def emit_go_compile_action(ctx, sources, deps, out_lib):
       inputs = inputs + ctx.files.toolchain,
       outputs = [out_lib],
       mnemonic = "GoCompile",
-      command =  " && ".join(cmds))
-
+      command =  " && ".join(cmds),
+      env = go_environment_vars(ctx))
 
 def go_library_impl(ctx):
   """Implements the go_library() rule."""
@@ -182,14 +210,15 @@ def go_library_impl(ctx):
   for dep in ctx.attr.deps:
      transitive_libs += dep.transitive_go_library_object
 
+  runfiles = ctx.runfiles(collect_data = True)
   return struct(
     label = ctx.label,
     files = set([out_lib]),
     direct_deps = deps,
+    runfiles = runfiles,
     go_sources = sources,
     go_library_object = out_lib,
     transitive_go_library_object = transitive_libs)
-
 
 def emit_go_link_action(ctx, transitive_libs, lib, executable):
   """Sets up a symlink tree to libraries to link together."""
@@ -221,8 +250,8 @@ def emit_go_link_action(ctx, transitive_libs, lib, executable):
       inputs = list(transitive_libs) + [lib] + ctx.files.toolchain,
       outputs = [executable],
       command = ' && '.join(cmds),
-      mnemonic = "GoLink")
-
+      mnemonic = "GoLink",
+      env = go_environment_vars(ctx))
 
 def go_binary_impl(ctx):
   """go_binary_impl emits actions for compiling and linking a go executable."""
@@ -237,7 +266,6 @@ def go_binary_impl(ctx):
                           files = ctx.files.data)
   return struct(files = set([executable]) + lib_result.files,
                 runfiles = runfiles)
-
 
 def go_test_impl(ctx):
   """go_test_impl implements go testing.
@@ -260,7 +288,8 @@ def go_test_impl(ctx):
       executable = ctx.executable.test_generator,
       outputs = [main_go],
       mnemonic = "GoTestGenTest",
-      arguments = args)
+      arguments = args,
+      env = dict(go_environment_vars(ctx), RUNDIR=ctx.label.package))
 
   emit_go_compile_action(
     ctx, set([main_go]), ctx.attr.deps + [lib_result], ctx.outputs.main_lib)
@@ -277,60 +306,96 @@ def go_test_impl(ctx):
   return struct(runfiles=runfiles)
 
 go_library_attrs = {
-    "data": attr.label_list(allow_files=True, cfg=DATA_CFG),
-    "srcs": attr.label_list(allow_files=go_filetype),
+    "data": attr.label_list(
+        allow_files = True,
+        cfg = DATA_CFG,
+    ),
+    "srcs": attr.label_list(allow_files = go_filetype),
     "deps": attr.label_list(
-        providers=[
-          "direct_deps",
-          "go_library_object",
-          "transitive_go_library_object",
-        ]),
+        providers = [
+            "direct_deps",
+            "go_library_object",
+            "transitive_go_library_object",
+        ],
+    ),
     "toolchain": attr.label(
-        default=Label("//tools/build_rules/go/toolchain:toolchain"),
-        allow_files=True,
-        cfg=HOST_CFG),
+        default = Label("@//tools/build_rules/go/toolchain:toolchain"),
+        allow_files = True,
+        cfg = HOST_CFG,
+    ),
     "go_tool": attr.label(
-        default=Label("//tools/build_rules/go/toolchain:go_tool"),
+        default = Label("@//tools/build_rules/go/toolchain:go_tool"),
         single_file = True,
-        allow_files=True,
-        cfg=HOST_CFG),
+        allow_files = True,
+        cfg = HOST_CFG,
+    ),
     "library": attr.label(
-        providers=["go_sources"]),
+        providers = ["go_sources"],
+    ),
     "go_prefix": attr.label(
-        providers = [ "go_prefix" ],
-        default=Label("//external:go_prefix"),
-        allow_files=False, cfg=HOST_CFG),
-    }
+        providers = ["go_prefix"],
+        default = Label("//external:go_prefix"),
+        allow_files = False,
+        cfg = HOST_CFG,
+    ),
+}
 
 go_library_outputs = {
-  "lib": "%{name}.a",
+    "lib": "%{name}.a",
 }
 
 go_library = rule(
     go_library_impl,
     attrs = go_library_attrs,
-    outputs = go_library_outputs)
+    fragments = ["cpp"],
+    outputs = go_library_outputs,
+)
 
 go_binary = rule(
     go_binary_impl,
-    executable = True,
     attrs = go_library_attrs + {
-        "stamp": attr.bool(default=False),
-        },
-    outputs = go_library_outputs)
+        "stamp": attr.bool(default = False),
+    },
+    executable = True,
+    fragments = ["cpp"],
+    outputs = go_library_outputs,
+)
 
 go_test = rule(
     go_test_impl,
-    executable = True,
-    test = True,
     attrs = go_library_attrs + {
-      "test_generator": attr.label(
-          executable=True,
-          default=Label("//tools/build_rules/go/tools:generate_test_main"),
-          cfg=HOST_CFG),
-      },
+        "test_generator": attr.label(
+            executable = True,
+            default = Label("//tools/build_rules/go/tools:generate_test_main"),
+            cfg = HOST_CFG,
+        ),
+    },
+    executable = True,
+    fragments = ["cpp"],
     outputs = {
-      "lib" : "%{name}.a",
-      "main_lib": "%{name}_main_test.a",
-      "main_go": "%{name}_main_test.go",
-})
+        "lib": "%{name}.a",
+        "main_lib": "%{name}_main_test.a",
+        "main_go": "%{name}_main_test.go",
+    },
+    test = True,
+)
+
+# TODO(bazel-team): support darwin
+def go_repositories():
+  native.bind(name  = "go_prefix",
+    actual = "//:go_prefix",
+  )
+
+  native.new_http_archive(
+    name=  "golang-linux-amd64",
+    url = "https://storage.googleapis.com/golang/go1.5.1.linux-amd64.tar.gz",
+    build_file = "tools/build_rules/go/toolchain/BUILD.go-toolchain",
+    sha256 = "2593132ca490b9ee17509d65ee2cd078441ff544899f6afb97a03d08c25524e7"
+  )
+
+  native.new_http_archive(
+    name=  "golang-darwin-amd64",
+    url = "https://storage.googleapis.com/golang/go1.5.1.darwin-amd64.tar.gz",
+    build_file = "tools/build_rules/go/toolchain/BUILD.go-toolchain",
+    sha256 = "e94487b8cd2e0239f27dc51e6c6464383b10acb491f753584605e9b28abf48fb"
+  )

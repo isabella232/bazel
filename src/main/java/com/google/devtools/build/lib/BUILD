@@ -74,6 +74,7 @@ java_library(
     srcs = glob(["concurrent/*.java"]),
     deps = [
         ":common",
+        ":preconditions",
         "//third_party:jsr305",
     ],
 )
@@ -87,6 +88,7 @@ java_library(
     ]),
     deps = [
         ":common",
+        ":preconditions",
         "//third_party:jsr305",
     ],
 )
@@ -104,6 +106,7 @@ java_library(
         ":common",
         ":concurrent",
         ":os_util",
+        ":preconditions",
         ":unix",
         "//third_party:jsr305",
     ],
@@ -134,6 +137,7 @@ java_library(
         ":clock",
         ":common",
         ":concurrent",
+        ":preconditions",
         ":unix",
         ":vfs",
         "//third_party:jsr305",
@@ -163,6 +167,17 @@ java_library(
     ],
     deps = [
         ":common",
+        ":preconditions",
+    ],
+)
+
+# Varargs-avoiding overloads of Preconditions functions.
+java_library(
+    name = "preconditions",
+    srcs = ["util/Preconditions.java"],
+    deps = [
+        ":common",
+        "//third_party:jsr305",
     ],
 )
 
@@ -194,6 +209,7 @@ java_library(
             "util/ExitCode.java",
             "util/JavaClock.java",
             "util/OS.java",
+            "util/Preconditions.java",
             "util/StringCanonicalizer.java",
             "util/StringTrie.java",
             "util/VarInt.java",
@@ -205,6 +221,7 @@ java_library(
         ":collect",
         ":exitcode-external",
         ":os_util",
+        ":preconditions",
     ],
     deps = [
         ":base-util",
@@ -213,6 +230,7 @@ java_library(
         ":concurrent",
         ":exitcode-external",
         ":os_util",
+        ":preconditions",
         ":shell",
         ":unix",
         ":vfs",
@@ -239,6 +257,7 @@ java_library(
         ":common",
         ":concurrent",
         ":io",
+        ":preconditions",
         ":vfs",
         "//third_party:jsr305",
     ],
@@ -265,6 +284,16 @@ java_library(
     ],
 )
 
+java_library(
+    name = "skylarkinterface",
+    srcs = glob([
+        "skylarkinterface/*.java",
+    ]),
+    deps = [
+        "//third_party:jsr305",
+    ],
+)
+
 ########################################################################
 #
 # The "cmdline" library: Label validation and target pattern
@@ -282,7 +311,7 @@ java_library(
         ":base-util",
         ":common",
         ":concurrent",
-        ":syntax",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//third_party:jsr305",
@@ -295,10 +324,12 @@ java_library(
         "syntax/**/*.java",
     ]),
     deps = [
+        ":cmdline",
         ":collect",
         ":common",
         ":concurrent",
         ":events",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//third_party:asm",
@@ -345,6 +376,7 @@ java_library(
         ":common",
         ":concurrent",
         ":events",
+        ":skylarkinterface",
         ":syntax",
         ":util",
         ":vfs",
@@ -413,6 +445,7 @@ java_library(
         ":os_util",
         ":packages-internal",
         ":shell",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -456,6 +489,7 @@ java_library(
         ":packages-internal",
         ":proto-rules",
         ":python-rules",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -572,7 +606,6 @@ java_library(
     srcs = ["bazel/repository/MavenConnector.java"],
     deps = [
         "//third_party:aether",
-        "//third_party:jsr330_inject",
         "//third_party:maven_model",
     ],
 )
@@ -609,9 +642,13 @@ java_library(
         ":common",
         ":concurrent",
         ":packages-internal",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/common/options",
+        "//third_party:auto_value",
+        "//third_party:guava",
         "//third_party:jsr305",
         "//third_party:protobuf",
     ],
@@ -635,6 +672,7 @@ java_library(
         ":java-implicit-attributes",
         ":packages-internal",
         ":shell",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -686,8 +724,8 @@ java_library(
         ":collect",
         ":common",
         ":concurrent",
-        ":nativedeps-rules",
         ":packages-internal",
+        ":skylarkinterface",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -709,6 +747,7 @@ java_library(
         ":android-rules",
         ":build-base",
         ":collect",
+        ":common",
         ":concurrent",
         ":java-rules",
         ":packages-internal",

@@ -520,9 +520,9 @@ Subtractive patterns:
   building the former.
 </p>
 <p>
-  Targets with <code>tags=["manual"]</code> will be ignored by all command line
-  wildcards (..., :*, :all, etc). The only way to run such targets is to
-  specify them explicitly on the command line.
+  Targets with <code>tags=["manual"]</code> will not be included in wildcard target patterns (...,
+  :*, :all, etc). You should specify such test targets with explicit target patterns on the command
+  line if you want Bazel to build/test them.
 </p>
 
 <h3 id='fetch'>Fetching external dependencies</h3>
@@ -533,18 +533,16 @@ Subtractive patterns:
   when new external dependendencies are added or because you'd like to
   "prefetch" dependencies (say, before a flight where you'll be offline). If you
   would like to prevent new dependencies from being added during builds, you
-  can specify the <code>--fetch=false</code> flag.
+  can specify the <code>--fetch=false</code> flag. Note that this flag only
+  applies to repository rules that do not point to a directory in the local
+  file system. Changes, for example, to <code>local_repository</code>,
+  <code>new_local_repository</code> and Android SDK and NDK repository rules
+  will always take effect regardless of the value <code>--fetch</code> .
 </p>
 
 <p>
   If you disallow fetching during builds and Bazel finds new external
-  dependencies, your build will fail with:
-<pre>
-ERROR: /path/to/your/BUILD:1:1: error loading package 'external': to fix, run
-    bazel fetch //...
-External repository @your-repo not found and referenced by '//your:target'.
-ERROR: Loading failed; build aborted.
-</pre>
+  dependencies, your build will fail.
 </p>
 
 <p>
@@ -844,6 +842,24 @@ $ bazel fetch //...
   To disable this warning you can pass the <code>--ignore_unsupported_sandboxing</code> flag to
   Bazel.
 </p>
+
+<p>
+  On some platforms such as <a href="https://cloud.google.com/container-engine/">Google Container
+  Engine</a> cluster nodes or Debian, user namespaces are deactivated by default due to security
+  concerns. This can be checked by looking at the file
+  <code>/proc/sys/kernel/unprivileged_userns_clone</code>: if it exists and contains a 0, then
+  user namespaces can be activated with <code>sudo sysctl kernel.unprivileged_userns_clone=1</code>.
+</p>
+<p>
+  In some cases, the Bazel sandbox fails to execute rules because of the system setup. The symptom
+  is generally a failure that output a message similar to
+  <code>namespace-sandbox.c:633: execvp(argv[0], argv): No such file or directory</code>. In that
+  case, try to deactivate the sandbox for genrules with <code>--genrule_strategy=standalone</code>
+  and for other rules with <code>--spawn_strategy=standalone</code>. Also please report a bug on our
+  issue tracker and mention which Linux distribution you're using so that we can investigate and
+  provide a fix in a subsequent release.
+</p>
+
 <p>
   <sup>1</sup>: Hermeticity means that the action only uses its declared input files and no other
   files in the filesystem, and it only produces its declared output files.

@@ -15,12 +15,12 @@ package com.google.devtools.build.skyframe;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.lib.util.GroupedList.GroupedListHelper;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.Collection;
 import java.util.List;
@@ -447,6 +447,12 @@ public class InMemoryNodeEntry implements NodeEntry {
   public synchronized void addTemporaryDirectDeps(GroupedListHelper<SkyKey> helper) {
     Preconditions.checkState(!isDone(), "add temp shouldn't be done: %s %s", helper, this);
     buildingState.addDirectDeps(helper);
+  }
+
+  @Override
+  public synchronized void addTemporaryDirectDepsGroupToDirtyEntry(Collection<SkyKey> group) {
+    Preconditions.checkState(!isDone(), "add group temp shouldn't be done: %s %s", group, this);
+    buildingState.addDirectDepsGroup(group);
   }
 
   @Override

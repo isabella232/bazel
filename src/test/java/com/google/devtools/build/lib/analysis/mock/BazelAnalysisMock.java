@@ -21,7 +21,6 @@ import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.analysis.ConfigurationCollectionFactory;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
-import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.bazel.rules.BazelConfiguration;
 import com.google.devtools.build.lib.bazel.rules.BazelConfigurationCollection;
@@ -29,6 +28,8 @@ import com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider;
 import com.google.devtools.build.lib.bazel.rules.python.BazelPythonConfiguration;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.RuleClass;
+import com.google.devtools.build.lib.packages.util.BazelMockCcSupport;
+import com.google.devtools.build.lib.packages.util.MockCcSupport;
 import com.google.devtools.build.lib.packages.util.MockToolsConfig;
 import com.google.devtools.build.lib.rules.android.AndroidConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
@@ -57,11 +58,11 @@ public final class BazelAnalysisMock extends AnalysisMock {
 
   @Override
   public void setupMockClient(MockToolsConfig config) throws IOException {
-    String workspace = config.getPath("").getPathString();
+    String bazelToolWorkspace = config.getPath("/bazel_tools_workspace").getPathString();
     ArrayList<String> workspaceContents =
         new ArrayList<>(
             ImmutableList.of(
-                "local_repository(name = 'bazel_tools', path = '" + workspace + "')",
+                "local_repository(name = 'bazel_tools', path = '" + bazelToolWorkspace + "')",
                 "bind(",
                 "  name = 'objc_proto_lib',",
                 "  actual = '//objcproto:ProtocolBuffers_lib',",
@@ -70,12 +71,12 @@ public final class BazelAnalysisMock extends AnalysisMock {
                 "  name = 'objc_proto_cpp_lib',",
                 "  actual = '//objcproto:ProtocolBuffersCPP_lib',",
                 ")",
-                "bind(name = 'android/sdk', actual='//tools/android:sdk')",
-                "bind(name = 'tools/cpp', actual='//tools/cpp')",
+                "bind(name = 'android/sdk', actual='@bazel_tools//tools/android:sdk')",
                 "bind(name = 'tools/python', actual='//tools/python')"));
 
     config.overwrite("WORKSPACE", workspaceContents.toArray(new String[workspaceContents.size()]));
-    config.create("tools/jdk/BUILD",
+    config.create(
+        "/bazel_tools_workspace/tools/jdk/BUILD",
         "package(default_visibility=['//visibility:public'])",
         "java_toolchain(name = 'toolchain', encoding = 'UTF-8', source_version = '8', ",
         "  target_version = '8')",
@@ -89,48 +90,17 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "filegroup(name='java', srcs = ['jdk/jre/bin/java', 'dummy'])",
         "exports_files(['JavaBuilder_deploy.jar','SingleJar_deploy.jar',",
         "               'JavaBuilderCanary_deploy.jar', 'ijar', 'GenClass_deploy.jar'])");
-    config.create("tools/cpp/BUILD",
-        "cc_library(name = 'stl')",
-        "cc_library(name = 'malloc')",
-        "filegroup(name = 'toolchain', ",
-        "    srcs = [':cc-compiler-local', ':cc-compiler-darwin', ':cc-compiler-piii',",
-        "            ':cc-compiler-armeabi-v7a', ':empty'],",
-        ")",
-        "cc_toolchain(name = 'cc-compiler-k8', all_files = ':empty', compiler_files = ':empty',",
-        "    cpu = 'local', dwp_files = ':empty', dynamic_runtime_libs = [':empty'], ",
-        "    linker_files = ':empty',",
-        "    objcopy_files = ':empty', static_runtime_libs = [':empty'], strip_files = ':empty',",
-        ")",
-        "cc_toolchain(name = 'cc-compiler-piii', all_files = ':empty', compiler_files = ':empty',",
-        "    cpu = 'local', dwp_files = ':empty', dynamic_runtime_libs = [':empty'], ",
-        "    linker_files = ':empty',",
-        "    objcopy_files = ':empty', static_runtime_libs = [':empty'], strip_files = ':empty',",
-        ")",
-        "cc_toolchain(name = 'cc-compiler-darwin', all_files = ':empty', ",
-        "    compiler_files = ':empty',",
-        "    cpu = 'local', dwp_files = ':empty', dynamic_runtime_libs = [':empty'], ",
-        "    linker_files = ':empty',",
-        "    objcopy_files = ':empty', static_runtime_libs = [':empty'], strip_files = ':empty',",
-        ")",
-        "cc_toolchain(name = 'cc-compiler-armeabi-v7a', all_files = ':empty', ",
-        "    compiler_files = ':empty',",
 
-        "    cpu = 'local', dwp_files = ':empty', dynamic_runtime_libs = [':empty'], ",
-        "    linker_files = ':empty',",
-        "    objcopy_files = ':empty', static_runtime_libs = [':empty'], strip_files = ':empty',",
-        ")");
-    config.create(
-        "tools/cpp/CROSSTOOL", readFromResources("com/google/devtools/build/lib/MOCK_CROSSTOOL"));
 
     ImmutableList<String> androidBuildContents = createAndroidBuildContents();
     config.create(
-        "tools/android/BUILD",
+        "/bazel_tools_workspace/tools/android/BUILD",
         androidBuildContents.toArray(new String[androidBuildContents.size()]));
 
-    config.create("tools/genrule/BUILD",
-        "exports_files(['genrule-setup.sh'])");
     config.create(
-        "third_party/java/jarjar/BUILD",
+        "/bazel_tools_workspace/tools/genrule/BUILD", "exports_files(['genrule-setup.sh'])");
+    config.create(
+        "/bazel_tools_workspace/third_party/java/jarjar/BUILD",
         "package(default_visibility=['//visibility:public'])",
         "licenses(['notice'])",
         "java_binary(name = 'jarjar_bin',",
@@ -139,13 +109,14 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "java_import(name = 'jarjar_import',",
         "            jars = [ 'jarjar.jar' ])");
 
-    config.create("tools/test/BUILD", "filegroup(name = 'runtime')");
+    config.create("/bazel_tools_workspace/tools/test/BUILD", "filegroup(name = 'runtime')");
 
     config.create(
-        "tools/python/BUILD",
+        "/bazel_tools_workspace/tools/python/BUILD",
         "package(default_visibility=['//visibility:public'])",
         "exports_files(['precompile.py'])",
         "sh_binary(name='2to3', srcs=['2to3.sh'])");
+    ccSupport().setup(config);
   }
 
   private ImmutableList<String> createAndroidBuildContents() {
@@ -181,7 +152,12 @@ public final class BazelAnalysisMock extends AnalysisMock {
         .add("sh_binary(name = 'shuffle_jars', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'strip_resources', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'build_incremental_dexmanifest', srcs = ['empty.sh'])")
-        .add("sh_binary(name = 'incremental_install', srcs = ['empty.sh'])");
+        .add("sh_binary(name = 'incremental_install', srcs = ['empty.sh'])")
+        .add("java_binary(name = 'PackageParser',")
+        .add("          runtime_deps = [ ':PackageParser_import'],")
+        .add("          main_class = 'com.google.devtools.build.android.ideinfo.PackageParser')")
+        .add("java_import(name = 'PackageParser_import',")
+        .add("          jars = [ 'package_parser_deploy.jar' ])");
 
     for (Attribute attr : attrs) {
       if (attr.getType() == LABEL && attr.isMandatory() && !attr.getName().startsWith(":")) {
@@ -249,7 +225,7 @@ public final class BazelAnalysisMock extends AnalysisMock {
   }
 
   @Override
-  public ImmutableList<Class<? extends FragmentOptions>> getBuildOptions() {
-    return BazelRuleClassProvider.BUILD_OPTIONS;
+  public MockCcSupport ccSupport() {
+    return BazelMockCcSupport.INSTANCE;
   }
 }

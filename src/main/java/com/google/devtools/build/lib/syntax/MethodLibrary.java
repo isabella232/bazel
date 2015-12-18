@@ -20,21 +20,26 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature.Param;
 import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
-import com.google.devtools.build.lib.syntax.SkylarkSignature.Param;
 import com.google.devtools.build.lib.syntax.Type.ConversionException;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -636,27 +641,182 @@ public class MethodLibrary {
     }
   };
 
+  @SkylarkSignature(name = "splitlines", objectType = StringModule.class,
+      returnType = MutableList.class,
+      doc =
+      "Splits the string at line boundaries ('\\n', '\\r\\n', '\\r') "
+      + "and returns the result as a list.",
+      mandatoryPositionals = {
+          @Param(name = "self", type = String.class, doc = "This string.")},
+      optionalPositionals = {
+          @Param(name = "keepends", type = Boolean.class, defaultValue = "False",
+              doc = "Whether the line breaks should be included in the resulting list.")})
+  private static BuiltinFunction splitLines = new BuiltinFunction("splitlines") {
+    @SuppressWarnings("unused")
+    public MutableList invoke(String self, Boolean keepEnds) throws EvalException {
+      List<String> result = new ArrayList<>();
+      Matcher matcher = SPLIT_LINES_PATTERN.matcher(self);
+      while (matcher.find()) {
+        String line = matcher.group("line");
+        String lineBreak = matcher.group("break");
+        boolean trailingBreak = lineBreak.isEmpty();
+        if (line.isEmpty() && trailingBreak) {
+          break;
+        }
+        if (keepEnds && !trailingBreak) {
+          result.add(line + lineBreak);
+        } else {
+          result.add(line);
+        }
+      }
+      return new MutableList(result);
+    }
+  };
+
+  private static final Pattern SPLIT_LINES_PATTERN =
+      Pattern.compile("(?<line>.*)(?<break>(\\r\\n|\\r|\\n)?)");
+
   @SkylarkSignature(name = "isalpha", objectType = StringModule.class, returnType = Boolean.class,
-    doc = "Returns True if all characters in the string are alphabetic ([a-zA-Z]) and it "
-        + "contains at least one character.",
+    doc = "Returns True if all characters in the string are alphabetic ([a-zA-Z]) and there is "
+        + "at least one character.",
     mandatoryPositionals = {
         @Param(name = "self", type = String.class, doc = "This string.")})
   private static BuiltinFunction isalpha = new BuiltinFunction("isalpha") {
+    @SuppressWarnings("unused") // Called via Reflection
     public Boolean invoke(String self) throws EvalException {
-      int length = self.length();
-      if (length < 1) {
-        return false;
-      }
-      for (int index = 0; index < length; index++) {
-        char character = self.charAt(index);
-        if (!((character >= 'A' && character <= 'Z')
-            || (character >= 'a' && character <= 'z'))) {
-          return false;
-        }
-      }
-      return true;
+      return MethodLibrary.matches(self, MethodLibrary.ALPHA, false);
     }
   };
+
+  @SkylarkSignature(name = "isalnum", objectType = StringModule.class, returnType = Boolean.class,
+      doc =
+      "Returns True if all characters in the string are alphanumeric ([a-zA-Z0-9]) and there is "
+      + "at least one character.",
+      mandatoryPositionals = {@Param(name = "self", type = String.class, doc = "This string.")})
+  private static BuiltinFunction isAlnum = new BuiltinFunction("isalnum") {
+    @SuppressWarnings("unused") // Called via Reflection
+    public Boolean invoke(String self) throws EvalException {
+      return MethodLibrary.matches(self, MethodLibrary.ALNUM, false);
+    }
+  };
+
+  @SkylarkSignature(name = "isdigit", objectType = StringModule.class, returnType = Boolean.class,
+      doc =
+      "Returns True if all characters in the string are digits ([0-9]) and there is "
+      + "at least one character.",
+      mandatoryPositionals = {@Param(name = "self", type = String.class, doc = "This string.")})
+  private static BuiltinFunction isDigit = new BuiltinFunction("isdigit") {
+    @SuppressWarnings("unused") // Called via Reflection
+    public Boolean invoke(String self) throws EvalException {
+      return MethodLibrary.matches(self, MethodLibrary.DIGIT, false);
+    }
+  };
+
+  @SkylarkSignature(name = "isspace", objectType = StringModule.class, returnType = Boolean.class,
+      doc =
+      "Returns True if all characters are white space characters and the string "
+      + "contains at least one character.",
+      mandatoryPositionals = {@Param(name = "self", type = String.class, doc = "This string.")})
+  private static BuiltinFunction isSpace = new BuiltinFunction("isspace") {
+    @SuppressWarnings("unused") // Called via Reflection
+    public Boolean invoke(String self) throws EvalException {
+      return MethodLibrary.matches(self, MethodLibrary.SPACE, false);
+    }
+  };
+
+  @SkylarkSignature(name = "islower", objectType = StringModule.class, returnType = Boolean.class,
+      doc =
+      "Returns True if all cased characters in the string are lowercase and there is "
+      + "at least one character.",
+      mandatoryPositionals = {@Param(name = "self", type = String.class, doc = "This string.")})
+  private static BuiltinFunction isLower = new BuiltinFunction("islower") {
+    @SuppressWarnings("unused") // Called via Reflection
+    public Boolean invoke(String self) throws EvalException {
+      // Python also accepts non-cased characters, so we cannot use LOWER.
+      return MethodLibrary.matches(self, MethodLibrary.UPPER.negate(), true);
+    }
+  };
+
+  @SkylarkSignature(name = "isupper", objectType = StringModule.class, returnType = Boolean.class,
+      doc =
+      "Returns True if all cased characters in the string are uppercase and there is "
+      + "at least one character.",
+      mandatoryPositionals = {@Param(name = "self", type = String.class, doc = "This string.")})
+  private static BuiltinFunction isUpper = new BuiltinFunction("isupper") {
+    @SuppressWarnings("unused") // Called via Reflection
+    public Boolean invoke(String self) throws EvalException {
+      // Python also accepts non-cased characters, so we cannot use UPPER.
+      return MethodLibrary.matches(self, MethodLibrary.LOWER.negate(), true);
+    }
+  };
+
+  @SkylarkSignature(name = "istitle", objectType = StringModule.class, returnType = Boolean.class,
+      doc =
+      "Returns True if the string is in title case and it contains at least one character. "
+      + "This means that every uppercase character must follow an uncased one (e.g. whitespace) "
+      + "and every lowercase character must follow a cased one (e.g. uppercase or lowercase).",
+      mandatoryPositionals = {@Param(name = "self", type = String.class, doc = "This string.")})
+  private static BuiltinFunction isTitle = new BuiltinFunction("istitle") {
+    @SuppressWarnings("unused") // Called via Reflection
+    public Boolean invoke(String self) throws EvalException {
+      if (self.isEmpty()) {
+        return false;
+      }
+      // From the Python documentation: "uppercase characters may only follow uncased characters
+      // and lowercase characters only cased ones".
+      char[] data = self.toCharArray();
+      CharMatcher matcher = CharMatcher.ANY;
+      char leftMostCased = ' ';
+      for (int pos = data.length - 1; pos >= 0; --pos) {
+        char current = data[pos];
+        // 1. Check condition that was determined by the right neighbor.
+        if (!matcher.matches(current)) {
+          return false;
+        }
+        // 2. Determine condition for the left neighbor.
+        if (LOWER.matches(current)) {
+          matcher = CASED;
+        } else if (UPPER.matches(current)) {
+          matcher = CASED.negate();
+        } else {
+          matcher = CharMatcher.ANY;
+        }
+        // 3. Store character if it is cased.
+        if (CASED.matches(current)) {
+          leftMostCased = current;
+        }
+      }
+      // The leftmost cased letter must be uppercase. If leftMostCased is not a cased letter here,
+      // then the string doesn't have any cased letter, so UPPER.test will return false.
+      return UPPER.matches(leftMostCased);
+    }
+  };
+
+  private static boolean matches(
+      String str, CharMatcher matcher, boolean requiresAtLeastOneCasedLetter) {
+    if (str.isEmpty()) {
+      return false;
+    } else if (!requiresAtLeastOneCasedLetter) {
+      return matcher.matchesAllOf(str);
+    }
+    int casedLetters = 0;
+    for (char current : str.toCharArray()) {
+      if (!matcher.matches(current)) {
+        return false;
+      } else if (requiresAtLeastOneCasedLetter && CASED.matches(current)) {
+        ++casedLetters;
+      }
+    }
+    return casedLetters > 0;
+  }
+
+  private static final CharMatcher DIGIT = CharMatcher.javaDigit();
+  private static final CharMatcher LOWER = CharMatcher.inRange('a', 'z');
+  private static final CharMatcher UPPER = CharMatcher.inRange('A', 'Z');
+  private static final CharMatcher ALPHA = LOWER.or(UPPER);
+  private static final CharMatcher ALNUM = ALPHA.or(DIGIT);
+  private static final CharMatcher CASED = ALPHA;
+  private static final CharMatcher SPACE = CharMatcher.WHITESPACE;
 
   @SkylarkSignature(name = "count", objectType = StringModule.class, returnType = Integer.class,
       doc = "Returns the number of (non-overlapping) occurrences of substring <code>sub</code> in "
@@ -762,57 +922,265 @@ public class MethodLibrary {
   };
 
   // slice operator
-  @SkylarkSignature(name = "$slice", objectType = String.class,
-      documented = false,
-      mandatoryPositionals = {
-        @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "start", type = Integer.class, doc = "start position of the slice."),
-        @Param(name = "end", type = Integer.class, doc = "end position of the slice.")},
-      doc = "x[<code>start</code>:<code>end</code>] returns a slice or a list slice.")
-  private static BuiltinFunction stringSlice = new BuiltinFunction("$slice") {
-    public Object invoke(String self, Integer left, Integer right)
-        throws EvalException, ConversionException {
-      return pythonSubstring(self, left, right, "");
-    }
-  };
+  @SkylarkSignature(
+    name = "$slice",
+    objectType = String.class,
+    documented = false,
+    mandatoryPositionals = {
+      @Param(name = "self", type = String.class, doc = "This string."),
+      @Param(name = "start", type = Object.class, doc = "start position of the slice."),
+      @Param(name = "end", type = Object.class, doc = "end position of the slice.")
+    },
+    optionalPositionals = {
+      @Param(name = "step", type = Integer.class, defaultValue = "1", doc = "step value.")
+    },
+    doc =
+        "x[<code>start</code>:<code>end</code>:<code>step</code>] returns a slice or a list slice. "
+            + "Values may be negative and can be omitted.",
+    useLocation = true
+  )
+  private static BuiltinFunction stringSlice =
+      new BuiltinFunction("$slice") {
+        @SuppressWarnings("unused") // Accessed via Reflection.
+        public Object invoke(String self, Object start, Object end, Integer step, Location loc)
+            throws EvalException, ConversionException {
+          List<Integer> indices = getSliceIndices(start, end, step, self.length(), loc);
+          char[] result = new char[indices.size()];
+          char[] original = self.toCharArray();
+          int resultIndex = 0;
+          for (int originalIndex : indices) {
+            result[resultIndex] = original[originalIndex];
+            ++resultIndex;
+          }
+          return new String(result);
+        }
+      };
 
-  @SkylarkSignature(name = "$slice", objectType = MutableList.class, returnType = MutableList.class,
-      documented = false,
-      mandatoryPositionals = {
-        @Param(name = "self", type = MutableList.class, doc = "This list."),
-        @Param(name = "start", type = Integer.class, doc = "start position of the slice."),
-        @Param(name = "end", type = Integer.class, doc = "end position of the slice.")},
-      doc = "x[<code>start</code>:<code>end</code>] returns a slice or a list slice.",
-      useEnvironment = true)
-  private static BuiltinFunction mutableListSlice = new BuiltinFunction("$slice") {
-    public MutableList invoke(MutableList self, Integer left, Integer right,
-        Environment env) throws EvalException, ConversionException {
-      return new MutableList(sliceList(self.getList(), left, right), env);
-    }
-  };
+  @SkylarkSignature(
+    name = "$slice",
+    objectType = MutableList.class,
+    returnType = MutableList.class,
+    documented = false,
+    mandatoryPositionals = {
+      @Param(name = "self", type = MutableList.class, doc = "This list."),
+      @Param(name = "start", type = Object.class, doc = "start position of the slice."),
+      @Param(name = "end", type = Object.class, doc = "end position of the slice.")
+    },
+    optionalPositionals = {
+      @Param(name = "step", type = Integer.class, defaultValue = "1", doc = "step value.")
+    },
+    doc =
+        "x[<code>start</code>:<code>end</code>:<code>step</code>] returns a slice or a list slice."
+            + "Values may be negative and can be omitted.",
+    useLocation = true,
+    useEnvironment = true
+  )
+  private static BuiltinFunction mutableListSlice =
+      new BuiltinFunction("$slice") {
+        @SuppressWarnings("unused") // Accessed via Reflection.
+        public MutableList invoke(
+            MutableList self, Object start, Object end, Integer step, Location loc,
+            Environment env)
+            throws EvalException, ConversionException {
+          return new MutableList(sliceList(self.getList(), start, end, step, loc), env);
+        }
+      };
 
-  @SkylarkSignature(name = "$slice", objectType = Tuple.class, returnType = Tuple.class,
-      documented = false,
-      mandatoryPositionals = {
-        @Param(name = "self", type = Tuple.class, doc = "This tuple."),
-        @Param(name = "start", type = Integer.class, doc = "start position of the slice."),
-        @Param(name = "end", type = Integer.class, doc = "end position of the slice.")},
-      doc = "x[<code>start</code>:<code>end</code>] returns a slice or a list slice.",
-      useEnvironment = true)
-  private static BuiltinFunction tupleSlice = new BuiltinFunction("$slice") {
-      public Tuple invoke(Tuple self, Integer left, Integer right,
-          Environment env) throws EvalException, ConversionException {
-        return Tuple.copyOf(sliceList(self.getList(), left, right));
+  @SkylarkSignature(
+    name = "$slice",
+    objectType = Tuple.class,
+    returnType = Tuple.class,
+    documented = false,
+    mandatoryPositionals = {
+      @Param(name = "self", type = Tuple.class, doc = "This tuple."),
+      @Param(name = "start", type = Object.class, doc = "start position of the slice."),
+      @Param(name = "end", type = Object.class, doc = "end position of the slice.")
+    },
+    optionalPositionals = {
+      @Param(name = "step", type = Integer.class, defaultValue = "1", doc = "step value.")
+    },
+    doc =
+        "x[<code>start</code>:<code>end</code>:<code>step</code>] returns a slice or a list slice. "
+            + "Values may be negative and can be omitted.",
+    useLocation = true
+  )
+  private static BuiltinFunction tupleSlice =
+      new BuiltinFunction("$slice") {
+        @SuppressWarnings("unused") // Accessed via Reflection.
+        public Tuple invoke(Tuple self, Object start, Object end, Integer step, Location loc)
+            throws EvalException, ConversionException {
+          return Tuple.copyOf(sliceList(self.getList(), start, end, step, loc));
+        }
+      };
+
+  private static List<Object> sliceList(
+      List<Object> original, Object startObj, Object endObj, int step, Location loc)
+      throws EvalException {
+    int length = original.size();
+    ImmutableList.Builder<Object> slice = ImmutableList.builder();
+    for (int pos : getSliceIndices(startObj, endObj, step, length, loc)) {
+      slice.add(original.get(pos));
+    }
+    return slice.build();
+  }
+
+  /**
+   *  Calculates the indices of the elements that should be included in the slice [start:end:step]
+   * of a sequence with the given length.
+   */
+  private static List<Integer> getSliceIndices(
+      Object startObj, Object endObj, int step, int length, Location loc) throws EvalException {
+    if (step == 0) {
+      throw new EvalException(loc, "slice step cannot be zero");
+    }
+    int start = getIndex(startObj,
+        step,
+        /*positiveStepDefault=*/ 0,
+        /*negativeStepDefault=*/ length - 1,
+        /*length=*/ length,
+        loc);
+    int end = getIndex(endObj,
+        step,
+        /*positiveStepDefault=*/ length,
+        /*negativeStepDefault=*/ -1,
+        /*length=*/ length,
+        loc);
+    Comparator<Integer> comparator = getOrderingForStep(step);
+    ImmutableList.Builder<Integer> indices = ImmutableList.builder();
+    for (int current = start; comparator.compare(current, end) < 0; current += step) {
+      indices.add(current);
+    }
+    return indices.build();
+  }
+
+  /**
+   * Converts the given value into an integer index.
+   *
+   * <p>If the value is {@code None}, the return value of this methods depends on the sign of the
+   * slice step.
+   */
+  private static int getIndex(Object value, int step, int positiveStepDefault,
+      int negativeStepDefault, int length, Location loc) throws EvalException {
+    if (value == Runtime.NONE) {
+      return step < 0 ? negativeStepDefault : positiveStepDefault;
+    } else {
+      try {
+        return clampIndex(Type.INTEGER.cast(value), length);
+      } catch (ClassCastException ex) {
+        throw new EvalException(loc, String.format("'%s' is not a valid int", value));
       }
-    };
-
-  private static List<Object> sliceList(List<Object> list, Integer left, Integer right) {
-    left = clampIndex(left, list.size());
-    right = clampIndex(right, list.size());
-    if (left > right) {
-      left = right;
     }
-    return list.subList(left, right);
+  }
+
+  private static Ordering<Integer> getOrderingForStep(int step) {
+    Ordering<Integer> ordering = Ordering.<Integer>natural();
+    if (step < 0) {
+      ordering = ordering.reverse();
+    }
+    return ordering;
+  }
+
+  @SkylarkSignature(
+    name = "min",
+    returnType = Object.class,
+    doc =
+        "Returns the smallest one of all given arguments. "
+            + "If only one argument is provided, it must be a non-empty iterable.",
+    extraPositionals = {
+      @Param(name = "args", type = SkylarkList.class, doc = "The elements to be checked.")
+    },
+    useLocation = true
+  )
+  private static BuiltinFunction min = new BuiltinFunction("min") {
+    @SuppressWarnings("unused") // Accessed via Reflection.
+    public Object invoke(SkylarkList args, Location loc) throws EvalException {
+      return findExtreme(args, EvalUtils.SKYLARK_COMPARATOR.reverse(), loc);
+    }
+  };
+
+  @SkylarkSignature(
+    name = "max",
+    returnType = Object.class,
+    doc =
+        "Returns the largest one of all given arguments. "
+            + "If only one argument is provided, it must be a non-empty iterable.",
+    extraPositionals = {
+      @Param(name = "args", type = SkylarkList.class, doc = "The elements to be checked.")
+    },
+    useLocation = true
+  )
+  private static BuiltinFunction max = new BuiltinFunction("max") {
+    @SuppressWarnings("unused") // Accessed via Reflection.
+    public Object invoke(SkylarkList args, Location loc) throws EvalException {
+      return findExtreme(args, EvalUtils.SKYLARK_COMPARATOR, loc);
+    }
+  };
+
+  /**
+   * Returns the maximum element from this list, as determined by maxOrdering.
+   */
+  private static Object findExtreme(SkylarkList args, Ordering<Object> maxOrdering, Location loc)
+      throws EvalException {
+    // Args can either be a list of elements or a list whose first element is a non-empty iterable
+    // of elements.
+    try {
+      return maxOrdering.max(getIterable(args, loc));
+    } catch (NoSuchElementException ex) {
+      throw new EvalException(loc, "Expected at least one argument");
+    }
+  }
+
+  /**
+   * This method returns the first element of the list, if that particular element is an
+   * Iterable<?>. Otherwise, it will return the entire list.
+   */
+  private static Iterable<?> getIterable(SkylarkList list, Location loc) throws EvalException {
+    return (list.size() == 1) ? EvalUtils.toIterable(list.get(0), loc) : list;
+  }
+
+  @SkylarkSignature(
+    name = "all",
+    returnType = Boolean.class,
+    doc = "Returns true if all elements evaluate to True or if the collection is empty.",
+    mandatoryPositionals = {
+      @Param(name = "elements", type = Object.class, doc = "A string or a collection of elements.")
+    },
+    useLocation = true
+  )
+  private static BuiltinFunction all =
+      new BuiltinFunction("all") {
+        @SuppressWarnings("unused") // Accessed via Reflection.
+        public Boolean invoke(Object collection, Location loc) throws EvalException {
+          return !hasElementWithBooleanValue(collection, false, loc);
+        }
+      };
+
+  @SkylarkSignature(
+    name = "any",
+    returnType = Boolean.class,
+    doc = "Returns true if at least one element evaluates to True.",
+    mandatoryPositionals = {
+      @Param(name = "elements", type = Object.class, doc = "A string or a collection of elements.")
+    },
+    useLocation = true
+  )
+  private static BuiltinFunction any =
+      new BuiltinFunction("any") {
+        @SuppressWarnings("unused") // Accessed via Reflection.
+        public Boolean invoke(Object collection, Location loc) throws EvalException {
+          return hasElementWithBooleanValue(collection, true, loc);
+        }
+      };
+
+  private static boolean hasElementWithBooleanValue(Object collection, boolean value, Location loc)
+      throws EvalException {
+    Iterable<?> iterable = EvalUtils.toIterable(collection, loc);
+    for (Object obj : iterable) {
+      if (EvalUtils.toBoolean(obj) == value) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // supported list methods
@@ -832,12 +1200,45 @@ public class MethodLibrary {
             throws EvalException, ConversionException {
           try {
             return new MutableList(
-                Ordering.from(EvalUtils.SKYLARK_COMPARATOR).sortedCopy(
-                    EvalUtils.toCollection(self, loc)),
+                EvalUtils.SKYLARK_COMPARATOR.sortedCopy(EvalUtils.toCollection(self, loc)),
                 env);
           } catch (EvalUtils.ComparisonException e) {
             throw new EvalException(loc, e);
           }
+        }
+      };
+
+  @SkylarkSignature(
+    name = "reversed",
+    returnType = MutableList.class,
+    doc = "Returns a list that contains the elements of the original sequence in reversed order.",
+    mandatoryPositionals = {
+      @Param(
+        name = "sequence",
+        type = Object.class,
+        doc = "The sequence to be reversed (string, list or tuple)."
+      )
+    },
+    useLocation = true,
+    useEnvironment = true
+  )
+  private static BuiltinFunction reversed =
+      new BuiltinFunction("reversed") {
+        @SuppressWarnings("unused") // Accessed via Reflection.
+        public MutableList invoke(Object sequence, Location loc, Environment env)
+            throws EvalException {
+          // We only allow lists and strings.
+          if (sequence instanceof Map) {
+            throw new EvalException(
+                loc, "Argument to reversed() must be a sequence, not a dictionary.");
+          } else if (sequence instanceof NestedSet || sequence instanceof SkylarkNestedSet) {
+            throw new EvalException(loc, "Argument to reversed() must be a sequence, not a set.");
+          }
+          LinkedList<Object> tmpList = new LinkedList<>();
+          for (Object element : EvalUtils.toIterable(sequence, loc)) {
+            tmpList.addFirst(element);
+          }
+          return new MutableList(tmpList, env);
         }
       };
 
@@ -890,7 +1291,7 @@ public class MethodLibrary {
         "Returns the index in the list of the first item whose value is x. "
             + "It is an error if there is no such item.",
     mandatoryPositionals = {
-      @Param(name = "self", type = MutableList.class, doc = "This string, a separator."),
+      @Param(name = "self", type = MutableList.class, doc = "This list."),
       @Param(name = "x", type = Object.class, doc = "The object to search.")
     },
     useLocation = true
@@ -904,6 +1305,34 @@ public class MethodLibrary {
               return i;
             }
             i++;
+          }
+          throw new EvalException(loc, Printer.format("Item %r not found in list", x));
+        }
+      };
+
+  @SkylarkSignature(
+    name = "remove",
+    objectType = MutableList.class,
+    returnType = Runtime.NoneType.class,
+    doc =
+        "Removes the first item from the list whose value is x. "
+            + "It is an error if there is no such item.",
+    mandatoryPositionals = {
+      @Param(name = "self", type = MutableList.class, doc = "This list."),
+      @Param(name = "x", type = Object.class, doc = "The object to remove.")
+    },
+    useLocation = true,
+    useEnvironment = true
+  )
+  private static BuiltinFunction listRemove =
+      new BuiltinFunction("remove") {
+        public Runtime.NoneType invoke(MutableList self, Object x, Location loc, Environment env)
+            throws EvalException {
+          for (int i = 0; i < self.size(); i++) {
+            if (self.get(i).equals(x)) {
+              self.remove(i, loc, env);
+              return Runtime.NONE;
+            }
           }
           throw new EvalException(loc, Printer.format("Item %r not found in list", x));
         }
@@ -1548,22 +1977,28 @@ public class MethodLibrary {
   /**
    * Skylark String module.
    */
-  @SkylarkModule(name = "string", doc =
-      "A language built-in type to support strings. "
-      + "Examples of string literals:<br>"
-      + "<pre class=\"language-python\">a = 'abc\\ndef'\n"
-      + "b = \"ab'cd\"\n"
-      + "c = \"\"\"multiline string\"\"\"\n"
-      + "\n"
-      + "# Strings support slicing (negative index starts from the end):\n"
-      + "x = \"hello\"[2:4]  # \"ll\"\n"
-      + "y = \"hello\"[1:-1]  # \"ell\"\n"
-      + "z = \"hello\"[:4]  # \"hell\"</pre>"
-      + "Strings are iterable and support the <code>in</code> operator. Examples:<br>"
-      + "<pre class=\"language-python\">\"bc\" in \"abcd\"   # evaluates to True\n"
-      + "x = [s for s in \"abc\"]  # x == [\"a\", \"b\", \"c\"]</pre>\n"
-      + "Implicit concatenation of strings is not allowed; use the <code>+</code> "
-      + "operator instead.")
+  @SkylarkModule(
+    name = "string",
+    doc =
+        "A language built-in type to support strings. "
+            + "Examples of string literals:<br>"
+            + "<pre class=\"language-python\">a = 'abc\\ndef'\n"
+            + "b = \"ab'cd\"\n"
+            + "c = \"\"\"multiline string\"\"\"\n"
+            + "\n"
+            + "# Strings support slicing (negative index starts from the end):\n"
+            + "x = \"hello\"[2:4]  # \"ll\"\n"
+            + "y = \"hello\"[1:-1]  # \"ell\"\n"
+            + "z = \"hello\"[:4]  # \"hell\""
+            + "# Slice steps can be used, too:\n"
+            + "s = \"hello\"[::2] # \"hlo\"\n"
+            + "t = \"hello\"[3:0:-1] # \"lle\"\n</pre>"
+            + "Strings are iterable and support the <code>in</code> operator. Examples:<br>"
+            + "<pre class=\"language-python\">\"bc\" in \"abcd\"   # evaluates to True\n"
+            + "x = [s for s in \"abc\"]  # x == [\"a\", \"b\", \"c\"]</pre>\n"
+            + "Implicit concatenation of strings is not allowed; use the <code>+</code> "
+            + "operator instead."
+  )
   static final class StringModule {}
 
   /**
@@ -1590,15 +2025,16 @@ public class MethodLibrary {
       + "</pre>")
   static final class DictModule {}
 
-  static final List<BaseFunction> buildGlobalFunctions = ImmutableList.<BaseFunction>of(
-      bool, dict, enumerate, int_, len, list, minus, range, repr, select, sorted, str, zip);
+  static final List<BaseFunction> buildGlobalFunctions =
+      ImmutableList.<BaseFunction>of(
+          bool, dict, enumerate, int_, len, list, minus, range, repr, reversed, select, sorted, str,
+          zip);
 
   static final List<BaseFunction> skylarkGlobalFunctions =
       ImmutableList.<BaseFunction>builder()
-      .addAll(buildGlobalFunctions)
-      .add(dir, fail, getattr, hasattr, print, set, struct, type)
-      .build();
-
+          .addAll(buildGlobalFunctions)
+          .add(all, any, dir, fail, getattr, hasattr, max, min, print, set, struct, type)
+          .build();
 
   /**
    * Collect global functions for the validation environment.

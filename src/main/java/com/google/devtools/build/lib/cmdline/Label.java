@@ -13,19 +13,19 @@
 // limitations under the License.
 package com.google.devtools.build.lib.cmdline;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ComparisonChain;
 import com.google.devtools.build.lib.cmdline.LabelValidator.BadLabelException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.SkylarkCallable;
-import com.google.devtools.build.lib.syntax.SkylarkModule;
-import com.google.devtools.build.lib.syntax.SkylarkPrintableValue;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkPrintableValue;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.StringCanonicalizer;
 import com.google.devtools.build.lib.util.StringUtilities;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
+import java.io.IOException;
 import java.io.InvalidObjectException;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
@@ -41,7 +41,12 @@ import java.io.Serializable;
 @SkylarkModule(name = "Label", doc = "A BUILD target identifier.")
 @Immutable @ThreadSafe
 public final class Label implements Comparable<Label>, Serializable, SkylarkPrintableValue {
-  private static final PathFragment EXTERNAL = new PathFragment("external");
+  public static final PathFragment EXTERNAL_PACKAGE_NAME = new PathFragment("external");
+
+  public static final PackageIdentifier EXTERNAL_PACKAGE_IDENTIFIER =
+      PackageIdentifier.createInDefaultRepo(EXTERNAL_PACKAGE_NAME);
+
+  public static final String EXTERNAL_PATH_PREFIX = "external";
 
   /**
    * Factory for Labels from absolute string form. e.g.
@@ -380,7 +385,7 @@ public final class Label implements Comparable<Label>, Serializable, SkylarkPrin
 
     if (packageIdentifier.getRepository().isDefault()
         || !relative.packageIdentifier.getRepository().isDefault()
-        || relative.packageIdentifier.getPackageFragment().equals(EXTERNAL)) {
+        || relative.packageIdentifier.getPackageFragment().equals(EXTERNAL_PACKAGE_NAME)) {
       return relative;
     } else {
       try {
@@ -444,15 +449,33 @@ public final class Label implements Comparable<Label>, Serializable, SkylarkPrin
 
   @Override
   public void write(Appendable buffer, char quotationMark) {
+    // We don't use the Skylark Printer class here to avoid creating a circular dependency.
+    //
     // TODO(bazel-team): make the representation readable Label(//foo),
     // and isolate the legacy functions that want the unreadable variant.
-    Printer.write(buffer, toString(), quotationMark);
+    try {
+      // There is no need to escape the contents of the Label since characters that might otherwise
+      // require escaping are disallowed.
+      buffer.append(quotationMark);
+      buffer.append(toString());
+      buffer.append(quotationMark);
+    } catch (IOException e) {
+      // This function will only be used with in-memory Appendables, hence we should never get here.
+      throw new AssertionError(e);
+    }
   }
 
   @Override
   public void print(Appendable buffer, char quotationMark) {
+    // We don't use the Skylark Printer class here to avoid creating a circular dependency.
+    //
     // TODO(bazel-team): make the representation readable Label(//foo),
     // and isolate the legacy functions that want the unreadable variant.
-    Printer.append(buffer, toString());
+    try {
+      buffer.append(toString());
+    } catch (IOException e) {
+      // This function will only be used with in-memory Appendables, hence we should never get here.
+      throw new AssertionError(e);
+    }
   }
 }

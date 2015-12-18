@@ -13,6 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -24,6 +27,11 @@ import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
 
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 import java.util.Collection;
 import java.util.UUID;
 
@@ -31,11 +39,11 @@ import java.util.UUID;
  * Tests for the hash code calculated for Skylark RuleClasses based on the transitive closure
  * of the imports of their respective definition SkylarkEnvironments.
  */
+@RunWith(JUnit4.class)
 public class SkylarkFileContentHashTests extends BuildViewTestCase {
 
-  @Override
-  public void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void createFiles() throws Exception  {
     scratch.file("foo/BUILD");
     scratch.file("bar/BUILD");
     scratch.file("helper/BUILD");
@@ -66,10 +74,12 @@ public class SkylarkFileContentHashTests extends BuildViewTestCase {
         "bar1(name = 'bar1')");
   }
 
+  @Test
   public void testHashInvariance() throws Exception {
     assertEquals(getHash("pkg", "foo1"), getHash("pkg", "foo1"));
   }
 
+  @Test
   public void testHashInvarianceAfterOverwritingFileWithSameContents() throws Exception {
     String bar1 = getHash("pkg", "bar1");
     scratch.overwriteFile(
@@ -81,14 +91,17 @@ public class SkylarkFileContentHashTests extends BuildViewTestCase {
     assertEquals(bar1, getHash("pkg", "bar1"));
   }
 
+  @Test
   public void testHashSameForRulesDefinedInSameFile() throws Exception {
     assertEquals(getHash("pkg", "foo1"), getHash("pkg", "foo2"));
   }
 
+  @Test
   public void testHashNotSameForRulesDefinedInDifferentFiles() throws Exception {
     assertNotEquals(getHash("pkg", "foo1"), getHash("pkg", "bar1"));
   }
 
+  @Test
   public void testImmediateFileChangeChangesHash() throws Exception {
     String bar1 = getHash("pkg", "bar1");
     scratch.overwriteFile(
@@ -101,6 +114,7 @@ public class SkylarkFileContentHashTests extends BuildViewTestCase {
     assertNotEquals(bar1, getHash("pkg", "bar1"));
   }
 
+  @Test
   public void testTransitiveFileChangeChangesHash() throws Exception {
     String bar1 = getHash("pkg", "bar1");
     String foo1 = getHash("pkg", "foo1");
@@ -116,6 +130,7 @@ public class SkylarkFileContentHashTests extends BuildViewTestCase {
     assertNotEquals(foo2, getHash("pkg", "foo2"));
   }
 
+  @Test
   public void testFileChangeDoesNotAffectRulesDefinedOutsideOfTransitiveClosure() throws Exception {
     String foo1 = getHash("pkg", "foo1");
     String foo2 = getHash("pkg", "foo2");

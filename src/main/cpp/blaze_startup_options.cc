@@ -42,6 +42,7 @@ BlazeStartupOptions::BlazeStartupOptions(const BlazeStartupOptions &rhs)
       install_base(rhs.install_base),
       output_root(rhs.output_root),
       output_user_root(rhs.output_user_root),
+      deep_execroot(rhs.deep_execroot),
       block_for_lock(rhs.block_for_lock),
       host_jvm_debug(rhs.host_jvm_debug),
       host_jvm_profile(rhs.host_jvm_profile),
@@ -171,6 +172,16 @@ string BlazeStartupOptions::RcBasename() {
 void BlazeStartupOptions::WorkspaceRcFileSearchPath(
     vector<string>* candidates) {
   candidates->push_back("tools/bazel.rc");
+}
+
+bool BlazeStartupOptions::WorkspaceRelativizeRcFilePath(const string &workspace,
+                                                        string *path_fragment) {
+  // Strip off the "%workspace%/" prefix and prepend the true workspace path.
+  // In theory this could use alternate search paths for blazerc files.
+  path_fragment->assign(
+      blaze_util::JoinPath(workspace,
+                           path_fragment->substr(WorkspacePrefixLength)));
+  return true;
 }
 
 string BlazeStartupOptions::SystemWideRcPath() {

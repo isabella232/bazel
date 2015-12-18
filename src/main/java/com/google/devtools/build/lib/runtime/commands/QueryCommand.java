@@ -40,12 +40,15 @@ import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsProvider;
 
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.channels.ClosedByInterruptException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 
@@ -91,7 +94,25 @@ public final class QueryCommand implements BlazeCommand {
       return e.getExitCode();
     }
 
-    if (options.getResidue().isEmpty()) {
+    String query;
+    if (!options.getResidue().isEmpty()) {
+      if (!queryOptions.queryFile.isEmpty()) {
+        env.getReporter()
+            .handle(Event.error("Command-line query and --query_file cannot both be specified"));
+        return ExitCode.COMMAND_LINE_ERROR;
+      }
+      query = Joiner.on(' ').join(options.getResidue());
+    } else if (!queryOptions.queryFile.isEmpty()) {
+      // Works for absolute or relative query file.
+      Path residuePath = env.getWorkingDirectory().getRelative(queryOptions.queryFile);
+      try {
+        query = new String(FileSystemUtils.readContent(residuePath), StandardCharsets.UTF_8);
+      } catch (IOException e) {
+        env.getReporter()
+            .handle(Event.error("I/O error reading from " + residuePath.getPathString()));
+        return ExitCode.COMMAND_LINE_ERROR;
+      }
+    } else {
       env.getReporter().handle(Event.error(String.format(
           "missing query expression. Type '%s help query' for syntax and help",
           Constants.PRODUCT_NAME)));
@@ -107,8 +128,6 @@ public final class QueryCommand implements BlazeCommand {
               queryOptions.outputFormat, OutputFormatter.formatterNames(formatters))));
       return ExitCode.COMMAND_LINE_ERROR;
     }
-
-    String query = Joiner.on(' ').join(options.getResidue());
 
     Set<Setting> settings = queryOptions.toSettings();
     boolean streamResults = QueryOutputUtils.shouldStreamResults(queryOptions, formatter);
@@ -130,9 +149,11 @@ public final class QueryCommand implements BlazeCommand {
     }
 
     QueryEvalResult result;
-    PrintStream output = new PrintStream(env.getReporter().getOutErr().getOutputStream());
+    PrintStream output = null;
     OutputFormatterCallback<Target> callback;
     if (streamResults) {
+      disableAnsiCharactersFiltering(env);
+      output = new PrintStream(env.getReporter().getOutErr().getOutputStream());
       // 2. Evaluate expression:
       callback = ((StreamedFormatter) formatter)
           .createStreamCallback(queryOptions, output, queryOptions.aspectDeps.createResolver(
@@ -163,7 +184,9 @@ public final class QueryCommand implements BlazeCommand {
       env.getReporter().handle(Event.error("I/O error: " + e.getMessage()));
       return ExitCode.LOCAL_ENVIRONMENTAL_ERROR;
     } finally {
-      output.flush();
+      if (streamResults) {
+        output.flush();
+      }
       try {
         callback.close();
       } catch (IOException e) {
@@ -171,7 +194,11 @@ public final class QueryCommand implements BlazeCommand {
         return ExitCode.LOCAL_ENVIRONMENTAL_ERROR;
       }
     }
+
     if (!streamResults) {
+      disableAnsiCharactersFiltering(env);
+      output = new PrintStream(env.getReporter().getOutErr().getOutputStream());
+
       // 3. Output results:
       try {
         Set<Target> targets = ((AggregateAllOutputFormatterCallback<Target>) callback).getOutput();
@@ -188,15 +215,23 @@ public final class QueryCommand implements BlazeCommand {
       } finally {
         output.flush();
       }
-
     }
-    env.getReporter().switchToAnsiAllowingHandler();
 
     if (result.isEmpty()) {
       env.getReporter().handle(Event.info("Empty results"));
     }
 
     return result.getSuccess() ? ExitCode.SUCCESS : ExitCode.PARTIAL_ANALYSIS_FAILURE;
+  }
+
+  /**
+   * When Blaze is used with --color=no or not in a tty a ansi characters filter is set so that
+   * we don't print fancy colors in non-supporting terminal outputs. But query output, specifically
+   * the binary formatters, can print actual data that contain ansi bytes/chars. Because of that
+   * we need to remove the filtering before printing any query result.
+   */
+  private static void disableAnsiCharactersFiltering(CommandEnvironment env) {
+    env.getReporter().switchToAnsiAllowingHandler();
   }
 
   @VisibleForTesting // for com.google.devtools.deps.gquery.test.QueryResultTestUtil

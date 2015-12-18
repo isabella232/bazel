@@ -21,10 +21,10 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Preconditions;
 import com.google.common.io.BaseEncoding;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.Fingerprint;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import org.junit.After;
 import org.junit.Before;
@@ -60,7 +60,8 @@ public abstract class FileSystemTest {
   protected Path xEmptyDirectory;
 
   @Before
-  public void setUp() throws Exception {
+  public final void createDirectories() throws Exception  {
+    executeBeforeCreatingDirectories();
     testFS = getFreshFileSystem();
     workingDir = testFS.getPath(getTestTmpDir());
     cleanUpWorkingDirectory(workingDir);
@@ -85,8 +86,13 @@ public abstract class FileSystemTest {
     xEmptyDirectory.createDirectory();
   }
 
+  protected void executeBeforeCreatingDirectories() throws Exception {
+    // This method exists because LazyDigestFileSystemTest requires some code to be run before
+    // createDirectories().
+  }
+
   @After
-  public void tearDown() throws Exception {
+  public final void destroyFileSystem() throws Exception  {
     destroyFileSystem(testFS);
   }
 

@@ -13,10 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.util;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.common.eventbus.EventBus;
@@ -60,13 +58,15 @@ import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.util.BlazeClock;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
-import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsParser;
+
+import org.junit.Before;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -126,11 +126,9 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   protected AnalysisTestUtil.DummyWorkspaceStatusActionFactory workspaceStatusActionFactory;
   private PathPackageLocator pkgLocator;
   private AnalysisMock analysisMock;
-  protected boolean enableLoading = true;
 
-  @Override
-  protected void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void createMocks() throws Exception {
     analysisMock = AnalysisMock.get();
     pkgLocator = new PathPackageLocator(outputBase, ImmutableList.of(rootDirectory));
     directories = new BlazeDirectories(outputBase, outputBase, rootDirectory);
@@ -161,7 +159,6 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
             binTools,
             workspaceStatusActionFactory,
             ruleClassProvider.getBuildInfoFactories(),
-            ImmutableSet.<Path>of(),
             ImmutableList.<DiffAwareness.Factory>of(),
             Predicates.<PathFragment>alwaysFalse(),
             Preprocessor.Factory.Supplier.NullSupplier.INSTANCE,
@@ -242,7 +239,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
     PackageCacheOptions packageCacheOptions = optionsParser.getOptions(PackageCacheOptions.class);
 
     PathPackageLocator pathPackageLocator = PathPackageLocator.create(
-        null, packageCacheOptions.packagePath, reporter, rootDirectory, rootDirectory);
+        outputBase, packageCacheOptions.packagePath, reporter, rootDirectory, rootDirectory);
     skyframeExecutor.preparePackageLoading(pathPackageLocator,
         packageCacheOptions.defaultVisibility, true,
         7, ruleClassProvider.getDefaultsPackageContent(), UUID.randomUUID());
@@ -251,7 +248,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
 
     LoadingResult loadingResult = loadingPhaseRunner
         .execute(reporter, eventBus, ImmutableList.copyOf(labels), loadingOptions,
-            buildOptions.getAllLabels(), viewOptions.keepGoing, enableLoading,
+            buildOptions.getAllLabels(), viewOptions.keepGoing, isLoadingEnabled(),
             /*determineTests=*/false, /*callback=*/null);
 
     BuildRequestOptions requestOptions = optionsParser.getOptions(BuildRequestOptions.class);
@@ -267,7 +264,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
             AnalysisTestUtil.TOP_LEVEL_ARTIFACT_CONTEXT,
             reporter,
             eventBus,
-            enableLoading);
+            isLoadingEnabled());
   }
 
   protected void update(FlagBuilder config, String... labels) throws Exception {
@@ -362,9 +359,5 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
 
   protected void clearAnalysisResult() {
     analysisResult = null;
-  }
-
-  protected void disableLoading() {
-    enableLoading = false;
   }
 }

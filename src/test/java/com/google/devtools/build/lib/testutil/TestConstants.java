@@ -61,6 +61,8 @@ public class TestConstants {
 
   public static final String TEST_RULE_CLASS_PROVIDER =
       "com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider";
+  public static final String TEST_RULE_MODULE =
+        "com.google.devtools.build.lib.bazel.rules.BazelRulesModule";
   public static final ImmutableList<String> IGNORED_MESSAGE_PREFIXES = ImmutableList.<String>of();
 
   public static final boolean THIS_IS_BAZEL = true;
@@ -69,5 +71,5 @@ public class TestConstants {
 
   public static final String TOOLS_REPOSITORY = "@bazel_tools";
 
-  public static final String MOCK_CROSSTOOL_PATH = "tools/cpp";
+  public static final String TOOLS_REPOSITORY_PATH = "tools/cpp";
 }

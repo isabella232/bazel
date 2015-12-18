@@ -18,12 +18,29 @@
 # the tools directory.
 
 # Create symlinks so we can use tools and examples from the base_workspace.
-base_workspace=${WORKSPACE_DIR}/base_workspace
-mkdir -p "$base_workspace"
-rm -f "${base_workspace}/tools" && ln -s "$(pwd)/tools" "${base_workspace}/tools"
-rm -f "${base_workspace}/third_party" && ln -s "$(pwd)/third_party" "${base_workspace}/third_party"
-rm -f "${base_workspace}/examples" && ln -s "$(pwd)/examples" "${base_workspace}/examples"
-rm -rf "${base_workspace}/src"
+function symlink_directory() {
+  local dir=$1
+  rm -fr "${base_workspace}/${dir}"
+  mkdir "${base_workspace}/${dir}"
+
+  for i in $(cd ${dir}; ls | grep -v "^BUILD$"); do
+    ln -s "$(pwd)/${dir}/$i" "${base_workspace}/${dir}/$i";
+  done
+
+  touch "${base_workspace}/${dir}/DONT_FOLLOW_SYMLINKS_WHEN_TRAVERSING_THIS_DIRECTORY_VIA_A_RECURSIVE_TARGET_PATTERN"
+}
+
+base_workspace="${WORKSPACE_DIR}/base_workspace"
+mkdir -p "${base_workspace}"
+
+symlink_directory tools
+cat > "${base_workspace}/tools/BUILD" <<EOF
+package(default_visibility = ["//visibility:public"])
+exports_files(["test_sharding_compliant"])
+EOF
+
+symlink_directory examples
+symlink_directory third_party
 
 # Create a bazelrc file with the base_workspace directory in the package path.
 bazelrc='build --package_path %workspace%:'${base_workspace}

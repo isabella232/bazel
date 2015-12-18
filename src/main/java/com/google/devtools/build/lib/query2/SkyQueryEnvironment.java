@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.query2;
 
 import com.google.common.base.Function;
 import com.google.common.base.Functions;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ArrayListMultimap;
@@ -63,6 +62,7 @@ import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
 import com.google.devtools.build.lib.skyframe.TransitiveTraversalValue;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.EvaluationResult;
@@ -248,7 +248,7 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
     for (Collection<Target> parentCollection : rawReverseDeps.values()) {
       for (Target parent : parentCollection) {
         if (visited.add(parent)) {
-          if (parent instanceof Rule) {
+          if (parent instanceof Rule && dependencyFilter != Rule.ALL_DEPS) {
             for (Label label : getAllowedDeps((Rule) parent)) {
               if (keys.contains(label)) {
                 result.add(parent);
@@ -339,7 +339,12 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
   }
 
   @Override
-  public Set<Target> getBuildFiles(QueryExpression caller, Set<Target> nodes)
+  public Set<Target> getBuildFiles(
+      QueryExpression caller,
+      Set<Target> nodes,
+      boolean buildFiles,
+      boolean subincludes,
+      boolean loads)
       throws QueryException {
     Set<Target> dependentFiles = new LinkedHashSet<>();
     Set<Package> seenPackages = new HashSet<>();
@@ -352,17 +357,32 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
     for (Target x : nodes) {
       Package pkg = x.getPackage();
       if (seenPackages.add(pkg)) {
-        addIfUniqueLabel(pkg.getBuildFile(), seenLabels, dependentFiles);
-        for (Label subinclude
-            : Iterables.concat(pkg.getSubincludeLabels(), pkg.getSkylarkFileDependencies())) {
+        if (buildFiles) {
+          addIfUniqueLabel(pkg.getBuildFile(), seenLabels, dependentFiles);
+        }
+
+        List<Label> extensions = new ArrayList<>();
+        if (subincludes) {
+          extensions.addAll(pkg.getSubincludeLabels());
+        }
+        if (loads) {
+          extensions.addAll(pkg.getSkylarkFileDependencies());
+        }
+
+        for (Label subinclude : extensions) {
           addIfUniqueLabel(getSubincludeTarget(subinclude, pkg), seenLabels, dependentFiles);
 
-          // Also add the BUILD file of the subinclude.
-          try {
-            addIfUniqueLabel(getSubincludeTarget(
-                subinclude.getLocalTargetLabel("BUILD"), pkg), seenLabels, dependentFiles);
-          } catch (LabelSyntaxException e) {
-            throw new AssertionError("BUILD should always parse as a target name", e);
+          if (buildFiles) {
+            // Also add the BUILD file of the subinclude.
+            try {
+              addIfUniqueLabel(
+                  getSubincludeTarget(subinclude.getLocalTargetLabel("BUILD"), pkg),
+                  seenLabels,
+                  dependentFiles);
+
+            } catch (LabelSyntaxException e) {
+              throw new AssertionError("BUILD should always parse as a target name", e);
+            }
           }
         }
       }

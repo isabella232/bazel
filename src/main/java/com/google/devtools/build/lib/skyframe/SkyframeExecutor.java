@@ -17,7 +17,6 @@ import static com.google.devtools.build.lib.concurrent.Uninterruptibles.callUnin
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.base.Stopwatch;
@@ -111,6 +110,7 @@ import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ActionCompl
 import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ProgressSupplier;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ResourceUsage;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.BatchStat;
@@ -173,6 +173,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   private final PackageFactory pkgFactory;
   private final WorkspaceStatusAction.Factory workspaceStatusActionFactory;
   private final BlazeDirectories directories;
+  protected final ExternalFilesHelper externalFilesHelper;
   @Nullable
   private OutputService outputService;
 
@@ -244,8 +245,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   protected SkyframeProgressReceiver progressReceiver;
   private final AtomicReference<CyclesReporter> cyclesReporter = new AtomicReference<>();
 
-  private final Set<Path> immutableDirectories;
-
   private final BinTools binTools;
   private boolean needToInjectEmbeddedArtifacts = true;
   private boolean needToInjectPrecomputedValuesForAnalysis = true;
@@ -275,7 +274,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       BinTools binTools,
       Factory workspaceStatusActionFactory,
       ImmutableList<BuildInfoFactory> buildInfoFactories,
-      Set<Path> immutableDirectories,
       Predicate<PathFragment> allowedMissingInputs,
       Preprocessor.Factory.Supplier preprocessorFactorySupplier,
       ImmutableMap<SkyFunctionName, SkyFunction> extraSkyFunctions,
@@ -296,7 +294,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         resourceManager, eventBus, statusReporterRef);
     this.directories = Preconditions.checkNotNull(directories);
     this.buildInfoFactories = buildInfoFactories;
-    this.immutableDirectories = immutableDirectories;
     this.allowedMissingInputs = allowedMissingInputs;
     this.preprocessorFactorySupplier = preprocessorFactorySupplier;
     this.extraSkyFunctions = extraSkyFunctions;
@@ -310,14 +307,13 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         binTools,
         (ConfiguredRuleClassProvider) pkgFactory.getRuleClassProvider());
     this.artifactFactory.set(skyframeBuildView.getArtifactFactory());
+    this.externalFilesHelper = new ExternalFilesHelper(pkgLocator, this.errorOnExternalFiles);
   }
 
   private ImmutableMap<SkyFunctionName, SkyFunction> skyFunctions(
       Root buildDataDirectory,
       PackageFactory pkgFactory,
       Predicate<PathFragment> allowedMissingInputs) {
-    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator,
-        immutableDirectories, errorOnExternalFiles);
     RuleClassProvider ruleClassProvider = pkgFactory.getRuleClassProvider();
     // We use an immutable map builder for the nice side effect that it throws if a duplicate key
     // is inserted.
@@ -330,7 +326,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         new FileSymlinkCycleUniquenessFunction());
     map.put(SkyFunctions.FILE_SYMLINK_INFINITE_EXPANSION_UNIQUENESS,
         new FileSymlinkInfiniteExpansionUniquenessFunction());
-    map.put(SkyFunctions.FILE, new FileFunction(pkgLocator, tsgm, externalFilesHelper));
+    map.put(SkyFunctions.FILE, new FileFunction(pkgLocator));
     map.put(SkyFunctions.DIRECTORY_LISTING, new DirectoryListingFunction());
     map.put(SkyFunctions.PACKAGE_LOOKUP, new PackageLookupFunction(deletedPackages));
     map.put(SkyFunctions.CONTAINING_PACKAGE_LOOKUP, new ContainingPackageLookupFunction());
@@ -373,9 +369,9 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(SkyFunctions.BUILD_CONFIGURATION,
         new BuildConfigurationFunction(directories, ruleClassProvider));
     map.put(SkyFunctions.CONFIGURATION_COLLECTION, new ConfigurationCollectionFunction(
-        configurationFactory, ruleClassProvider));
+        configurationFactory));
     map.put(SkyFunctions.CONFIGURATION_FRAGMENT, new ConfigurationFragmentFunction(
-        configurationFragments, ruleClassProvider));
+        configurationFragments));
     map.put(
         SkyFunctions.WORKSPACE_FILE,
         new WorkspaceFileFunction(ruleClassProvider, pkgFactory, directories));

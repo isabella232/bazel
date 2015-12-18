@@ -28,12 +28,18 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 import javax.annotation.Nullable;
 
 /**
  * Tests for Skylark aspects
  */
+@RunWith(JUnit4.class)
 public class SkylarkAspectsTest extends BuildViewTestCase {
+  @Test
   public void testAspect() throws Exception {
     scratch.file(
         "test/aspect.bzl",
@@ -78,12 +84,13 @@ public class SkylarkAspectsTest extends BuildViewTestCase {
         .containsExactly("//test:aspect.bzl%MyAspect(//test:xxx)");
   }
 
+  @Test
   public void testAspectPropagating() throws Exception {
     scratch.file(
         "test/aspect.bzl",
         "def _impl(target, ctx):",
         "   s = set([target.label])",
-        "   for i in ctx.attr.deps:",
+        "   for i in ctx.rule.attr.deps:",
         "       s += i.target_labels",
         "   return struct(target_labels = s)",
         "",
@@ -141,13 +148,13 @@ public class SkylarkAspectsTest extends BuildViewTestCase {
         .containsExactly("//test:xxx", "//test:yyy");
   }
 
-
+  @Test
   public void testAspectsFromSkylarkRules() throws Exception {
     scratch.file(
         "test/aspect.bzl",
         "def _aspect_impl(target, ctx):",
         "   s = set([target.label])",
-        "   for i in ctx.attr.deps:",
+        "   for i in ctx.rule.attr.deps:",
         "       s += i.target_labels",
         "   return struct(target_labels = s)",
         "",
@@ -216,6 +223,7 @@ public class SkylarkAspectsTest extends BuildViewTestCase {
         .containsExactly("//test:yyy");
   }
 
+  @Test
   public void testAspectFailingExecution() throws Exception {
     scratch.file(
         "test/aspect.bzl",
@@ -247,6 +255,7 @@ public class SkylarkAspectsTest extends BuildViewTestCase {
             + "integer division by zero");
   }
 
+  @Test
   public void testAspectFailingReturnsNotAStruct() throws Exception {
     scratch.file(
         "test/aspect.bzl",
@@ -271,6 +280,7 @@ public class SkylarkAspectsTest extends BuildViewTestCase {
     assertContainsEvent("Aspect implementation doesn't return a struct");
   }
 
+  @Test
   public void testAspectFailingReturnsUnsafeObject() throws Exception {
     scratch.file(
         "test/aspect.bzl",
@@ -301,6 +311,7 @@ public class SkylarkAspectsTest extends BuildViewTestCase {
         + "/workspace/test/aspect.bzl:4:11: Value of provider 'x' is of an illegal type: function");
   }
 
+  @Test
   public void testAspectFailingOrphanArtifacts() throws Exception {
     scratch.file(
         "test/aspect.bzl",

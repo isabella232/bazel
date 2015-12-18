@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.Files;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.config.BinTools;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
@@ -50,6 +51,7 @@ public class NamespaceSandboxRunner {
   private final Path execRoot;
   private final Path sandboxPath;
   private final Path sandboxExecRoot;
+  private final Path argumentsFilePath;
   private final ImmutableMap<Path, Path> mounts;
   private final ImmutableSet<Path> createDirs;
   private final boolean verboseFailures;
@@ -65,6 +67,8 @@ public class NamespaceSandboxRunner {
     this.execRoot = execRoot;
     this.sandboxPath = sandboxPath;
     this.sandboxExecRoot = sandboxPath.getRelative(execRoot.asFragment().relativeTo("/"));
+    this.argumentsFilePath =
+        sandboxPath.getParentDirectory().getRelative(sandboxPath.getBaseName() + ".params");
     this.mounts = mounts;
     this.createDirs = createDirs;
     this.verboseFailures = verboseFailures;
@@ -104,7 +108,7 @@ public class NamespaceSandboxRunner {
    * @param env - environment to run sandbox in
    * @param cwd - current working directory
    * @param outErr - error output to capture sandbox's and command's stderr
-   * @throws CommandException
+   * @throws ExecException
    */
   public void run(
       List<String> spawnArguments,
@@ -114,7 +118,7 @@ public class NamespaceSandboxRunner {
       Collection<? extends ActionInput> outputs,
       int timeout,
       boolean blockNetwork)
-      throws IOException, UserExecException {
+      throws IOException, ExecException {
     createFileSystem(outputs);
 
     List<String> fileArgs = new ArrayList<>();
@@ -163,8 +167,6 @@ public class NamespaceSandboxRunner {
       }
     }
 
-    Path argumentsFilePath =
-        sandboxPath.getParentDirectory().getRelative(sandboxPath.getBaseName() + ".params");
     FileSystemUtils.writeLinesAs(argumentsFilePath, StandardCharsets.ISO_8859_1, fileArgs);
     commandLineArgs.add("@" + argumentsFilePath.getPathString());
 
@@ -221,6 +223,9 @@ public class NamespaceSandboxRunner {
   public void cleanup() throws IOException {
     if (sandboxPath.exists()) {
       FileSystemUtils.deleteTree(sandboxPath);
+    }
+    if (argumentsFilePath.exists()) {
+      argumentsFilePath.delete();
     }
   }
 }

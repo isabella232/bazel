@@ -19,12 +19,10 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
@@ -89,6 +87,7 @@ import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.OsUtils;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ThreadUtils;
 import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
@@ -210,7 +209,7 @@ public final class BlazeRuntime {
 
     if (inWorkspace()) {
       writeOutputBaseReadmeFile();
-      writeOutputBaseDoNotBuildHereFile();
+      writeDoNotBuildHereFile();
     }
     setupExecRoot();
   }
@@ -327,13 +326,21 @@ public final class BlazeRuntime {
     }
   }
 
-  private void writeOutputBaseDoNotBuildHereFile() {
-    Preconditions.checkNotNull(getWorkspace());
-    Path filePath = getOutputBase().getRelative(DO_NOT_BUILD_FILE_NAME);
+  private void writeDoNotBuildHereFile(Path filePath) {
     try {
+      FileSystemUtils.createDirectoryAndParents(filePath.getParentDirectory());
       FileSystemUtils.writeContent(filePath, ISO_8859_1, getWorkspace().toString());
     } catch (IOException e) {
       LOG.warning("Couldn't write to '" + filePath + "': " + e.getMessage());
+    }
+  }
+
+  private void writeDoNotBuildHereFile() {
+    Preconditions.checkNotNull(getWorkspace());
+    writeDoNotBuildHereFile(getOutputBase().getRelative(DO_NOT_BUILD_FILE_NAME));
+    if (startupOptionsProvider.getOptions(BlazeServerStartupOptions.class).deepExecRoot) {
+      writeDoNotBuildHereFile(getOutputBase().getRelative("execroot").getRelative(
+          DO_NOT_BUILD_FILE_NAME));
     }
   }
 
@@ -1114,7 +1121,7 @@ public final class BlazeRuntime {
     }
 
     PathFragment outputPathFragment = BlazeDirectories.outputPathFromOutputBase(
-        outputBase, workspaceDirectory);
+        outputBase, workspaceDirectory, startupOptions.deepExecRoot);
     FileSystem fs = null;
     for (BlazeModule module : blazeModules) {
       FileSystem moduleFs = module.getFileSystem(options, outputPathFragment);
@@ -1138,7 +1145,7 @@ public final class BlazeRuntime {
 
     BlazeDirectories directories =
         new BlazeDirectories(installBasePath, outputBasePath, workspaceDirectoryPath,
-                             startupOptions.installMD5);
+                             startupOptions.deepExecRoot, startupOptions.installMD5);
 
     Clock clock = BlazeClock.instance();
 
@@ -1341,16 +1348,7 @@ public final class BlazeRuntime {
         }
       }
 
-      Set<Path> immutableDirectories = null;
-      {
-        ImmutableSet.Builder<Path> builder = new ImmutableSet.Builder<>();
-        for (BlazeModule module : blazeModules) {
-          builder.addAll(module.getImmutableDirectories());
-        }
-        immutableDirectories = builder.build();
-      }
-
-      Iterable<DiffAwareness.Factory> diffAwarenessFactories = null;
+      Iterable<DiffAwareness.Factory> diffAwarenessFactories;
       {
         ImmutableList.Builder<DiffAwareness.Factory> builder = new ImmutableList.Builder<>();
         boolean watchFS = startupOptionsProvider != null
@@ -1419,7 +1417,6 @@ public final class BlazeRuntime {
               binTools,
               workspaceStatusActionFactory,
               ruleClassProvider.getBuildInfoFactories(),
-              immutableDirectories,
               diffAwarenessFactories,
               allowedMissingInputs,
               preprocessorFactorySupplier,

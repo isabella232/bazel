@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.HashBasedTable;
@@ -82,6 +81,7 @@ import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
@@ -387,26 +387,26 @@ public class ExecutionTool {
                                   request.getOptionsDescription());
 
     Set<ConfiguredTarget> builtTargets = new HashSet<>();
-    boolean interrupted = false;
+    Collection<AspectValue> aspects = analysisResult.getAspects();
+
+    Iterable<Artifact> allArtifactsForProviders =
+        Iterables.concat(
+            additionalArtifacts,
+            TopLevelArtifactHelper.getAllArtifactsToBuild(
+                    analysisResult.getTargetsToBuild(), analysisResult.getTopLevelContext())
+                .getAllArtifacts(),
+            TopLevelArtifactHelper.getAllArtifactsToBuildFromAspects(
+                    aspects, analysisResult.getTopLevelContext())
+                .getAllArtifacts(),
+            //TODO(dslomov): Artifacts to test from aspects?
+            TopLevelArtifactHelper.getAllArtifactsToTest(analysisResult.getTargetsToTest()));
+
+    if (request.isRunningInEmacs()) {
+      // The syntax of this message is tightly constrained by lisp/progmodes/compile.el in emacs
+      request.getOutErr().printErrLn("blaze: Entering directory `" + getExecRoot() + "/'");
+    }
+    boolean buildCompleted = false;
     try {
-      Collection<AspectValue> aspects = analysisResult.getAspects();
-
-      Iterable<Artifact> allArtifactsForProviders =
-          Iterables.concat(
-              additionalArtifacts,
-              TopLevelArtifactHelper.getAllArtifactsToBuild(
-                      analysisResult.getTargetsToBuild(), analysisResult.getTopLevelContext())
-                  .getAllArtifacts(),
-              TopLevelArtifactHelper.getAllArtifactsToBuildFromAspects(
-                      aspects, analysisResult.getTopLevelContext())
-                  .getAllArtifacts(),
-              //TODO(dslomov): Artifacts to test from aspects?
-              TopLevelArtifactHelper.getAllArtifactsToTest(analysisResult.getTargetsToTest()));
-
-      if (request.isRunningInEmacs()) {
-        // The syntax of this message is tightly constrained by lisp/progmodes/compile.el in emacs
-        request.getOutErr().printErrLn("blaze: Entering directory `" + getExecRoot() + "/'");
-      }
       for (ActionContextProvider actionContextProvider : actionContextProviders) {
         actionContextProvider.executionPhaseStarting(
             fileCache,
@@ -439,16 +439,16 @@ public class ExecutionTool {
           builtTargets,
           request.getBuildOptions().explanationPath != null,
           runtime.getLastExecutionTimeRange());
-
-    } catch (InterruptedException e) {
-      interrupted = true;
+      buildCompleted = true;
+    } catch (BuildFailedException | TestExecException e) {
+      buildCompleted = true;
       throw e;
     } finally {
       env.recordLastExecutionTime();
       if (request.isRunningInEmacs()) {
         request.getOutErr().printErrLn("blaze: Leaving directory `" + getExecRoot() + "/'");
       }
-      if (!interrupted) {
+      if (buildCompleted) {
         getReporter().handle(Event.progress("Building complete."));
       }
 
@@ -463,16 +463,16 @@ public class ExecutionTool {
 
       Profiler.instance().markPhase(ProfilePhase.FINISH);
 
-      if (!interrupted) {
+      if (buildCompleted) {
         saveCaches(actionCache);
       }
 
       try (AutoProfiler p = AutoProfiler.profiled("Show results", ProfilerTask.INFO)) {
-        determineSuccessfulTargets(buildResult, configuredTargets, builtTargets, timer);
+        buildResult.setSuccessfulTargets(
+            determineSuccessfulTargets(configuredTargets, builtTargets, timer));
         BuildResultPrinter buildResultPrinter = new BuildResultPrinter(env);
         buildResultPrinter.showBuildResult(
             request, buildResult, configuredTargets, analysisResult.getAspects());
-        Preconditions.checkNotNull(buildResult.getSuccessfulTargets());
       }
 
       try (AutoProfiler p = AutoProfiler.profiled("Show artifacts", ProfilerTask.INFO)) {
@@ -633,7 +633,7 @@ public class ExecutionTool {
    *                          built.
    * @param timer A timer that was started when the execution phase started.
    */
-  private void determineSuccessfulTargets(BuildResult result,
+  private Collection<ConfiguredTarget> determineSuccessfulTargets(
       Collection<ConfiguredTarget> configuredTargets, Set<ConfiguredTarget> builtTargets,
       Stopwatch timer) {
     // Maintain the ordering by copying builtTargets into a LinkedHashSet in the same iteration
@@ -646,7 +646,7 @@ public class ExecutionTool {
     }
     env.getEventBus().post(
         new ExecutionPhaseCompleteEvent(timer.stop().elapsed(TimeUnit.MILLISECONDS)));
-    result.setSuccessfulTargets(successfulTargets);
+    return successfulTargets;
   }
 
 

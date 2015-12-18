@@ -17,7 +17,8 @@
 # Common utility file for Bazel shell tests
 #
 
-set -eu
+# Enable errexit with pretty stack traces.
+enable_errexit
 
 # Print message in "$1" then exit with status "$2"
 die () {
@@ -122,9 +123,9 @@ if [ -z "${TEST_TMPDIR:-}" ]; then
 fi
 if [ ! -e "${TEST_TMPDIR}" ]; then
   mkdir -p -m 0700 "${TEST_TMPDIR}"
+  # Clean TEST_TMPDIR on exit
+  atexit "rm -fr ${TEST_TMPDIR}"
 fi
-# Clean TEST_TMPDIR on exit
-atexit "rm -fr ${TEST_TMPDIR}"
 
 # Functions to compare the actual output of a test to the expected
 # (golden) output.

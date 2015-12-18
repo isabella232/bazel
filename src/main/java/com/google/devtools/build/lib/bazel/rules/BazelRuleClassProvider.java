@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.bazel.rules.android.AndroidNdkRepositoryRul
 import com.google.devtools.build.lib.bazel.rules.android.AndroidSdkRepositoryRule;
 import com.google.devtools.build.lib.bazel.rules.android.BazelAndroidBinaryRule;
 import com.google.devtools.build.lib.bazel.rules.android.BazelAndroidLibraryRule;
+import com.google.devtools.build.lib.bazel.rules.android.BazelAndroidRuleClasses.BazelAndroidToolsDefaultsJarRule;
 import com.google.devtools.build.lib.bazel.rules.android.BazelAndroidSemantics;
 import com.google.devtools.build.lib.bazel.rules.common.BazelActionListenerRule;
 import com.google.devtools.build.lib.bazel.rules.common.BazelExtraActionRule;
@@ -124,7 +125,6 @@ import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.NewLocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.WorkspaceBaseRule;
 import com.google.devtools.build.lib.util.ResourceFileLoader;
-import com.google.devtools.build.lib.vfs.PathFragment;
 
 import java.io.IOException;
 
@@ -132,8 +132,6 @@ import java.io.IOException;
  * A rule class provider implementing the rules Bazel knows.
  */
 public class BazelRuleClassProvider {
-  private static final PathFragment EXTERNAL = new PathFragment("external");
-
   /**
    * Used by the build encyclopedia generator.
    */
@@ -162,7 +160,7 @@ public class BazelRuleClassProvider {
     private void validateDirectPrerequisiteVisibility(
         RuleContext.Builder context, ConfiguredTarget prerequisite, String attrName) {
       Rule rule = context.getRule();
-      if (rule.getLabel().getPackageFragment().equals(EXTERNAL)) {
+      if (rule.getLabel().getPackageFragment().equals(Label.EXTERNAL_PACKAGE_NAME)) {
         // //external: labels are special. They have access to everything and visibility is checked
         // at the edge that points to the //external: label.
         return;
@@ -206,13 +204,12 @@ public class BazelRuleClassProvider {
   }
 
   /**
-   * List of all build option classes in Blaze.
+   * List of all build option classes in Bazel.
    */
-  // TODO(bazel-team): make this private, remove from tests, then BuildOptions.of can be merged
-  // into RuleClassProvider.
+  // TODO(bazel-team): merge BuildOptions.of into RuleClassProvider.
   @VisibleForTesting
   @SuppressWarnings("unchecked")
-  public static final ImmutableList<Class<? extends FragmentOptions>> BUILD_OPTIONS =
+  private static final ImmutableList<Class<? extends FragmentOptions>> BUILD_OPTIONS =
       ImmutableList.of(
           BuildConfiguration.Options.class,
           CppOptions.class,
@@ -234,6 +231,8 @@ public class BazelRuleClassProvider {
         .setPrelude("//tools/build_rules:prelude_bazel")
         .setRunfilesPrefix("")
         .setPrerequisiteValidator(new BazelPrerequisiteValidator());
+
+    builder.addBuildOptions(BUILD_OPTIONS);
 
     for (Class<? extends FragmentOptions> fragmentOptions : BUILD_OPTIONS) {
       builder.addConfigurationOptions(fragmentOptions);
@@ -308,7 +307,7 @@ public class BazelRuleClassProvider {
     builder.addRuleDefinition(new JavaToolchainRule());
 
     builder.addRuleDefinition(new AndroidRuleClasses.AndroidSdkRule());
-    builder.addRuleDefinition(new AndroidRuleClasses.AndroidToolsDefaultsJarRule());
+    builder.addRuleDefinition(new BazelAndroidToolsDefaultsJarRule());
     builder.addRuleDefinition(new AndroidRuleClasses.AndroidBaseRule());
     builder.addRuleDefinition(new AndroidRuleClasses.AndroidAaptBaseRule());
     builder.addRuleDefinition(new AndroidRuleClasses.AndroidResourceSupportRule());

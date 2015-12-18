@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.analysis;
 
 import static com.google.devtools.build.lib.analysis.ExtraActionUtils.createExtraActionProvider;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -41,6 +40,7 @@ import com.google.devtools.build.lib.rules.test.TestProvider;
 import com.google.devtools.build.lib.rules.test.TestProvider.TestParams;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -235,13 +235,6 @@ public final class RuleConfiguredTargetBuilder {
   }
 
   /**
-   * Add a specific provider with a given value. Shortcut for addProvider(value.getClass(), value).
-   */
-  public RuleConfiguredTargetBuilder addProvider(TransitiveInfoProvider value) {
-    return addProvider(value.getClass(), value);
-  }
-
-  /**
    * Add multiple providers with given values.
    */
   public RuleConfiguredTargetBuilder addProviders(
@@ -249,17 +242,6 @@ public final class RuleConfiguredTargetBuilder {
     for (Entry<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider> provider :
         providers.entrySet()) {
       addProvider(provider.getKey(), provider.getValue());
-    }
-    return this;
-  }
-
-  /**
-   * Add multiple providers with given values.
-   */
-  public RuleConfiguredTargetBuilder addProviders(
-      Iterable<? extends TransitiveInfoProvider> providers) {
-    for (TransitiveInfoProvider provider : providers) {
-      addProvider(provider);
     }
     return this;
   }

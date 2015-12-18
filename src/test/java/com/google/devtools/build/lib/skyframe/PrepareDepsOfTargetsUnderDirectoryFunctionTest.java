@@ -15,8 +15,9 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -25,6 +26,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
@@ -33,18 +35,23 @@ import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.WalkableGraph;
 
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 import java.io.IOException;
 
 /**
  * Tests for {@link PrepareDepsOfTargetsUnderDirectoryFunction}. Insert excuses here.
  */
+@RunWith(JUnit4.class)
 public class PrepareDepsOfTargetsUnderDirectoryFunctionTest extends BuildViewTestCase {
 
   private SkyframeExecutor skyframeExecutor;
 
-  @Override
-  protected void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void setSkyframeExecutor() throws Exception {
     skyframeExecutor = getSkyframeExecutor();
   }
 
@@ -76,6 +83,7 @@ public class PrepareDepsOfTargetsUnderDirectoryFunctionTest extends BuildViewTes
     return evaluationResult;
   }
 
+  @Test
   public void testTransitiveLoading() throws Exception {
     // Given a package "a" with a genrule "a" that depends on a target in package "b",
     createPackages();
@@ -100,6 +108,7 @@ public class PrepareDepsOfTargetsUnderDirectoryFunctionTest extends BuildViewTes
     assertThat(graph.exists(bTxtKey)).isTrue();
   }
 
+  @Test
   public void testTargetFilterSensitivity() throws Exception {
     // Given a package "a" with a genrule "a" that depends on a target in package "b", and a test
     // rule "aTest",
@@ -133,6 +142,7 @@ public class PrepareDepsOfTargetsUnderDirectoryFunctionTest extends BuildViewTes
         "exports_files(['b.txt'])");
   }
 
+  @Test
   public void testSubdirectoryExclusion() throws Exception {
     // Given a package "a" with two packages below it, "a/b" and "a/c",
     scratch.file("a/BUILD");
@@ -170,6 +180,7 @@ public class PrepareDepsOfTargetsUnderDirectoryFunctionTest extends BuildViewTes
         ImmutableSet.<PathFragment>of())));
   }
 
+  @Test
   public void testExcludedSubdirectoryGettingPassedDown() throws Exception {
     // Given a package "a", and a package below it in "a/b/c", and a non-BUILD file below it in
     // "a/b/d",

@@ -14,14 +14,16 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
 import com.google.common.collect.Collections2;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.ResolvedFile;
+import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.ResolvedFileFactory;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.TraversalRequest;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -84,7 +86,9 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
     public final String unresolvedLink;
 
     public DanglingSymlinkException(String path, String unresolvedLink) {
-      super("Found dangling symlink: " + path + ", unresolved path: ");
+      super(
+          String.format(
+              "Found dangling symlink: %s, unresolved path: \"%s\"", path, unresolvedLink));
       Preconditions.checkArgument(path != null && !path.isEmpty());
       Preconditions.checkArgument(unresolvedLink != null && !unresolvedLink.isEmpty());
       this.path = path;
@@ -340,7 +344,7 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
     Preconditions.checkState(info.type.isSymlink() && !info.type.exists(), "{%s} {%s}", linkName,
         info.type);
     return RecursiveFilesystemTraversalValue.of(
-        ResolvedFile.danglingSymlink(linkName, info.unresolvedSymlinkTarget, info.metadata));
+        ResolvedFileFactory.danglingSymlink(linkName, info.unresolvedSymlinkTarget, info.metadata));
   }
 
   /**
@@ -354,10 +358,12 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
     Preconditions.checkState(info.type.isFile() && info.type.exists(), "{%s} {%s}", path,
         info.type);
     if (info.type.isSymlink()) {
-      return RecursiveFilesystemTraversalValue.of(ResolvedFile.symlinkToFile(info.realPath, path,
-          info.unresolvedSymlinkTarget, info.metadata));
+      return RecursiveFilesystemTraversalValue.of(
+          ResolvedFileFactory.symlinkToFile(
+              info.realPath, path, info.unresolvedSymlinkTarget, info.metadata));
     } else {
-      return RecursiveFilesystemTraversalValue.of(ResolvedFile.regularFile(path, info.metadata));
+      return RecursiveFilesystemTraversalValue.of(
+          ResolvedFileFactory.regularFile(path, info.metadata));
     }
   }
 
@@ -370,13 +376,33 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
     }
     ResolvedFile root;
     if (rootInfo.type.isSymlink()) {
-      root = ResolvedFile.symlinkToDirectory(rootInfo.realPath, traversal.path,
-          rootInfo.unresolvedSymlinkTarget, rootInfo.metadata);
-      paths.add(root);
+      NestedSet<ResolvedFile> children = paths.build();
+      root =
+          ResolvedFileFactory.symlinkToDirectory(
+              rootInfo.realPath,
+              traversal.path,
+              rootInfo.unresolvedSymlinkTarget,
+              hashDirectorySymlink(children, rootInfo.metadata.hashCode()));
+      paths = NestedSetBuilder.<ResolvedFile>stableOrder().addTransitive(children).add(root);
     } else {
-      root = ResolvedFile.directory(rootInfo.realPath);
+      root = ResolvedFileFactory.directory(rootInfo.realPath);
     }
     return RecursiveFilesystemTraversalValue.of(root, paths.build());
+  }
+
+  private static int hashDirectorySymlink(
+      Iterable<ResolvedFile> children, int symlinkHash) {
+    // If the root is a directory symlink, the associated FileStateValue does not change when the
+    // linked directory's contents change, so we can't use the FileStateValue as metadata like we
+    // do with other ResolvedFile kinds. Instead we compute a metadata hash from the child
+    // elements and return that as the ResolvedFile's metadata hash.
+
+    // Compute the hash using the method described in Effective Java, 2nd ed., Item 9.
+    int result = 0;
+    for (ResolvedFile c : children) {
+      result = 31 * result + c.getMetadataHash();
+    }
+    return 31 * result + symlinkHash;
   }
 
   private static SkyValue getDependentSkyValue(Environment env, SkyKey key)

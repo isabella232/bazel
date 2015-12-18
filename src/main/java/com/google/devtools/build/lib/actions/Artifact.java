@@ -18,7 +18,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Functions;
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
@@ -26,11 +25,12 @@ import com.google.devtools.build.lib.actions.Action.MiddlemanType;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.shell.ShellUtils;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.SkylarkCallable;
-import com.google.devtools.build.lib.syntax.SkylarkModule;
-import com.google.devtools.build.lib.syntax.SkylarkValue;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -486,6 +486,14 @@ public class Artifact implements FileType.HasFilename, ActionInput, SkylarkValue
         }
       };
 
+  public static final Function<Artifact, String> ABSOLUTE_PATH_STRING =
+      new Function<Artifact, String>() {
+        @Override
+        public String apply(Artifact artifact) {
+          return artifact.getPath().getPathString();
+        }
+      };
+
   /**
    * Converts a collection of artifacts into execution-time path strings, and
    * adds those to a given collection. Middleman artifacts are ignored by this
@@ -507,6 +515,16 @@ public class Artifact implements FileType.HasFilename, ActionInput, SkylarkValue
         output.add(outputFormatter.apply(artifact));
       }
     }
+  }
+
+  /**
+   * Lazily converts artifacts into absolute path strings. Middleman artifacts are ignored by
+   * this method.
+   */
+  public static Iterable<String> toAbsolutePaths(Iterable<Artifact> artifacts) {
+    return Iterables.transform(
+        Iterables.filter(artifacts, MIDDLEMAN_FILTER),
+        ABSOLUTE_PATH_STRING);
   }
 
   /**

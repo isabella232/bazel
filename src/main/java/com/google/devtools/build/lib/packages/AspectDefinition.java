@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.packages;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
@@ -24,6 +23,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.NativeAspectClass.NativeAspectFactory;
 import com.google.devtools.build.lib.util.BinaryPredicate;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -250,6 +250,17 @@ public final class AspectDefinition {
      */
     public <TYPE> Builder add(Attribute.Builder<TYPE> attr) {
       Attribute attribute = attr.build();
+      return add(attribute);
+    }
+
+    /**
+     * Adds an attribute to the aspect.
+     *
+     * <p>Since aspects do not appear in BUILD files, the attribute must be either implicit
+     * (not available in the BUILD file, starting with '$') or late-bound (determined after the
+     * configuration is available, starting with ':')
+     */
+    public Builder add(Attribute attribute) {
       Preconditions.checkState(attribute.isImplicit() || attribute.isLateBound());
       Preconditions.checkState(!attributes.containsKey(attribute.getName()),
           "An attribute with the name '%s' already exists.", attribute.getName());

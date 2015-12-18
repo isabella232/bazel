@@ -14,7 +14,8 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
-import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.analysis.util.AnalysisMock;
+import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig;
@@ -29,7 +30,8 @@ import java.io.IOException;
  */
 public class CrosstoolConfigurationHelper {
   public static Path overwriteCrosstoolFile(Path workspace, String content) throws IOException {
-    Path crosstool = workspace.getRelative(TestConstants.MOCK_CROSSTOOL_PATH + "/CROSSTOOL");
+    Path crosstool =
+        workspace.getRelative(AnalysisMock.get().ccSupport().getMockCrosstoolPath() + "/CROSSTOOL");
     long newMTime = crosstool.exists() ? crosstool.getLastModifiedTime() + 1 : -1;
     crosstool.delete();
     FileSystemUtils.createDirectoryAndParents(crosstool.getParentDirectory());
@@ -54,6 +56,10 @@ public class CrosstoolConfigurationHelper {
     overwriteCrosstoolFile(workspace, TextFormat.printToString(release.build()));
   }
 
+  public static String defaultCpu() {
+    return OS.getCurrent() == OS.DARWIN ? "darwin" : "k8";
+  }
+
   /**
    * Overwrites the default CROSSTOOL file with a reasonable toolchain.
    */
@@ -67,18 +73,18 @@ public class CrosstoolConfigurationHelper {
         CrosstoolConfig.CrosstoolRelease.newBuilder()
             .setMajorVersion("12")
             .setMinorVersion("0")
-            .setDefaultTargetCpu("k8")
+            .setDefaultTargetCpu(defaultCpu())
             .addDefaultToolchain(
                 DefaultCpuToolchain.newBuilder()
-                    .setCpu("k8")
-                    .setToolchainIdentifier("k8-toolchain"));
+                    .setCpu(defaultCpu())
+                    .setToolchainIdentifier(defaultCpu() + "-toolchain"));
     CrosstoolConfig.CToolchain.Builder toolchainBuilder = newIncompleteToolchain();
     toolchainBuilder
-        .setToolchainIdentifier("k8-toolchain")
+        .setToolchainIdentifier(defaultCpu() + "-toolchain")
         .setHostSystemName("i686-unknown-linux-gnu")
         .setTargetSystemName("i686-unknown-linux-gnu")
         .setTargetCpu("k8")
-        .setTargetLibc("glibc-2.3.6-grte")
+        .setTargetLibc("glibc-2.3.6")
         .setCompiler("gcc-4.3.1")
         .setAbiVersion("gcc-3.4")
         .setAbiLibcVersion("2.3.2")

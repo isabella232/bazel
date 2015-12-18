@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.packages;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -24,6 +23,7 @@ import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.packages.BuildType.Selector;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -46,19 +46,13 @@ public class AggregatingAttributeMapper extends AbstractAttributeMapper {
    * unconditionally  available to computed defaults no matter what dependencies
    * they've declared.
    */
-  private final List<String> nonconfigurableAttributes;
+  private final List<String> nonConfigurableAttributes;
 
   private AggregatingAttributeMapper(Rule rule) {
     super(rule.getPackage(), rule.getRuleClassObject(), rule.getLabel(),
         rule.getAttributeContainer());
 
-    ImmutableList.Builder<String> nonconfigurableAttributesBuilder = ImmutableList.builder();
-    for (Attribute attr : rule.getAttributes()) {
-      if (!attr.isConfigurable()) {
-        nonconfigurableAttributesBuilder.add(attr.getName());
-      }
-    }
-    nonconfigurableAttributes = nonconfigurableAttributesBuilder.build();
+    nonConfigurableAttributes = rule.getRuleClassObject().getNonConfigurableAttributes();
   }
 
   public static AggregatingAttributeMapper of(Rule rule) {
@@ -374,7 +368,7 @@ public class AggregatingAttributeMapper extends AbstractAttributeMapper {
       @Override
       public <T> T get(String attributeName, Type<T> type) {
         owner.checkType(attributeName, type);
-        if (nonconfigurableAttributes.contains(attributeName)) {
+        if (nonConfigurableAttributes.contains(attributeName)) {
           return owner.get(attributeName, type);
         }
         if (!directMap.containsKey(attributeName)) {
@@ -393,7 +387,7 @@ public class AggregatingAttributeMapper extends AbstractAttributeMapper {
       @Override public Label getLabel() { return owner.getLabel(); }
       @Override public Iterable<String> getAttributeNames() {
         return ImmutableList.<String>builder()
-            .addAll(directMap.keySet()).addAll(nonconfigurableAttributes).build();
+            .addAll(directMap.keySet()).addAll(nonConfigurableAttributes).build();
       }
       @Override
       public void visitLabels(AcceptsLabelAttribute observer) { owner.visitLabels(observer); }

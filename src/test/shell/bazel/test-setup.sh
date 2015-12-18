@@ -26,7 +26,6 @@ bazel_root="${TEST_TMPDIR}/root"
 mkdir -p "${bazel_root}"
 
 bazel_javabase="${jdk_dir}"
-bazel="${bazel_path}/bazel"
 
 echo "bazel binary is at $bazel"
 
@@ -118,6 +117,23 @@ sh_binary(
     name = "IdlClass",
     srcs = ["idlclass.sh"],
     data = ["//src/tools/android/java/com/google/devtools/build/android/idlclass:IdlClass"],
+)
+
+filegroup(
+    name = "package_parser",
+    srcs = ["//src/tools/android/java/com/google/devtools/build/android/ideinfo:PackageParser_deploy.jar"],
+)
+
+java_binary(
+    name = "PackageParser",
+    main_class = "com.google.devtools.build.android.ideinfo.PackageParser",
+    visibility = ["//visibility:public"],
+    runtime_deps = [":package_parser_import"],
+)
+
+java_import(
+    name = "package_parser_import",
+    jars = [":package_parser"],
 )
 
 sh_binary(
@@ -338,7 +354,6 @@ function setup_objc_test_support() {
 workspaces=()
 # Set-up a new, clean workspace with only the tools installed.
 function create_new_workspace() {
-  set -e
   new_workspace_dir=${1:-$(mktemp -d ${TEST_TMPDIR}/workspace.XXXXXXXX)}
   rm -fr ${new_workspace_dir}
   mkdir -p ${new_workspace_dir}

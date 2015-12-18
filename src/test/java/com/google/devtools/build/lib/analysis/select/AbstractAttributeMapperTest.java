@@ -34,7 +34,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.util.PackageFactoryApparatus;
 import com.google.devtools.build.lib.syntax.Type;
-import com.google.devtools.build.lib.testutil.FoundationTestCaseForJunit4;
+import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.vfs.Path;
 
@@ -49,7 +49,7 @@ import java.util.List;
  * Unit tests for {@link AbstractAttributeMapper}.
  */
 @RunWith(JUnit4.class)
-public class AbstractAttributeMapperTest extends FoundationTestCaseForJunit4 {
+public class AbstractAttributeMapperTest extends FoundationTestCase {
 
   private Package pkg;
   protected Rule rule;
@@ -156,7 +156,7 @@ public class AbstractAttributeMapperTest extends FoundationTestCaseForJunit4 {
   @Test
   public void testComputedDefault() throws Exception {
     // Should return a valid ComputedDefault instance since this is a computed default:
-    assertThat(mapper.getComputedDefault("$stl", BuildType.LABEL))
+    assertThat(mapper.getComputedDefault("$stl_default", BuildType.LABEL))
         .isInstanceOf(Attribute.ComputedDefault.class);
     // Should return null since this *isn't* a computed default:
     assertNull(mapper.getComputedDefault("srcs", BuildType.LABEL_LIST));

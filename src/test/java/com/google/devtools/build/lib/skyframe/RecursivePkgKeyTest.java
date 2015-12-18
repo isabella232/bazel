@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static org.junit.Assert.fail;
+
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -22,7 +24,12 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyKey;
 
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 /** Tests for {@link RecursivePkgKey}. */
+@RunWith(JUnit4.class)
 public class RecursivePkgKeyTest extends BuildViewTestCase {
 
   private SkyKey buildRecursivePkgKey(
@@ -43,6 +50,7 @@ public class RecursivePkgKeyTest extends BuildViewTestCase {
     }
   }
 
+  @Test
   public void testValidRecursivePkgKeys() throws Exception {
     buildRecursivePkgKey(
         PackageIdentifier.DEFAULT_REPOSITORY_NAME,
@@ -72,6 +80,7 @@ public class RecursivePkgKeyTest extends BuildViewTestCase {
         ImmutableSet.of(new PathFragment("a/b/c")));
   }
 
+  @Test
   public void testInvalidRecursivePkgKeys() throws Exception {
     invalidHelper(new PathFragment(""), ImmutableSet.of(new PathFragment("")));
     invalidHelper(new PathFragment("a"), ImmutableSet.of(new PathFragment("a")));

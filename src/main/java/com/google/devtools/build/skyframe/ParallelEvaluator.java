@@ -16,7 +16,6 @@ package com.google.devtools.build.skyframe;
 import static com.google.devtools.build.skyframe.SkyKeyInterner.SKY_KEY_INTERNER;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
@@ -41,6 +40,7 @@ import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.GroupedList.GroupedListHelper;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.skyframe.EvaluationProgressReceiver.EvaluationState;
 import com.google.devtools.build.skyframe.MemoizingEvaluator.EmittedEventState;
 import com.google.devtools.build.skyframe.NodeEntry.DependencyState;
@@ -352,12 +352,12 @@ public final class ParallelEvaluator implements Evaluator {
      * dependencies of this node <i>must</i> already have been registered, since this method may
      * register a dependence on the error transience node, which should always be the last dep.
      */
-    private void setError(ErrorInfo errorInfo) {
+    private void setError(ErrorInfo errorInfo, boolean isDirectlyTransient) {
       Preconditions.checkState(value == null, "%s %s %s", skyKey, value, errorInfo);
       Preconditions.checkState(this.errorInfo == null,
           "%s %s %s", skyKey, this.errorInfo, errorInfo);
 
-      if (errorInfo.isTransient()) {
+      if (isDirectlyTransient) {
         DependencyState triState =
             graph.get(ErrorTransienceValue.KEY).addReverseDepAndCheckIfDone(skyKey);
         Preconditions.checkState(triState == DependencyState.DONE,
@@ -869,7 +869,8 @@ public final class ParallelEvaluator implements Evaluator {
           // in #invalidatedByErrorTransience means that the error transience node is not newer
           // than this node, so we are going to mark it clean (since the error transience node is
           // always the last dep).
-          state.addTemporaryDirectDeps(GroupedListHelper.create(directDepsToCheck));
+          state.addTemporaryDirectDepsGroupToDirtyEntry(directDepsToCheck);
+
           for (Map.Entry<SkyKey, NodeEntry> e
               : graph.createIfAbsentBatch(directDepsToCheck).entrySet()) {
             SkyKey directDep = e.getKey();
@@ -947,9 +948,22 @@ public final class ParallelEvaluator implements Evaluator {
             }
           }
 
-          registerNewlyDiscoveredDepsForDoneEntry(skyKey, state, env);
-          ErrorInfo errorInfo = ErrorInfo.fromException(reifiedBuilderException);
-          env.setError(errorInfo);
+          Map<SkyKey, NodeEntry> newlyRequestedDeps = graph.getBatch(env.newlyRequestedDeps);
+          boolean isTransitivelyTransient = reifiedBuilderException.isTransient();
+          for (NodeEntry depEntry
+              : Iterables.concat(env.directDeps.values(), newlyRequestedDeps.values())) {
+            if (!isDoneForBuild(depEntry)) {
+              continue;
+            }
+            ErrorInfo depError = depEntry.getErrorInfo();
+            if (depError != null) {
+              isTransitivelyTransient |= depError.isTransient();
+            }
+          }
+          ErrorInfo errorInfo = ErrorInfo.fromException(reifiedBuilderException,
+              isTransitivelyTransient);
+          registerNewlyDiscoveredDepsForDoneEntry(skyKey, state, newlyRequestedDeps, env);
+          env.setError(errorInfo, /*isDirectlyTransient=*/ reifiedBuilderException.isTransient());
           env.commit(/*enqueueParents=*/keepGoing);
           if (!shouldFailFast) {
             return;
@@ -983,10 +997,12 @@ public final class ParallelEvaluator implements Evaluator {
       GroupedListHelper<SkyKey> newDirectDeps = env.newlyRequestedDeps;
 
       if (value != null) {
-        Preconditions.checkState(!env.valuesMissing(),
-            "%s -> %s, ValueEntry: %s", skyKey, newDirectDeps, state);
+        Preconditions.checkState(!env.valuesMissing(), "Evaluation of %s returned non-null value "
+            + "but requested dependencies that weren't computed yet (one of %s), ValueEntry: %s",
+            skyKey, newDirectDeps, state);
         env.setValue(value);
-        registerNewlyDiscoveredDepsForDoneEntry(skyKey, state, env);
+        registerNewlyDiscoveredDepsForDoneEntry(skyKey, state,
+            graph.getBatch(env.newlyRequestedDeps), env);
         env.commit(/*enqueueParents=*/true);
         return;
       }
@@ -1127,11 +1143,11 @@ public final class ParallelEvaluator implements Evaluator {
    * enforce that condition.
    */
   private void registerNewlyDiscoveredDepsForDoneEntry(
-      SkyKey skyKey, NodeEntry entry, SkyFunctionEnvironment env) {
+      SkyKey skyKey, NodeEntry entry, Map<SkyKey, NodeEntry> newlyRequestedDepMap,
+      SkyFunctionEnvironment env) {
     Set<SkyKey> unfinishedDeps = new HashSet<>();
-    Map<SkyKey, NodeEntry> batch = graph.getBatch(env.newlyRequestedDeps);
-    for (SkyKey dep : env.newlyRequestedDeps) {
-      if (!isDoneForBuild(batch.get(dep))) {
+   for (SkyKey dep : env.newlyRequestedDeps) {
+      if (!isDoneForBuild(newlyRequestedDepMap.get(dep))) {
         unfinishedDeps.add(dep);
       }
     }
@@ -1141,7 +1157,7 @@ public final class ParallelEvaluator implements Evaluator {
       // Note that this depEntry can't be null. If env.newlyRequestedDeps contained a key with a
       // null entry, then it would have been added to unfinishedDeps and then removed from
       // env.newlyRequestedDeps just above this loop.
-      NodeEntry depEntry = Preconditions.checkNotNull(batch.get(newDep), newDep);
+      NodeEntry depEntry = Preconditions.checkNotNull(newlyRequestedDepMap.get(newDep), newDep);
       DependencyState triState = depEntry.addReverseDepAndCheckIfDone(skyKey);
       Preconditions.checkState(DependencyState.DONE == triState,
           "new dep %s was not already done for %s. ValueEntry: %s. DepValueEntry: %s",
@@ -1456,7 +1472,8 @@ public final class ParallelEvaluator implements Evaluator {
         ReifiedSkyFunctionException reifiedBuilderException =
             new ReifiedSkyFunctionException(builderException, parent);
         if (reifiedBuilderException.getRootCauseSkyKey().equals(parent)) {
-          error = ErrorInfo.fromException(reifiedBuilderException);
+          error = ErrorInfo.fromException(reifiedBuilderException,
+              /*isTransitivelyTransient=*/ false);
           bubbleErrorInfo.put(errorKey,
               ValueWithMetadata.error(ErrorInfo.fromChildErrors(errorKey, ImmutableSet.of(error)),
                   env.buildEvents(/*missingChildren=*/true)));
@@ -1637,7 +1654,7 @@ public final class ParallelEvaluator implements Evaluator {
             "Value %s was not successfully evaluated, but had no child errors. ValueEntry: %s", key,
             entry);
         SkyFunctionEnvironment env = new SkyFunctionEnvironment(key, directDeps, visitor);
-        env.setError(ErrorInfo.fromChildErrors(key, errorDeps));
+        env.setError(ErrorInfo.fromChildErrors(key, errorDeps), /*isDirectlyTransient=*/false);
         env.commit(/*enqueueParents=*/false);
       } else {
         entry = graph.get(key);
@@ -1688,7 +1705,7 @@ public final class ParallelEvaluator implements Evaluator {
           CycleInfo cycleInfo = new CycleInfo(cycle);
           // Add in this cycle.
           allErrors.add(ErrorInfo.fromCycle(cycleInfo));
-          env.setError(ErrorInfo.fromChildErrors(key, allErrors));
+          env.setError(ErrorInfo.fromChildErrors(key, allErrors), /*isTransient=*/false);
           env.commit(/*enqueueParents=*/false);
           continue;
         } else {

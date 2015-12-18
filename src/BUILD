@@ -74,6 +74,7 @@ genrule(
         "//third_party:srcs",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/jarhelper:srcs",
         "//src/tools/android/java/com/google/devtools/build/android:embedded_tools",
+        "//src/tools/android/java/com/google/devtools/build/android/ideinfo:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/idlclass:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/incrementaldeployment:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/ziputils:embedded_tools",
@@ -147,5 +148,11 @@ config_setting(
 config_setting(
     name = "freebsd",
     values = {"cpu": "freebsd"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "windows",
+    values = {"compiler": "windows_msys64"},
     visibility = ["//visibility:public"],
 )

@@ -19,7 +19,6 @@ import static com.google.devtools.build.lib.syntax.Parser.ParsingMode.PYTHON;
 import static com.google.devtools.build.lib.syntax.Parser.ParsingMode.SKYLARK;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -30,6 +29,7 @@ import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.syntax.DictionaryLiteral.DictionaryEntryLiteral;
 import com.google.devtools.build.lib.syntax.IfStatement.ConditionalStatements;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -713,16 +713,15 @@ public class Parser {
     return receiver;
   }
 
-  // substring_suffix ::= '[' expression? ':' expression? ']'
+  // substring_suffix ::= '[' expression? ':' expression?  ':' expression? ']'
   private Expression parseSubstringSuffix(int start, Expression receiver) {
     List<Argument.Passed> args = new ArrayList<>();
     Expression startExpr;
-    Expression endExpr;
 
     expect(TokenKind.LBRACKET);
     int loc1 = token.left;
     if (token.kind == TokenKind.COLON) {
-      startExpr = setLocation(new IntegerLiteral(0), token.left, token.right);
+      startExpr = setLocation(new Identifier("None"), token.left, token.right);
     } else {
       startExpr = parseExpression();
     }
@@ -734,18 +733,36 @@ public class Parser {
                                    start, token.right);
     }
     // This is a slice (or substring)
-    expect(TokenKind.COLON);
-    int loc2 = token.left;
-    if (token.kind == TokenKind.RBRACKET) {
-      endExpr = setLocation(new IntegerLiteral(Integer.MAX_VALUE), token.left, token.right);
-    } else {
-      endExpr = parseNonTupleExpression();
-    }
+    args.add(parseSliceArgument(new Identifier("None")));
+    args.add(parseSliceArgument(new IntegerLiteral(1)));
     expect(TokenKind.RBRACKET);
-
-    args.add(setLocation(new Argument.Positional(endExpr), loc2, endExpr));
     return makeFuncallExpression(receiver, new Identifier("$slice"), args,
                                  start, token.right);
+  }
+
+  /**
+   * Parses {@code [':' [expr]]} which can either be the end or the step argument of a slice
+   * operation. If no such expression is found, this method returns an argument that represents
+   * {@code defaultValue}.
+   */
+  private Argument.Positional parseSliceArgument(Expression defaultValue) {
+    Expression explicitArg = getSliceEndOrStepExpression();
+    Expression argValue =
+        (explicitArg == null) ? setLocation(defaultValue, token.left, token.right) : explicitArg;
+    return setLocation(new Argument.Positional(argValue), token.left, argValue);
+  }
+
+  private Expression getSliceEndOrStepExpression() {
+    // There has to be a colon before any end or slice argument.
+    // However, if the next token thereafter is another colon or a right bracket, no argument value
+    // was specified.
+    if (token.kind == TokenKind.COLON) {
+      expect(TokenKind.COLON);
+      if (token.kind != TokenKind.COLON && token.kind != TokenKind.RBRACKET) {
+        return parseNonTupleExpression();
+      }
+    }
+    return null;
   }
 
   // Equivalent to 'exprlist' rule in Python grammar.

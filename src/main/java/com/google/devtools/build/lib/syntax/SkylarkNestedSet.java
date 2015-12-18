@@ -14,13 +14,15 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -46,7 +48,7 @@ import javax.annotation.Nullable;
         + "Sets have a fixed generic type, so <code>set([1]) + [\"a\"]</code> or "
         + "<code>set([1]) + set([\"a\"])</code> results in an error.<br>"
         + "Elements in a set can neither be mutable or be of type <code>list</code>, "
-        + "<code>map</code> or <code>dict</code>.<br>"
+        + "<code>struct</code> or <code>dict</code>.<br>"
         + "When aggregating data from providers, sets can take significantly less memory than "
         + "other types as they support nesting, that is, their subsets are shared in memory.<br>"
         + "Every set has an <code>order</code> parameter which determines the iteration order. "

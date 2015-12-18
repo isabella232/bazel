@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
-
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.skyframe.SkyframeExecutor.DEFAULT_THREAD_COUNT;
 import static org.junit.Assert.assertArrayEquals;
@@ -20,12 +19,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -35,13 +32,19 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.testing.EqualsTester;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
+import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.testutil.ManualClock;
+import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -57,6 +60,7 @@ import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.RecordingDifferencer;
 import com.google.devtools.build.skyframe.SequentialBuildDriver;
+import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -96,8 +100,7 @@ public class FileFunctionTest {
   private RecordingDifferencer differencer;
 
   @Before
-  public void setUp() throws Exception {
-
+  public final void createMonitor() throws Exception  {
     fastMd5 = true;
     manualClock = new ManualClock();
     createFsAndRoot(new CustomInMemoryFs(manualClock));
@@ -123,15 +126,26 @@ public class FileFunctionTest {
     differencer = new RecordingDifferencer();
     MemoizingEvaluator evaluator =
         new InMemoryMemoizingEvaluator(
-            ImmutableMap.of(
-                SkyFunctions.FILE_STATE, new FileStateFunction(tsgm, externalFilesHelper),
-                SkyFunctions.FILE_SYMLINK_CYCLE_UNIQUENESS,
-                    new FileSymlinkCycleUniquenessFunction(),
-                SkyFunctions.FILE_SYMLINK_INFINITE_EXPANSION_UNIQUENESS,
-                    new FileSymlinkInfiniteExpansionUniquenessFunction(),
-                SkyFunctions.FILE, new FileFunction(pkgLocatorRef, tsgm, externalFilesHelper)),
+            ImmutableMap.<SkyFunctionName, SkyFunction>builder()
+                .put(SkyFunctions.FILE_STATE, new FileStateFunction(tsgm, externalFilesHelper))
+                .put(SkyFunctions.FILE_SYMLINK_CYCLE_UNIQUENESS,
+                    new FileSymlinkCycleUniquenessFunction())
+                .put(SkyFunctions.FILE_SYMLINK_INFINITE_EXPANSION_UNIQUENESS,
+                    new FileSymlinkInfiniteExpansionUniquenessFunction())
+                .put(SkyFunctions.FILE, new FileFunction(pkgLocatorRef))
+                .put(SkyFunctions.PACKAGE,
+                    new PackageFunction(null, null, null, null, null, null, null))
+                .put(SkyFunctions.PACKAGE_LOOKUP,
+                    new PackageLookupFunction(new AtomicReference<>(
+                        ImmutableSet.<PackageIdentifier>of())))
+                .put(SkyFunctions.WORKSPACE_FILE,
+                    new WorkspaceFileFunction(TestRuleClassProvider.getRuleClassProvider(),
+                        new PackageFactory(TestRuleClassProvider.getRuleClassProvider()),
+                        new BlazeDirectories(pkgRoot, outputBase, pkgRoot)))
+                .build(),
             differencer);
     PrecomputedValue.BUILD_ID.set(differencer, UUID.randomUUID());
+    PrecomputedValue.PATH_PACKAGE_LOCATOR.set(differencer, pkgLocator);
     return new SequentialBuildDriver(evaluator);
   }
 
@@ -288,6 +302,30 @@ public class FileFunctionTest {
             rootedPath(""),
             RootedPath.toRootedPath(fs.getRootDirectory(), PathFragment.EMPTY_FRAGMENT),
             RootedPath.toRootedPath(fs.getRootDirectory(), new PathFragment("absolute")));
+  }
+
+  @Test
+  public void testAbsoluteSymlinkToExternal() throws Exception {
+    String externalPath =
+        outputBase.getRelative(Label.EXTERNAL_PATH_PREFIX).getRelative("a/b").getPathString();
+    symlink("a", externalPath);
+    file("b");
+    file(externalPath);
+    Set<RootedPath> seenFiles = Sets.newHashSet();
+    seenFiles.addAll(getFilesSeenAndAssertValueChangesIfContentsOfFileChanges("b", false, "a"));
+    seenFiles.addAll(
+        getFilesSeenAndAssertValueChangesIfContentsOfFileChanges(externalPath, true, "a"));
+    Path root = fs.getRootDirectory();
+    assertThat(seenFiles)
+        .containsExactly(
+            rootedPath("WORKSPACE"),
+            rootedPath("a"),
+            rootedPath(""),
+            RootedPath.toRootedPath(root, PathFragment.EMPTY_FRAGMENT),
+            RootedPath.toRootedPath(root, new PathFragment("output_base")),
+            RootedPath.toRootedPath(root, new PathFragment("output_base/external")),
+            RootedPath.toRootedPath(root, new PathFragment("output_base/external/a")),
+            RootedPath.toRootedPath(root, new PathFragment("output_base/external/a/b")));
   }
 
   @Test
@@ -539,7 +577,7 @@ public class FileFunctionTest {
   }
 
   @Test
-  public void testFilesOutsideRootHasDepOnBuildID() throws Exception {
+  public void testFilesOutsideRootIsReEvaluated() throws Exception {
     Path file = file("/outsideroot");
     SequentialBuildDriver driver = makeDriver();
     SkyKey key = skyKey("/outsideroot");
@@ -554,6 +592,7 @@ public class FileFunctionTest {
     assertTrue(oldValue.exists());
 
     file.delete();
+    differencer.invalidate(ImmutableList.of(fileStateSkyKey("/outsideroot")));
     result =
         driver.evaluate(
             ImmutableList.of(key), false, DEFAULT_THREAD_COUNT, NullEventHandler.INSTANCE);
@@ -561,16 +600,6 @@ public class FileFunctionTest {
       fail(String.format("Evaluation error for %s: %s", key, result.getError()));
     }
     FileValue newValue = (FileValue) result.get(key);
-    assertSame(oldValue, newValue);
-
-    PrecomputedValue.BUILD_ID.set(differencer, UUID.randomUUID());
-    result =
-        driver.evaluate(
-            ImmutableList.of(key), false, DEFAULT_THREAD_COUNT, NullEventHandler.INSTANCE);
-    if (result.hasError()) {
-      fail(String.format("Evaluation error for %s: %s", key, result.getError()));
-    }
-    newValue = (FileValue) result.get(key);
     assertNotSame(oldValue, newValue);
     assertFalse(newValue.exists());
   }

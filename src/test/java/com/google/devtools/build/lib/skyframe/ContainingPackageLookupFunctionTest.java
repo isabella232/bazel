@@ -13,6 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.testing.EqualsTester;
@@ -31,6 +35,11 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -39,19 +48,19 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Tests for {@link ContainingPackageLookupFunction}.
  */
+@RunWith(JUnit4.class)
 public class ContainingPackageLookupFunctionTest extends FoundationTestCase {
 
   private AtomicReference<ImmutableSet<PackageIdentifier>> deletedPackages;
   private MemoizingEvaluator evaluator;
   private SequentialBuildDriver driver;
 
-  @Override
-  protected void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void setUp() throws Exception  {
     AtomicReference<PathPackageLocator> pkgLocator =
         new AtomicReference<>(new PathPackageLocator(outputBase, ImmutableList.of(rootDirectory)));
     deletedPackages = new AtomicReference<>(ImmutableSet.<PackageIdentifier>of());
-    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator);
+    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(pkgLocator, false);
     TimestampGranularityMonitor tsgm = new TimestampGranularityMonitor(BlazeClock.instance());
 
     Map<SkyFunctionName, SkyFunction> skyFunctions = new HashMap<>();
@@ -60,7 +69,7 @@ public class ContainingPackageLookupFunctionTest extends FoundationTestCase {
     skyFunctions.put(SkyFunctions.BLACKLISTED_PACKAGE_PREFIXES,
         new BlacklistedPackagePrefixesFunction());
     skyFunctions.put(SkyFunctions.FILE_STATE, new FileStateFunction(tsgm, externalFilesHelper));
-    skyFunctions.put(SkyFunctions.FILE, new FileFunction(pkgLocator, tsgm, externalFilesHelper));
+    skyFunctions.put(SkyFunctions.FILE, new FileFunction(pkgLocator));
     RecordingDifferencer differencer = new RecordingDifferencer();
     evaluator = new InMemoryMemoizingEvaluator(skyFunctions, differencer);
     driver = new SequentialBuildDriver(evaluator);
@@ -83,11 +92,13 @@ public class ContainingPackageLookupFunctionTest extends FoundationTestCase {
         .get(key);
   }
 
+  @Test
   public void testNoContainingPackage() throws Exception {
     ContainingPackageLookupValue value = lookupContainingPackage("a/b");
     assertFalse(value.hasContainingPackage());
   }
 
+  @Test
   public void testContainingPackageIsParent() throws Exception {
     scratch.file("a/BUILD");
     ContainingPackageLookupValue value = lookupContainingPackage("a/b");
@@ -96,6 +107,7 @@ public class ContainingPackageLookupFunctionTest extends FoundationTestCase {
     assertEquals(rootDirectory, value.getContainingPackageRoot());
   }
 
+  @Test
   public void testContainingPackageIsSelf() throws Exception {
     scratch.file("a/b/BUILD");
     ContainingPackageLookupValue value = lookupContainingPackage("a/b");
@@ -104,6 +116,7 @@ public class ContainingPackageLookupFunctionTest extends FoundationTestCase {
     assertEquals(rootDirectory, value.getContainingPackageRoot());
   }
 
+  @Test
   public void testEqualsAndHashCodeContract() throws Exception {
     ContainingPackageLookupValue valueA1 = ContainingPackageLookupValue.NONE;
     ContainingPackageLookupValue valueA2 = ContainingPackageLookupValue.NONE;
