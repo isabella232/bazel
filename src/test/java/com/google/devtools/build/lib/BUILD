@@ -596,6 +596,7 @@ java_test(
     ),
     args = ["com.google.devtools.build.lib.AllTests"],
     deps = [
+        ":analysis_testutil",
         ":packages_testutil",
         ":test_runner",
         "//src/main/java/com/google/devtools/build/lib:bazel-rules",
@@ -791,6 +792,7 @@ java_library(
     srcs = glob([
         "syntax/util/*.java",
     ]),
+    visibility = ["//visibility:public"],
     deps = [
         ":foundations_testutil",
         ":test_runner",
@@ -817,6 +819,7 @@ java_library(
     srcs = glob([
         "skylark/util/*.java",
     ]),
+    visibility = ["//visibility:public"],
     deps = [
         ":analysis_testutil",
         ":foundations_testutil",

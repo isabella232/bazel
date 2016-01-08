@@ -42,8 +42,6 @@ void BlazeStartupOptions::Init() {
   block_for_lock = true;
   host_jvm_debug = false;
   host_javabase = "";
-  // TODO(janakr): change this to true when ready, then delete it.
-  preserve_spaces_in_host_jvm_args = false;
   batch = false;
   batch_cpu_scheduling = false;
   blaze_cpu = false;
@@ -77,7 +75,6 @@ void BlazeStartupOptions::Copy(
   lhs->host_jvm_debug = rhs.host_jvm_debug;
   lhs->host_jvm_profile = rhs.host_jvm_profile;
   lhs->host_javabase = rhs.host_javabase;
-  lhs->preserve_spaces_in_host_jvm_args = rhs.preserve_spaces_in_host_jvm_args;
   lhs->host_jvm_args = rhs.host_jvm_args;
   lhs->batch = rhs.batch;
   lhs->batch_cpu_scheduling = rhs.batch_cpu_scheduling;
@@ -137,12 +134,8 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
     // and re-execing.
     host_javabase = MakeAbsolute(value);
     option_sources["host_javabase"] = rcfile;
-  } else if (GetNullaryOption(
-                 arg, "--experimental_preserve_spaces_in_host_jvm_args")) {
-    preserve_spaces_in_host_jvm_args = true;
-    option_sources["preserve_spaces_in_host_jvm_args"] = rcfile;
-  } else if ((value = GetUnaryOption(arg, next_arg,
-                                     "--host_jvm_args")) != NULL) {
+  } else if ((value = GetUnaryOption(arg, next_arg, "--host_jvm_args")) !=
+             NULL) {
     host_jvm_args.push_back(value);
     option_sources["host_jvm_args"] = rcfile;  // NB: This is incorrect
   } else if ((value = GetUnaryOption(arg, next_arg, "--blaze_cpu")) != NULL) {
@@ -259,9 +252,10 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
     }
     if (!extra_argument_processed) {
       blaze_util::StringPrintf(
-          error, "Unknown %s startup option: '%s'.\n"
-          "  For more info, run 'blaze help startup_options'.",
-          GetProductName().c_str(), arg);
+          error,
+          "Unknown %s startup option: '%s'.\n"
+          "  For more info, run '%s help startup_options'.",
+          GetProductName().c_str(), arg, GetProductName().c_str());
       return blaze_exit_code::BAD_ARGV;
     }
   }

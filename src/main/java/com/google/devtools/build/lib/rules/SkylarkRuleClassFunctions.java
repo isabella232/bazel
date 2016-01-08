@@ -35,11 +35,17 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.Constants;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
+import com.google.devtools.build.lib.analysis.OutputGroupProvider;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.AspectDefinition;
@@ -81,6 +87,7 @@ import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkCallbackFunction;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkModuleNameResolver;
+import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.syntax.Type.ConversionException;
@@ -356,19 +363,33 @@ public class SkylarkRuleClassFunctions {
   }
 
 
-  @SkylarkSignature(
-    name = "aspect",
+  @SkylarkSignature(name = "aspect", doc =
+    "Creates a new aspect. The result of this fucntion must be stored in a global value.",
     returnType = SkylarkAspect.class,
-    documented = false, // TODO(dslomov): Experimental, document later.
-    mandatoryPositionals = {@Param(name = "implementation", type = BaseFunction.class)},
+    mandatoryPositionals = {
+        @Param(name = "implementation", type = BaseFunction.class,
+            doc = "the function implementing this aspect. Must have two parameters: "
+            + "<a href=\"Target.html\">Target</a> (the target to which the aspect is applied) and"
+            + "<a href=\"ctx.html\">ctx</a>. Attributes of the target are available via ctx.rule "
+            + " field. The function is called during the analysis phase for each application of "
+            + "an aspect to a target."
+        ),
+    },
     optionalPositionals = {
-      @Param(
-        name = "attr_aspects",
-        type = SkylarkList.class,
-        generic1 = String.class,
-        defaultValue = "[]"
+      @Param(name = "attr_aspects", type = SkylarkList.class, generic1 = String.class,
+        defaultValue = "[]",
+        doc = "List of attribute names.  The aspect propagates along dependencies specified by "
+        + " attributes of a target with this name"
       ),
-      @Param(name = "attrs", type = Map.class, noneable = true, defaultValue = "None")
+      @Param(name = "attrs", type = Map.class, noneable = true, defaultValue = "None",
+        doc = "dictionary to declare all the attributes of the aspect.  "
+        + "It maps from an attribute name to an attribute object "
+        + "(see <a href=\"attr.html\">attr</a> module). "
+        + "Aspect attributes are available to implementation function as fields of ctx parameter. "
+        + "All aspect attributes must be private, so their names must start with <code>_</code>. "
+        + "All aspect attributes must be have default values, and be of type "
+        + "<code>label</code> or <code>label_list</code>"
+      )
     },
     useEnvironment = true,
     useAst = true
@@ -638,6 +659,29 @@ public class SkylarkRuleClassFunctions {
       sb.append("\n");
       }
     };
+
+  @SkylarkSignature(name = "output_group",
+      documented = false, //  TODO(dslomov): document.
+      objectType =  TransitiveInfoCollection.class,
+      returnType = SkylarkNestedSet.class,
+      mandatoryPositionals = {
+          @Param(name = "self", type = TransitiveInfoCollection.class, doc =
+              "this target"
+          ),
+          @Param(name = "group_name", type = String.class, doc =
+              "Output group name"
+          )
+      }
+  )
+  public static final BuiltinFunction output_group = new BuiltinFunction("output_group") {
+      public SkylarkNestedSet invoke(TransitiveInfoCollection self, String group) {
+        OutputGroupProvider provider = self.getProvider(OutputGroupProvider.class);
+        NestedSet<Artifact> result = provider != null
+            ? provider.getOutputGroup(group)
+            : NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER);
+        return SkylarkNestedSet.of(Artifact.class, result);
+      }
+  };
 
   static {
     SkylarkSignatureProcessor.configureSkylarkFunctions(SkylarkRuleClassFunctions.class);

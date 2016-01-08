@@ -427,8 +427,8 @@ public final class AndroidRuleClasses {
           <code>res</code> directory.
           <br/>
           Generated files (from genrules) can be referenced by
-          <a href="build-ref.html#labels">Label</a> here as well. The only restriction is that the
-          generated outputs must be under the same "<code>res</code>" directory as any other
+          <a href="../build-ref.html#labels">Label</a> here as well. The only restriction is that
+          the generated outputs must be under the same "<code>res</code>" directory as any other
           resource files that are included.
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(attr("resource_files", LABEL_LIST).legacyAllowAnyFileType())
@@ -555,10 +555,6 @@ public final class AndroidRuleClasses {
           a genrule or build extension.)
           </p>
           <p>This rule currently forces source and class compatibility with Java 6.
-          </p>
-          <p><code>srcs</code> files of type <code>.jar</code> are linked in.
-          (This is useful if you have third-party <code>.jar</code> files
-          with no source.)
           </p>
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(attr("srcs", LABEL_LIST)

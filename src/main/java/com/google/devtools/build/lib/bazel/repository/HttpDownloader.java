@@ -14,8 +14,11 @@
 
 package com.google.devtools.build.lib.bazel.repository;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Strings;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
+import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
@@ -30,7 +33,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -106,13 +112,13 @@ public class HttpDownloader {
     AtomicInteger totalBytes = new AtomicInteger(0);
     final ScheduledFuture<?> loggerHandle = getLoggerHandle(totalBytes);
 
-    try (OutputStream outputStream = destination.getOutputStream()) {
-      InputStream in = getInputStream(url);
+    try (OutputStream out = destination.getOutputStream();
+         InputStream in = getInputStream(url)) {
       int read;
       byte[] buf = new byte[BUFFER_SIZE];
       while ((read = in.read(buf)) > 0) {
         totalBytes.addAndGet(read);
-        outputStream.write(buf, 0, read);
+        out.write(buf, 0, read);
       }
     } catch (IOException e) {
       throw new IOException(
@@ -175,10 +181,62 @@ public class HttpDownloader {
   }
 
   private InputStream getInputStream(URL url) throws IOException {
-    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+    HttpURLConnection connection = (HttpURLConnection) url.openConnection(
+        createProxyIfNeeded(url.getProtocol()));
     connection.setInstanceFollowRedirects(true);
     connection.connect();
-    return connection.getInputStream();
+    if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+      return connection.getInputStream();
+    }
+
+    InputStream errorStream = connection.getErrorStream();
+    throw new IOException(connection.getResponseCode() + ": "
+        + new String(ByteStreams.toByteArray(errorStream), StandardCharsets.UTF_8));
+  }
+
+  private static Proxy createProxyIfNeeded(String protocol) throws IOException {
+    if (protocol.equals("https")) {
+      return createProxy(System.getenv("HTTPS_PROXY"));
+    } else if (protocol.equals("http")) {
+      return createProxy(System.getenv("HTTP_PROXY"));
+    }
+    return Proxy.NO_PROXY;
+  }
+
+  @VisibleForTesting
+  static Proxy createProxy(String proxyAddress) throws IOException {
+    if (Strings.isNullOrEmpty(proxyAddress)) {
+      return Proxy.NO_PROXY;
+    }
+
+    // Split the proxyAddress into the protocol, address, and optional port. This does not use the
+    // URL class to avoid the DNS resolution it performs on creation.
+    int protocolIndex = proxyAddress.indexOf(':');
+    if (protocolIndex == -1) {
+      throw new IOException("No proxy protocol found for " + proxyAddress);
+    }
+    boolean https;
+    String protocol = proxyAddress.substring(0, protocolIndex);
+    if (protocol.equals("https")) {
+      https = true;
+    } else if (protocol.equals("http")) {
+      https = false;
+    } else {
+      throw new IOException("Invalid proxy protocol for " + proxyAddress);
+    }
+    int portIndex = proxyAddress.lastIndexOf(':');
+    if (protocolIndex == portIndex) {
+      // No port set, just the http: colon.
+      return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyAddress, https ? 443 : 80));
+    }
+
+    try {
+      return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(
+          proxyAddress.substring(0, portIndex),
+          Integer.parseInt(proxyAddress.substring(portIndex + 1))));
+    } catch (NumberFormatException e) {
+      throw new IOException("Error parsing proxy port: " + proxyAddress);
+    }
   }
 
   public static String getHash(Hasher hasher, Path path) throws IOException {
