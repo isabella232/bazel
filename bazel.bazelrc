@@ -1,3 +1,7 @@
-build --package_path %workspace%:/srv/server --spawn_strategy=standalone --genrule_strategy=standalone --verbose_failures
-fetch --package_path %workspace%:/srv/server
-query --package_path %workspace%:/srv/server
+startup --batch
+
+common --package_path %workspace%:/srv/server
+
+build --spawn_strategy=standalone --genrule_strategy=standalone --ignore_unsupported_sandboxing --verbose_failures --local_resources 512,2,1.0
+
+test --test_output=errors
