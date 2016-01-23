@@ -136,7 +136,9 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+import com.google.devtools.build.skyframe.WalkableGraph;
 import com.google.devtools.build.skyframe.WalkableGraph.WalkableGraphFactory;
+import com.google.devtools.common.options.OptionsClassProvider;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -339,8 +341,12 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(SkyFunctions.TARGET_PATTERN, new TargetPatternFunction());
     map.put(SkyFunctions.PREPARE_DEPS_OF_PATTERNS, new PrepareDepsOfPatternsFunction());
     map.put(SkyFunctions.PREPARE_DEPS_OF_PATTERN, new PrepareDepsOfPatternFunction(pkgLocator));
-    map.put(SkyFunctions.PREPARE_DEPS_OF_TARGETS_UNDER_DIRECTORY,
+    map.put(
+        SkyFunctions.PREPARE_DEPS_OF_TARGETS_UNDER_DIRECTORY,
         new PrepareDepsOfTargetsUnderDirectoryFunction(directories));
+    map.put(
+        SkyFunctions.COLLECT_PACKAGES_UNDER_DIRECTORY,
+        new CollectPackagesUnderDirectoryFunction(directories));
     map.put(SkyFunctions.BLACKLISTED_PACKAGE_PREFIXES, new BlacklistedPackagePrefixesFunction());
     map.put(SkyFunctions.TESTS_IN_SUITE, new TestsInSuiteFunction());
     map.put(SkyFunctions.TEST_SUITE_EXPANSION, new TestSuiteExpansionFunction());
@@ -372,6 +378,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         configurationFactory));
     map.put(SkyFunctions.CONFIGURATION_FRAGMENT, new ConfigurationFragmentFunction(
         configurationFragments));
+    map.put(SkyFunctions.WORKSPACE_AST, new WorkspaceASTFunction(ruleClassProvider));
     map.put(
         SkyFunctions.WORKSPACE_FILE,
         new WorkspaceFileFunction(ruleClassProvider, pkgFactory, directories));
@@ -1444,22 +1451,28 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   @Override
   public EvaluationResult<SkyValue> prepareAndGet(Collection<String> patterns, String offset,
       int numThreads, EventHandler eventHandler) throws InterruptedException {
-    SkyKey skyKey = getPrepareDepsKey(patterns, offset);
+    SkyKey skyKey = getUniverseKey(patterns, offset);
     EvaluationResult<SkyValue> evaluationResult =
         buildDriver.evaluate(ImmutableList.of(skyKey), true, numThreads, eventHandler);
     Preconditions.checkNotNull(evaluationResult.getWalkableGraph(), patterns);
     return evaluationResult;
   }
 
+  @Override
+  public void afterUse(WalkableGraph walkableGraph) {
+  }
+
   /**
    * Get metadata related to the prepareAndGet() lookup. Resulting data is specific to the
    * underlying evaluation implementation.
    */
-  public String prepareAndGetMetadata(Collection<String> patterns, String offset) {
-    return buildDriver.meta(ImmutableList.of(getPrepareDepsKey(patterns, offset)));
+   public String prepareAndGetMetadata(Collection<String> patterns, String offset,
+      OptionsClassProvider options) throws AbruptExitException, InterruptedException {
+    return buildDriver.meta(ImmutableList.of(getUniverseKey(patterns, offset)), options);
   }
 
-  private SkyKey getPrepareDepsKey(Collection<String> patterns, String offset) {
+  @Override
+  public SkyKey getUniverseKey(Collection<String> patterns, String offset) {
     return PrepareDepsOfPatternsValue.key(ImmutableList.copyOf(patterns), offset);
   }
 

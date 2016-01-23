@@ -981,7 +981,7 @@ public class MethodLibrary {
             MutableList self, Object start, Object end, Integer step, Location loc,
             Environment env)
             throws EvalException, ConversionException {
-          return new MutableList(sliceList(self.getList(), start, end, step, loc), env);
+          return new MutableList(sliceList(self, start, end, step, loc), env);
         }
       };
 
@@ -1008,7 +1008,7 @@ public class MethodLibrary {
         @SuppressWarnings("unused") // Accessed via Reflection.
         public Tuple invoke(Tuple self, Object start, Object end, Integer step, Location loc)
             throws EvalException, ConversionException {
-          return Tuple.copyOf(sliceList(self.getList(), start, end, step, loc));
+          return Tuple.copyOf(sliceList(self, start, end, step, loc));
         }
       };
 
@@ -1245,7 +1245,6 @@ public class MethodLibrary {
     name = "append",
     objectType = MutableList.class,
     returnType = Runtime.NoneType.class,
-    documented = false,
     doc = "Adds an item to the end of the list.",
     mandatoryPositionals = {
       @Param(name = "self", type = MutableList.class, doc = "This list."),
@@ -1266,7 +1265,6 @@ public class MethodLibrary {
     name = "extend",
     objectType = MutableList.class,
     returnType = Runtime.NoneType.class,
-    documented = false,
     doc = "Adds all items to the end of the list.",
     mandatoryPositionals = {
       @Param(name = "self", type = MutableList.class, doc = "This list."),
@@ -1409,7 +1407,7 @@ public class MethodLibrary {
             throw new EvalException(loc, "List is empty");
           }
           int index = getListIndex(key, self.size(), loc);
-          return SkylarkType.convertToSkylark(self.getList().get(index), env);
+          return SkylarkType.convertToSkylark(self.get(index), env);
         }
       };
 
@@ -1434,7 +1432,7 @@ public class MethodLibrary {
             throw new EvalException(loc, "tuple is empty");
           }
           int index = getListIndex(key, self.size(), loc);
-          return SkylarkType.convertToSkylark(self.getList().get(index), env);
+          return SkylarkType.convertToSkylark(self.get(index), env);
         }
       };
 

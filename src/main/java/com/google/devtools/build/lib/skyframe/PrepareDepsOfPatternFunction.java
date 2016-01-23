@@ -33,6 +33,8 @@ import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.pkgcache.TargetPatternResolverUtil;
 import com.google.devtools.build.lib.skyframe.EnvironmentBackedRecursivePackageProvider.MissingDepException;
+import com.google.devtools.build.lib.util.BatchCallback;
+import com.google.devtools.build.lib.util.BatchCallback.NullCallback;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -79,8 +81,9 @@ public class PrepareDepsOfPatternFunction implements SkyFunction {
     try {
       TargetPattern parsedPattern = patternKey.getParsedPattern();
       DepsOfPatternPreparer preparer = new DepsOfPatternPreparer(env, pkgPath.get());
-      ImmutableSet<String> excludedSubdirectories = patternKey.getExcludedSubdirectories();
-      parsedPattern.eval(preparer, excludedSubdirectories);
+      ImmutableSet<PathFragment> excludedSubdirectories = patternKey.getExcludedSubdirectories();
+      parsedPattern.<Void, RuntimeException>eval(
+          preparer, excludedSubdirectories, NullCallback.<Void>instance());
     } catch (TargetParsingException e) {
       throw new PrepareDepsOfPatternFunctionException(e);
     } catch (MissingDepException e) {
@@ -207,14 +210,16 @@ public class PrepareDepsOfPatternFunction implements SkyFunction {
     }
 
     @Override
-    public ResolvedTargets<Void> findTargetsBeneathDirectory(RepositoryName repository,
-        String originalPattern, String directory, boolean rulesOnly,
-        ImmutableSet<String> excludedSubdirectories)
-        throws TargetParsingException, InterruptedException {
+    public <E extends Exception> void findTargetsBeneathDirectory(
+        RepositoryName repository,
+        String originalPattern,
+        String directory,
+        boolean rulesOnly,
+        ImmutableSet<PathFragment> excludedSubdirectories,
+        BatchCallback<Void, E> callback)
+        throws TargetParsingException, E, InterruptedException {
       FilteringPolicy policy =
           rulesOnly ? FilteringPolicies.RULES_ONLY : FilteringPolicies.NO_FILTER;
-      ImmutableSet<PathFragment> excludedPathFragments =
-          TargetPatternResolverUtil.getPathFragments(excludedSubdirectories);
       PathFragment pathFragment = TargetPatternResolverUtil.getPathFragment(directory);
       List<Path> roots = new ArrayList<>();
       if (repository.isDefault()) {
@@ -231,15 +236,16 @@ public class PrepareDepsOfPatternFunction implements SkyFunction {
 
       for (Path root : roots) {
         RootedPath rootedPath = RootedPath.toRootedPath(root, pathFragment);
-        SkyValue token = env.getValue(PrepareDepsOfTargetsUnderDirectoryValue.key(
-            repository, rootedPath, excludedPathFragments, policy));
-        if (token == null) {
-          // A null token value means there is a missing dependency, because RecursivePkgFunction
-          // never throws.
+        env.getValues(
+            ImmutableList.of(
+                PrepareDepsOfTargetsUnderDirectoryValue.key(
+                    repository, rootedPath, excludedSubdirectories, policy),
+                CollectPackagesUnderDirectoryValue.key(
+                    repository, rootedPath, excludedSubdirectories)));
+        if (env.valuesMissing()) {
           throw new MissingDepException();
         }
       }
-      return ResolvedTargets.empty();
     }
   }
 }

@@ -13,9 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier.RepositoryName;
@@ -43,10 +41,6 @@ import javax.annotation.Nullable;
  * Ensures the graph contains the targets in the directory's package, if any, and in the
  * non-excluded packages in its subdirectories, and all those targets' transitive dependencies,
  * after a successful evaluation.
- *
- * <p>Computes {@link PrepareDepsOfTargetsUnderDirectoryValue} which describes whether the
- * directory is a package and how many non-excluded packages exist below each of the directory's
- * subdirectories.
  */
 public class PrepareDepsOfTargetsUnderDirectoryFunction implements SkyFunction {
   private final BlazeDirectories directories;
@@ -65,9 +59,8 @@ public class PrepareDepsOfTargetsUnderDirectoryFunction implements SkyFunction {
   }
 
   private class MyTraversalFunction
-      extends RecursiveDirectoryTraversalFunction<MyVisitor,
-      PrepareDepsOfTargetsUnderDirectoryValue> {
-
+      extends RecursiveDirectoryTraversalFunction<
+          MyVisitor, PrepareDepsOfTargetsUnderDirectoryValue> {
     private final FilteringPolicy filteringPolicy;
 
     private MyTraversalFunction(FilteringPolicy filteringPolicy) {
@@ -77,7 +70,7 @@ public class PrepareDepsOfTargetsUnderDirectoryFunction implements SkyFunction {
 
     @Override
     protected PrepareDepsOfTargetsUnderDirectoryValue getEmptyReturn() {
-      return PrepareDepsOfTargetsUnderDirectoryValue.EMPTY;
+      return PrepareDepsOfTargetsUnderDirectoryValue.INSTANCE;
     }
 
     @Override
@@ -86,46 +79,23 @@ public class PrepareDepsOfTargetsUnderDirectoryFunction implements SkyFunction {
     }
 
     @Override
-    protected SkyKey getSkyKeyForSubdirectory(RepositoryName repository, RootedPath subdirectory,
+    protected SkyKey getSkyKeyForSubdirectory(
+        RepositoryName repository,
+        RootedPath subdirectory,
         ImmutableSet<PathFragment> excludedSubdirectoriesBeneathSubdirectory) {
-      return PrepareDepsOfTargetsUnderDirectoryValue.key(repository, subdirectory,
-          excludedSubdirectoriesBeneathSubdirectory, filteringPolicy);
+      return PrepareDepsOfTargetsUnderDirectoryValue.key(
+          repository, subdirectory, excludedSubdirectoriesBeneathSubdirectory, filteringPolicy);
     }
 
     @Override
     protected PrepareDepsOfTargetsUnderDirectoryValue aggregateWithSubdirectorySkyValues(
         MyVisitor visitor, Map<SkyKey, SkyValue> subdirectorySkyValues) {
-      // Aggregate the child subdirectory package state.
-      ImmutableMap.Builder<RootedPath, Boolean> builder = ImmutableMap.builder();
-      for (SkyKey key : subdirectorySkyValues.keySet()) {
-        PrepareDepsOfTargetsUnderDirectoryKey prepDepsKey =
-            (PrepareDepsOfTargetsUnderDirectoryKey) key.argument();
-        PrepareDepsOfTargetsUnderDirectoryValue prepDepsValue =
-            (PrepareDepsOfTargetsUnderDirectoryValue) subdirectorySkyValues.get(key);
-        boolean packagesInSubdirectory = prepDepsValue.isDirectoryPackage();
-        // If the subdirectory isn't a package, check to see if any of its subdirectories
-        // transitively contain packages.
-        if (!packagesInSubdirectory) {
-          ImmutableCollection<Boolean> subdirectoryValues =
-              prepDepsValue.getSubdirectoryTransitivelyContainsPackages().values();
-          for (Boolean pkgsInSubSub : subdirectoryValues) {
-            if (pkgsInSubSub) {
-              packagesInSubdirectory = true;
-              break;
-            }
-          }
-        }
-        builder.put(prepDepsKey.getRecursivePkgKey().getRootedPath(), packagesInSubdirectory);
-      }
-      return PrepareDepsOfTargetsUnderDirectoryValue.of(visitor.isDirectoryPackage(),
-          builder.build());
+      return PrepareDepsOfTargetsUnderDirectoryValue.INSTANCE;
     }
   }
 
   private static class MyVisitor implements RecursiveDirectoryTraversalFunction.Visitor {
-
     private final FilteringPolicy filteringPolicy;
-    private boolean isDirectoryPackage;
 
     private MyVisitor(FilteringPolicy filteringPolicy) {
       this.filteringPolicy = Preconditions.checkNotNull(filteringPolicy);
@@ -133,17 +103,12 @@ public class PrepareDepsOfTargetsUnderDirectoryFunction implements SkyFunction {
 
     @Override
     public void visitPackageValue(Package pkg, Environment env) {
-      isDirectoryPackage = true;
       loadTransitiveTargets(env, pkg, filteringPolicy);
-    }
-
-    public boolean isDirectoryPackage() {
-      return isDirectoryPackage;
     }
   }
 
-  private static void loadTransitiveTargets(Environment env, Package pkg,
-      FilteringPolicy filteringPolicy) {
+  private static void loadTransitiveTargets(
+      Environment env, Package pkg, FilteringPolicy filteringPolicy) {
     ResolvedTargets<Target> packageTargets =
         TargetPatternResolverUtil.resolvePackageTargets(pkg, filteringPolicy);
     ImmutableList.Builder<SkyKey> builder = ImmutableList.builder();

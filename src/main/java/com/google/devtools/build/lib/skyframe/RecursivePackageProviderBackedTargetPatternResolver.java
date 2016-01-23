@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.devtools.build.lib.pkgcache.FilteringPolicies.NO_FILTER;
+
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -33,8 +35,11 @@ import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
 import com.google.devtools.build.lib.pkgcache.RecursivePackageProvider;
 import com.google.devtools.build.lib.pkgcache.TargetPatternResolverUtil;
+import com.google.devtools.build.lib.util.BatchCallback;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,6 +47,9 @@ import java.util.Map;
  */
 public class RecursivePackageProviderBackedTargetPatternResolver
     implements TargetPatternResolver<Target> {
+
+  // TODO(janakr): Move this to a more generic place and unify with SkyQueryEnvironment's value?
+  private static final int MAX_PACKAGES_BULK_GET = 10000;
 
   private final RecursivePackageProvider recursivePackageProvider;
   private final EventHandler eventHandler;
@@ -154,20 +162,21 @@ public class RecursivePackageProviderBackedTargetPatternResolver
   }
 
   @Override
-  public ResolvedTargets<Target> findTargetsBeneathDirectory(final RepositoryName repository,
-      String originalPattern, String directory, boolean rulesOnly,
-      ImmutableSet<String> excludedSubdirectories)
-      throws TargetParsingException, InterruptedException {
+  public <E extends Exception> void findTargetsBeneathDirectory(
+      final RepositoryName repository,
+      String originalPattern,
+      String directory,
+      boolean rulesOnly,
+      ImmutableSet<PathFragment> excludedSubdirectories,
+      BatchCallback<Target, E> callback)
+      throws TargetParsingException, E, InterruptedException {
     FilteringPolicy actualPolicy = rulesOnly
         ? FilteringPolicies.and(FilteringPolicies.RULES_ONLY, policy)
         : policy;
-    ImmutableSet<PathFragment> excludedPathFragments =
-        TargetPatternResolverUtil.getPathFragments(excludedSubdirectories);
     PathFragment pathFragment = TargetPatternResolverUtil.getPathFragment(directory);
-    ResolvedTargets.Builder<Target> targetBuilder = ResolvedTargets.builder();
     Iterable<PathFragment> packagesUnderDirectory =
         recursivePackageProvider.getPackagesUnderDirectory(
-            repository, pathFragment, excludedPathFragments);
+            repository, pathFragment, excludedSubdirectories);
 
     Iterable<PackageIdentifier> pkgIds = Iterables.transform(packagesUnderDirectory,
             new Function<PathFragment, PackageIdentifier>() {
@@ -176,28 +185,39 @@ public class RecursivePackageProviderBackedTargetPatternResolver
                 return PackageIdentifier.create(repository, path);
               }
             });
-    for (ResolvedTargets<Target> targets : bulkGetTargetsInPackage(originalPattern, pkgIds,
-            FilteringPolicies.NO_FILTER).values()) {
-      targetBuilder.merge(targets);
+    boolean foundTarget = false;
+    // For very large sets of packages, we may not want to process all of them at once, so we split
+    // into batches.
+    for (Iterable<PackageIdentifier> pkgIdBatch :
+        Iterables.partition(pkgIds, MAX_PACKAGES_BULK_GET)) {
+
+      Iterable<ResolvedTargets<Target>> resolvedTargets =
+          bulkGetTargetsInPackage(originalPattern, pkgIdBatch, NO_FILTER).values();
+      List<Target> filteredTargets = new ArrayList<>(calculateSize(resolvedTargets));
+      for (ResolvedTargets<Target> targets : resolvedTargets) {
+        for (Target target : targets.getTargets()) {
+          // Perform the no-targets-found check before applying the filtering policy so we only
+          // return the error if the input directory's subtree really contains no targets.
+          foundTarget = true;
+          if (actualPolicy.shouldRetain(target, false)) {
+            filteredTargets.add(target);
+          }
+        }
+      }
+      callback.process(filteredTargets);
     }
 
-    // Perform the no-targets-found check before applying the filtering policy so we only return the
-    // error if the input directory's subtree really contains no targets.
-    if (targetBuilder.isEmpty()) {
+    if (!foundTarget) {
       throw new TargetParsingException("no targets found beneath '" + pathFragment + "'");
     }
-    ResolvedTargets<Target> prefilteredTargets = targetBuilder.build();
-     
-    ResolvedTargets.Builder<Target> filteredBuilder = ResolvedTargets.builder();
-    if (prefilteredTargets.hasError()) {
-      filteredBuilder.setError();
+  }
+
+  private static <T> int calculateSize(Iterable<ResolvedTargets<T>> resolvedTargets) {
+    int size = 0;
+    for (ResolvedTargets<T> targets : resolvedTargets) {
+      size += targets.getTargets().size();
     }
-    for (Target target : prefilteredTargets.getTargets()) {
-      if (actualPolicy.shouldRetain(target, false)) {
-        filteredBuilder.add(target);
-      }
-    }
-    return filteredBuilder.build();
+    return size;
   }
 }
 

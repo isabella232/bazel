@@ -51,6 +51,8 @@ public final class SkyFunctions {
       SkyFunctionName.create("PREPARE_DEPS_OF_PATTERN");
   public static final SkyFunctionName PREPARE_DEPS_OF_TARGETS_UNDER_DIRECTORY =
       SkyFunctionName.create("PREPARE_DEPS_OF_TARGETS_UNDER_DIRECTORY");
+  public static final SkyFunctionName COLLECT_PACKAGES_UNDER_DIRECTORY =
+      SkyFunctionName.create("COLLECT_PACKAGES_UNDER_DIRECTORY");
   public static final SkyFunctionName BLACKLISTED_PACKAGE_PREFIXES =
       SkyFunctionName.create("BLACKLISTED_PACKAGE_PREFIXES");
   public static final SkyFunctionName TEST_SUITE_EXPANSION =
@@ -94,6 +96,7 @@ public final class SkyFunctions {
   public static final SkyFunctionName WORKSPACE_FILE = SkyFunctionName.create("WORKSPACE_FILE");
   public static final SkyFunctionName COVERAGE_REPORT = SkyFunctionName.create("COVERAGE_REPORT");
   public static final SkyFunctionName REPOSITORY = SkyFunctionName.create("REPOSITORY");
+  public static final SkyFunctionName WORKSPACE_AST = SkyFunctionName.create("WORKSPACE_AST");
 
   public static Predicate<SkyKey> isSkyFunction(final SkyFunctionName functionName) {
     return new Predicate<SkyKey>() {

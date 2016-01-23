@@ -14,17 +14,23 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.cmdline.TargetPattern;
+import com.google.devtools.build.lib.collect.CompactHashSet;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.skyframe.EnvironmentBackedRecursivePackageProvider.MissingDepException;
+import com.google.devtools.build.lib.util.BatchCallback;
 import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+
+import java.util.Set;
 
 import javax.annotation.Nullable;
 
@@ -50,8 +56,17 @@ public class TargetPatternFunction implements SkyFunction {
           new RecursivePackageProviderBackedTargetPatternResolver(provider, env.getListener(),
               patternKey.getPolicy());
       TargetPattern parsedPattern = patternKey.getParsedPattern();
-      ImmutableSet<String> excludedSubdirectories = patternKey.getExcludedSubdirectories();
-      resolvedTargets = parsedPattern.eval(resolver, excludedSubdirectories);
+      ImmutableSet<PathFragment> excludedSubdirectories = patternKey.getExcludedSubdirectories();
+      final Set<Target> results = CompactHashSet.create();
+      BatchCallback<Target, RuntimeException> callback =
+          new BatchCallback<Target, RuntimeException>() {
+            @Override
+            public void process(Iterable<Target> partialResult) {
+              Iterables.addAll(results, partialResult);
+            }
+          };
+      parsedPattern.eval(resolver, excludedSubdirectories, callback);
+      resolvedTargets = ResolvedTargets.<Target>builder().addAll(results).build();
     } catch (TargetParsingException e) {
       throw new TargetPatternFunctionException(e);
     } catch (MissingDepException e) {

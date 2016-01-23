@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.rules.repository;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -88,7 +89,7 @@ public abstract class RepositoryFunction {
    * <p>This exception should be used by child classes to limit the types of exceptions
    * {@link RepositoryDelegatorFunction} has to know how to catch.</p>
    */
-  public static final class RepositoryFunctionException extends SkyFunctionException {
+  public static class RepositoryFunctionException extends SkyFunctionException {
     public RepositoryFunctionException(NoSuchPackageException cause, Transience transience) {
       super(cause, transience);
     }
@@ -105,6 +106,19 @@ public abstract class RepositoryFunction {
      */
     public RepositoryFunctionException(EvalException cause, Transience transience) {
       super(cause, transience);
+    }
+  }
+
+  /**
+   * Exception thrown when something a repository rule cannot be found.
+   */
+  public static final class RepositoryNotFoundException extends RepositoryFunctionException {
+    public RepositoryNotFoundException(String repositoryName) {
+      super(
+          new BuildFileContainsErrorsException(
+              Label.EXTERNAL_PACKAGE_IDENTIFIER,
+              "The repository named '" + repositoryName + "' could not be resolved"),
+          Transience.PERSISTENT);
     }
   }
 
@@ -298,19 +312,13 @@ public abstract class RepositoryFunction {
     return RepositoryValue.create(outputDirectory);
   }
 
-  protected static PathFragment getTargetPath(Rule rule) throws RepositoryFunctionException {
+  @VisibleForTesting
+  protected static PathFragment getTargetPath(Rule rule, Path workspace)
+      throws RepositoryFunctionException {
     AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
     String path = mapper.get("path", Type.STRING);
     PathFragment pathFragment = new PathFragment(path);
-    if (!pathFragment.isAbsolute()) {
-      throw new RepositoryFunctionException(
-          new EvalException(
-              rule.getLocation(),
-              "In " + rule + " the 'path' attribute must specify an absolute path"),
-          Transience.PERSISTENT);
-    }
-
-    return pathFragment;
+    return workspace.getRelative(pathFragment).asFragment();
   }
 
   /**
@@ -357,8 +365,13 @@ public abstract class RepositoryFunction {
     }
   }
 
+  /**
+   * Uses a remote repository name to fetch the corresponding Rule describing how to get it.
+   * 
+   * This should be the unique entry point for resolving a remote repository function.
+   */
   @Nullable
-  public static Package getExternalPackage(Environment env)
+  public static Rule getRule(String repository, Environment env)
       throws RepositoryFunctionException {
     SkyKey packageKey = PackageValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER);
     PackageValue packageValue;
@@ -382,7 +395,11 @@ public abstract class RepositoryFunction {
               Label.EXTERNAL_PACKAGE_IDENTIFIER, "Could not load //external package"),
           Transience.PERSISTENT);
     }
-    return externalPackage;
+    Rule rule = externalPackage.getRule(repository);
+    if (rule == null) {
+      throw new RepositoryNotFoundException(repository);
+    }
+    return rule;
   }
 
   @Nullable
@@ -407,20 +424,9 @@ public abstract class RepositoryFunction {
   public static Rule getRule(
       RepositoryName repositoryName, @Nullable String ruleClassName, Environment env)
       throws RepositoryFunctionException {
-    Package externalPackage = getExternalPackage(env);
-    if (externalPackage == null) {
-      return null;
-    }
-
-    Rule rule = externalPackage.getRule(repositoryName.strippedName());
-    if (rule == null) {
-      throw new RepositoryFunctionException(
-          new BuildFileContainsErrorsException(
-              Label.EXTERNAL_PACKAGE_IDENTIFIER,
-              "The repository named '" + repositoryName + "' could not be resolved"),
-          Transience.PERSISTENT);
-    }
-    Preconditions.checkState(ruleClassName == null || rule.getRuleClass().equals(ruleClassName),
+    Rule rule = getRule(repositoryName.strippedName(), env);
+    Preconditions.checkState(
+        rule == null || ruleClassName == null || rule.getRuleClass().equals(ruleClassName),
         "Got %s, was expecting a %s", rule, ruleClassName);
     return rule;
   }
