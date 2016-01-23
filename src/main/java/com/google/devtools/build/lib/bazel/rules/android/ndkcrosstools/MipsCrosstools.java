@@ -157,7 +157,6 @@ class MipsCrosstools {
         .addCompilerFlag("-frerun-cse-after-loop")
         .addCompilerFlag("-frename-registers")
         .addCompilerFlag("-no-canonical-prefixes")
-        .addCompilerFlag("-fno-canonical-system-headers")
   
         // Linker flags
         .addLinkerFlag("-no-canonical-prefixes")
@@ -205,7 +204,6 @@ class MipsCrosstools {
         .addCompilerFlag("-Wno-invalid-command-line-argument")
         .addCompilerFlag("-Wno-unused-command-line-argument")
         .addCompilerFlag("-no-canonical-prefixes")
-        .addCompilerFlag("-fno-canonical-system-headers")
   
         // Linker flags
         .addLinkerFlag("-gcc-toolchain")

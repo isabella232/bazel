@@ -142,7 +142,6 @@ class X86Crosstools {
         .addCompilerFlag("-ffunction-sections")
         .addCompilerFlag("-funwind-tables")
         .addCompilerFlag("-no-canonical-prefixes")
-        .addCompilerFlag("-fno-canonical-system-headers")
 
         // Linker flags
         .addLinkerFlag("-no-canonical-prefixes")
@@ -192,7 +191,6 @@ class X86Crosstools {
         .addCompilerFlag("-Wno-invalid-command-line-argument")
         .addCompilerFlag("-Wno-unused-command-line-argument")
         .addCompilerFlag("-no-canonical-prefixes")
-        .addCompilerFlag("-fno-canonical-system-headers")
 
         // Linker flags
         .addLinkerFlag("-gcc-toolchain")
