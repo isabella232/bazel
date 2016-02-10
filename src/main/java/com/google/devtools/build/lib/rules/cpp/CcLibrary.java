@@ -274,9 +274,12 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
     NestedSetBuilder<Artifact> artifactsToForceBuilder = NestedSetBuilder.stableOrder();
     boolean isLipoCollector =
         ruleContext.getFragment(CppConfiguration.class).isLipoContextCollector();
+    boolean processHeadersInDependencies =
+        ruleContext.getFragment(CppConfiguration.class).processHeadersInDependencies();
     boolean usePic = CppHelper.usePic(ruleContext, false);
     artifactsToForceBuilder.addTransitive(
-        ccCompilationOutputs.getFilesToCompile(isLipoCollector, usePic));
+        ccCompilationOutputs.getFilesToCompile(
+            isLipoCollector, processHeadersInDependencies, usePic));
     for (OutputGroupProvider dep :
         ruleContext.getPrerequisites("deps", Mode.TARGET, OutputGroupProvider.class)) {
       artifactsToForceBuilder.addTransitive(

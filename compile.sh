@@ -68,6 +68,8 @@ if [ ! -x "${BAZEL}" ]; then
   display "$INFO    $0 ${COMMANDS} /path/to/bazel"
   new_step 'Building Bazel from scratch'
   source scripts/bootstrap/compile.sh
+  # The DO_COMPILE flow will actually create the bazel binary and set BAZEL.
+  DO_COMPILE=1
 fi
 
 #
@@ -89,7 +91,7 @@ if [ $DO_COMPILE ]; then
   new_step 'Building Bazel with Bazel'
   display "."
   log "Building output/bazel"
-  bazel_build //src:bazel
+  bazel_build src:bazel
   cp -f bazel-bin/src/bazel output/bazel
   chmod 0755 output/bazel
   BAZEL=$(pwd)/output/bazel

@@ -87,9 +87,6 @@ in your genrule's cmd attribute.
     this can be a relative path. If you must change directories before invoking
     <code>java</code>, you need to capture the working directory before changing
     it.</li>
-  <li> <code>JAVAC</code>: The "javac" command (a Java compiler). Note that
-    this can be a relative path. Also, this may not be the same compiler that is
-    used to compile normal Java rules (this may change in the future).</li>
 
   <li> <code>STRIP</code>: The strip command from the same suite as the C
     compiler.</li>
@@ -126,10 +123,6 @@ in your genrule's cmd attribute.
     the tool is to use <code>$(location <i>toolname</i>)</code>,
     where <i>toolname</i> must be listed in the <code>tools</code>
     attribute for the genrule.</li>
-  <li><code>DEVELOPER_DIR</code>:
-    The base developer directory as defined on Apple architectures, most commonly
-    used in invoking Apple tools such as <code>xcrun</code>.
-    Supported only on Apple execution hosts.</li>
   <li><code>GENDIR</code>: The base of the generated code
     tree for the target architecture.</li>
   <li><code>JAVABASE</code>:

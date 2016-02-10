@@ -246,6 +246,21 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
         + "'//test/sub:my_sub_lib.h'?)");
   }
 
+  /* The error message for this case used to be wrong. */
+  @Test
+  public void testPackageBoundaryError_ExternalRepository() throws Exception {
+    scratch.file("/r/BUILD", "cc_library(name = 'cclib',", "  srcs = ['sub/my_sub_lib.h'])");
+    scratch.file("/r/sub/BUILD", "cc_library(name = 'my_sub_lib', srcs = ['my_sub_lib.h'])");
+    scratch.overwriteFile("WORKSPACE", "local_repository(name='r', path='/r')");
+    invalidatePackages();
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("@r//:cclib");
+    assertContainsEvent(
+        "/external/r/BUILD:2:10: Label '@r//:sub/my_sub_lib.h' crosses boundary of "
+            + "subpackage '@r//sub' (perhaps you meant to put the colon here: "
+            + "'@r//sub:my_sub_lib.h'?)");
+  }
+
   /*
    * Making the location in BUILD file the default for "crosses boundary of subpackage" errors does
    * not work in this case since the error actually happens in the bzl file. However, because of
@@ -354,14 +369,32 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
   }
 
   @Test
+  public void testGetRuleSelect() throws Exception {
+    scratch.file("test/skylark/BUILD");
+    scratch.file(
+        "test/skylark/rulestr.bzl", "def rule_dict(name):", "  return native.existing_rule(name)");
+
+    scratch.file(
+        "test/getrule/BUILD",
+        "load('/test/skylark/rulestr', 'rule_dict')",
+        "cc_library(name ='x', ",
+        "  srcs = select({'//conditions:default': []})",
+        ")",
+        "rule_dict('x')");
+
+    // Parse the BUILD file, to make sure select() makes it out of native.rule().
+    createRuleContext("//test/getrule:x");
+  }
+
+  @Test
   public void testGetRule() throws Exception {
     scratch.file("test/skylark/BUILD");
     scratch.file(
         "test/skylark/rulestr.bzl",
         "def rule_dict(name):",
-        "  return native.rule(name)",
+        "  return native.existing_rule(name)",
         "def rules_dict():",
-        "  return native.rules()",
+        "  return native.existing_rules()",
         "def nop(ctx):",
         "  pass",
         "nop_rule = rule(attrs = {'x': attr.label()}, implementation = nop)",

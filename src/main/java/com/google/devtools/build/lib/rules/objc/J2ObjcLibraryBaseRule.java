@@ -18,7 +18,6 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
@@ -40,7 +39,6 @@ public class J2ObjcLibraryBaseRule implements RuleDefinition {
           </code> is on. The Java classes should be specified in their canonical names as defined by
           <a href="http://docs.oracle.com/javase/specs/jls/se8/html/jls-6.html#jls-6.7">the Java
           Language Specification.</a>
-          ${SYNOPSIS}
           When flag <code>--j2objc_dead_code_removal</code> is specified, the list of entry classes
           will be collected transitively and used as entry points to perform dead code analysis.
           Unused classes will then be removed from the final ObjC app bundle.
@@ -48,10 +46,10 @@ public class J2ObjcLibraryBaseRule implements RuleDefinition {
         .add(attr("entry_classes", STRING_LIST))
         .add(attr("$jre_emul_lib", LABEL)
             .value(env.getLabel(
-                Constants.TOOLS_REPOSITORY + "//third_party/java/j2objc:jre_emul_lib")))
+                env.getToolsRepository() + "//third_party/java/j2objc:jre_emul_lib")))
         .add(attr("$protobuf_lib", LABEL)
             .value(env.getLabel(
-                Constants.TOOLS_REPOSITORY + "//third_party/java/j2objc:proto_runtime")))
+                env.getToolsRepository() + "//third_party/java/j2objc:proto_runtime")))
         .build();
   }
 
@@ -66,8 +64,6 @@ public class J2ObjcLibraryBaseRule implements RuleDefinition {
 }
 
 /*<!-- #BLAZE_RULE (NAME = j2objc_library, TYPE = LIBRARY, FAMILY = Objective-C) -->
-
-${ATTRIBUTE_SIGNATURE}
 
 <p> This rule uses <a href="https://github.com/google/j2objc">J2ObjC</a> to translate Java source
 files to Objective-C, which then can be used used as dependencies of objc_library and objc_binary
@@ -87,7 +83,5 @@ at link time. The correct way to resolve this issue is to move the shared Java s
 separate common target that can be depended upon.
 </p>
 
-
-${ATTRIBUTE_DEFINITION}
 
 <!-- #END_BLAZE_RULE -->*/

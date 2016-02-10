@@ -31,9 +31,10 @@ import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.TriState;
 
-import com.android.builder.core.AndroidBuilder;
 import com.android.builder.core.VariantConfiguration;
 import com.android.builder.model.AaptOptions;
+import com.android.ide.common.internal.AaptCruncher;
+import com.android.ide.common.internal.CommandLineRunner;
 import com.android.ide.common.internal.LoggedErrorException;
 import com.android.ide.common.res2.MergingException;
 import com.android.sdklib.repository.FullRevision;
@@ -182,6 +183,13 @@ public class AndroidResourceProcessingAction {
         help = "Path for the proguard file.")
     public Path proguardOutput;
 
+    @Option(name = "manifestOutput",
+        defaultValue = "null",
+        converter = PathConverter.class,
+        category = "output",
+        help = "Path for the modified manifest.")
+    public Path manifestOutput;
+
     @Option(name = "srcJarOutput",
         defaultValue = "null",
         converter = PathConverter.class,
@@ -281,14 +289,6 @@ public class AndroidResourceProcessingAction {
     final AndroidResourceProcessor resourceProcessor =
         new AndroidResourceProcessor(STD_LOGGER);
 
-    final AndroidSdkTools sdkTools = new AndroidSdkTools(options.apiVersion,
-        options.aapt,
-        options.annotationJar,
-        options.adb,
-        options.zipAlign,
-        options.androidJar,
-        STD_LOGGER);
-
     try {
 
       Path expandedOut = Files.createTempDirectory("tmp-expanded");
@@ -317,7 +317,6 @@ public class AndroidResourceProcessingAction {
               .addAll(options.transitiveData)
               .build()
               .asList();
-      final AndroidBuilder builder = sdkTools.createAndroidBuilder();
 
       final MergedAndroidData mergedData = resourceProcessor.mergeData(
           options.primaryData,
@@ -325,7 +324,8 @@ public class AndroidResourceProcessingAction {
           mergedResources,
           mergedAssets,
           modifiers,
-          useAaptCruncher() ? builder.getAaptCruncher() : null,
+          useAaptCruncher() ?  new AaptCruncher(options.aapt.toString(),
+              new CommandLineRunner(STD_LOGGER)) : null,
           true);
 
       LOGGER.fine(String.format("Merging finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
@@ -338,7 +338,8 @@ public class AndroidResourceProcessingAction {
           String.format("Density filtering finished at %sms",
               timer.elapsed(TimeUnit.MILLISECONDS)));
       resourceProcessor.processResources(
-          builder,
+          options.aapt,
+          options.androidJar,
           options.packageType,
           options.debug,
           options.packageForR,
@@ -352,7 +353,8 @@ public class AndroidResourceProcessingAction {
           working.resolve("manifest"),
           generatedSources,
           options.packagePath,
-          options.proguardOutput);
+          options.proguardOutput,
+          options.manifestOutput);
       LOGGER.fine(String.format("appt finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
       if (options.srcJarOutput != null) {
         resourceProcessor.createSrcJar(generatedSources, options.srcJarOutput,
@@ -403,7 +405,7 @@ public class AndroidResourceProcessingAction {
       if (!options.uncompressedExtensions.isEmpty()) {
         return options.uncompressedExtensions;
       }
-      return null;
+      return ImmutableList.of();
     }
 
     @Override

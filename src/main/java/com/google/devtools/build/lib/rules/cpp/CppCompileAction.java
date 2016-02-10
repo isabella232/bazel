@@ -36,7 +36,6 @@ import com.google.devtools.build.lib.actions.PackageRootResolver;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.extra.CppCompileInfo;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.PerLabelOptions;
@@ -51,9 +50,7 @@ import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
-import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.apple.Platform;
-import com.google.devtools.build.lib.rules.apple.XcodeConfigProvider;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppCompileActionContext.Reply;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
@@ -157,9 +154,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private final Iterable<IncludeScannable> lipoScannables;
   private final CppCompileCommandLine cppCompileCommandLine;
   private final boolean usePic;
-  // TODO(bazel-team): Needed for lazily evaluating xcode configuration attribute. Remove when
-  // this logic is refactored into crosstool expansion.
-  private final RuleContext ruleContext;
 
   @VisibleForTesting
   final CppConfiguration cppConfiguration;
@@ -274,7 +268,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     this.lipoScannables = lipoScannables;
     this.actionClassId = actionClassId;
     this.usePic = usePic;
-    this.ruleContext = ruleContext;
 
     // We do not need to include the middleman artifact since it is a generated
     // artifact and will definitely exist prior to this action execution.
@@ -489,11 +482,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return cppCompileCommandLine.dotdFile;
   }
 
-  @Override
-  public String describeStrategy(Executor executor) {
-    return executor.getContext(actionContext).strategyLocality();
-  }
-
   @VisibleForTesting
   public CppCompilationContext getContext() {
     return context;
@@ -610,9 +598,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     // evaluation here.
     AppleConfiguration appleConfiguration = configuration.getFragment(AppleConfiguration.class);
     if (CppConfiguration.MAC_SYSTEM_NAME.equals(getHostSystemName())) {
-      XcodeConfigProvider xcodeConfigProvider =
-          ruleContext.getPrerequisite(":xcode_config", Mode.HOST, XcodeConfigProvider.class);
-      environment.putAll(AppleToolchain.appleHostSystemEnv(xcodeConfigProvider));
+      environment.putAll(appleConfiguration.getAppleHostSystemEnv());
     }
     if (Platform.isApplePlatform(cppConfiguration.getTargetCpu())) {
       environment.putAll(appleConfiguration.appleTargetPlatformEnv(
@@ -1095,6 +1081,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   public String computeKey() {
     Fingerprint f = new Fingerprint();
     f.addUUID(actionClassId);
+    f.addStringMap(getEnvironment());
     f.addStrings(getArgv());
 
     /*
@@ -1200,15 +1187,14 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     StringBuilder message = new StringBuilder();
     message.append(getProgressMessage());
     message.append('\n');
-    message.append("  Command: ");
-    message.append(
-        ShellEscaper.escapeString(cppConfiguration.getLdExecutable().getPathString()));
-    message.append('\n');
     // Outputting one argument per line makes it easier to diff the results.
+    // The first element in getArgv() is actually the command to execute.
+    String legend = "  Command: ";
     for (String argument : ShellEscaper.escapeAll(getArgv())) {
-      message.append("  Argument: ");
+      message.append(legend);
       message.append(argument);
       message.append('\n');
+      legend = "  Argument: ";
     }
 
     for (PathFragment path : context.getDeclaredIncludeDirs()) {

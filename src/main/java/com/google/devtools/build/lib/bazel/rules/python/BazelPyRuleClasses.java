@@ -21,7 +21,6 @@ import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
 import static com.google.devtools.build.lib.syntax.Type.STRING;
 
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
@@ -53,7 +52,6 @@ public final class BazelPyRuleClasses {
       return builder
           /* <!-- #BLAZE_RULE($base_py).ATTRIBUTE(deps) -->
           The list of other libraries to be linked in to the binary target.
-          ${SYNOPSIS}
           See general comments about <code>deps</code> at
           <a href="common-definitions.html#common-attributes">
           Attributes common to all build rules</a>.
@@ -68,7 +66,6 @@ public final class BazelPyRuleClasses {
           /* <!-- #BLAZE_RULE($base_py).ATTRIBUTE(srcs_version) -->
           A string specifying the Python major version(s) that the <code>.py</code> source
           files listed in the <code>srcs</code> of this rule are compatible with.
-          ${SYNOPSIS}
           Valid values are:<br/>
           <code>"PY2ONLY"</code> -
             Python 2 code that is <b>not</b> suitable for <code>2to3</code> conversion.<br/>
@@ -86,7 +83,7 @@ public final class BazelPyRuleClasses {
           // do not depend on lib2to3:2to3 rule, because it creates circular dependencies
           // 2to3 is itself written in Python and depends on many libraries.
           .add(attr("$python2to3", LABEL).cfg(HOST).exec()
-              .value(env.getLabel(Constants.TOOLS_REPOSITORY + "//tools/python:2to3")))
+              .value(env.getLabel(env.getToolsRepository() + "//tools/python:2to3")))
           .setPreferredDependencyPredicate(PyRuleClasses.PYTHON_SOURCE)
           .build();
     }
@@ -110,7 +107,6 @@ public final class BazelPyRuleClasses {
       return builder
          /* <!-- #BLAZE_RULE($base_py_binary).ATTRIBUTE(data) -->
          The list of files needed by this binary at runtime.
-         ${SYNOPSIS}
          See general comments about <code>data</code> at
          <a href="common-definitions.html#common-attributes">
          Attributes common to all build rules</a>.
@@ -120,7 +116,6 @@ public final class BazelPyRuleClasses {
 
           /* <!-- #BLAZE_RULE($base_py_binary).ATTRIBUTE(main) -->
           The name of the source file that is the main entry point of the application.
-          ${SYNOPSIS}
           This file must also be listed in <code>srcs</code>. If left unspecified,
           <code>name</code> is used instead (see above). If <code>name</code> does not
           match any filename in <code>srcs</code>, <code>main</code> must be specified.
@@ -129,7 +124,6 @@ public final class BazelPyRuleClasses {
           /* <!-- #BLAZE_RULE($base_py_binary).ATTRIBUTE(default_python_version) -->
           A string specifying the default Python major version to use when building this binary and
           all of its <code>deps</code>.
-          ${SYNOPSIS}
           Valid values are <code>"PY2"</code> (default) or <code>"PY3"</code>.
           Python 3 support is experimental.
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
@@ -139,7 +133,6 @@ public final class BazelPyRuleClasses {
                    + " to configuration keys"))
           /* <!-- #BLAZE_RULE($base_py_binary).ATTRIBUTE(srcs) -->
           The list of source files that are processed to create the target.
-          ${SYNOPSIS}
           This includes all your checked-in code and any
           generated source files.  The line between <code>srcs</code> and
           <code>deps</code> is loose. The <code>.py</code> files
@@ -153,7 +146,6 @@ public final class BazelPyRuleClasses {
               .allowedFileTypes(BazelPyRuleClasses.PYTHON_SOURCE))
           /* <!-- #BLAZE_RULE($base_py_binary).ATTRIBUTE(stamp) -->
           Enable link stamping.
-          ${SYNOPSIS}
           Whether to encode build information into the binary. Possible values:
           <ul>
             <li><code>stamp = 1</code>: Stamp the build information into the

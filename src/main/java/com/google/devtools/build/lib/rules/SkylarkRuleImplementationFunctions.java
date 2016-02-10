@@ -143,8 +143,8 @@ public class SkylarkRuleImplementationFunctions {
         defaultValue = "None",
         doc =
             "shell command to execute. It is usually preferable to "
-                + "use <code>executable</code> instead. Arguments are available with <code>$1</code>, "
-                + "<code>$2</code>, etc."
+                + "use <code>executable</code> instead. Arguments are available with "
+                + "<code>$1</code>, <code>$2</code>, etc."
       ),
       @Param(
         name = "progress_message",

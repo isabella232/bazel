@@ -19,7 +19,6 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
@@ -53,7 +52,7 @@ public class ObjcBinaryRule implements RuleDefinition {
         // TODO(bazel-team): Remove these when this rule no longer produces a bundle.
         .add(attr("$runner_script_template", LABEL).cfg(HOST)
             .value(env.getLabel(
-                Constants.TOOLS_REPOSITORY + "//tools/objc:ios_runner.sh.mac_template")))
+                env.getToolsRepository() + "//tools/objc:ios_runner.sh.mac_template")))
         .add(attr("$is_executable", BOOLEAN).value(true)
             .nonconfigurable("Called from RunCommand.isExecutable, which takes a Target"))
         .build();
@@ -73,8 +72,6 @@ public class ObjcBinaryRule implements RuleDefinition {
 
 /*<!-- #BLAZE_RULE (NAME = objc_binary, TYPE = BINARY, FAMILY = Objective-C) -->
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>This rule produces one or more Objective-C libraries for bundling in an
 <code>ios_application</code>.</p>
 
@@ -86,7 +83,5 @@ you should define them on <code>ios_application</code> instead. They will be rem
 source file to be defined in either <code>srcs</code> or <code>non_arc_srcs</code></p>.
 
 ${IMPLICIT_OUTPUTS}
-
-${ATTRIBUTE_DEFINITION}
 
 <!-- #END_BLAZE_RULE -->*/
