@@ -425,7 +425,7 @@ public final class BlazeRuntime {
    * file and a log.
    */
   public Path getServerDirectory() {
-    return getOutputBase().getChild("server");
+    return getOutputBase().getChild("_bazel_server");
   }
 
   /**
