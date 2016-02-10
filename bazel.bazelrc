@@ -1,7 +1,3 @@
-startup --batch
-
-common --package_path %workspace%:/srv/server
-
-build --spawn_strategy=standalone --genrule_strategy=standalone --ignore_unsupported_sandboxing --verbose_failures --local_resources 512,2,1.0
-
-test --test_output=errors
+startup --max_idle_secs=180 --host_jvm_args='-Xmx512m'
+build --package_path %workspace%:/srv/server --spawn_strategy=standalone --genrule_strategy=standalone --ignore_unsupported_sandboxing --verbose_failures
+test --package_path %workspace%:/srv/server --test_output=errors
