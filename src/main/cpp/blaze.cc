@@ -444,7 +444,7 @@ static int StartServer(int socket) {
   // for the existing server. If might be that the server dies and the cmdline
   // file stays there, but that is not a problem, since we always check the
   // server, too.
-  WriteFile(argument_string, globals->options.output_base + "/bazel-server/cmdline");
+  WriteFile(argument_string, globals->options.output_base + "/_bazel_server/cmdline");
 
   // unless we restarted for a new-version, mark this as initial start
   if (globals->restart_reason == NO_RESTART) {
@@ -599,7 +599,7 @@ static int ConnectToServer(bool start) {
          "can't create AF_UNIX socket");
   }
 
-  string server_dir = globals->options.output_base + "/bazel-server";
+  string server_dir = globals->options.output_base + "/_bazel_server";
 
   // The server dir has the socket, so we don't allow access by other
   // users.
@@ -978,7 +978,7 @@ static void KillRunningServerIfDifferentStartupOptions() {
   }
 
   close(socket);
-  string cmdline_path = globals->options.output_base + "/bazel-server/cmdline";
+  string cmdline_path = globals->options.output_base + "/_bazel_server/cmdline";
   string joined_arguments;
 
   // No, /proc/$PID/cmdline does not work, because it is limited to 4K. Even
@@ -1382,7 +1382,7 @@ static void ComputeBaseDirectories(const string &self_path) {
   globals->options.output_base =
       MakeCanonical(globals->options.output_base.c_str());
   globals->lockfile = globals->options.output_base + "/lock";
-  globals->jvm_log_file = globals->options.output_base + "/bazel-server/jvm.out";
+  globals->jvm_log_file = globals->options.output_base + "/_bazel_server/jvm.out";
 }
 
 static void CheckEnvironment() {

@@ -44,7 +44,7 @@ struct GlobalVariables {
   string lockfile;  // = <output_base>/lock
   int lockfd;
 
-  string jvm_log_file;  // = <output_base>/bazel-server/jvm.out
+  string jvm_log_file;  // = <output_base>/_bazel_server/jvm.out
 
   string cwd;
 
