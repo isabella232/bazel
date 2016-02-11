@@ -306,7 +306,7 @@ public class HttpDownloader {
       return new Proxy(
           Proxy.Type.HTTP,
           new InetSocketAddress(
-              proxyAddress.substring(0, proxyAddress.lastIndexOf(':')), Integer.parseInt(port)));
+              proxyAddress.substring(proxyAddress.lastIndexOf('/') + 1, proxyAddress.lastIndexOf(':')), Integer.parseInt(port)));
     } catch (NumberFormatException e) {
       throw new IOException("Error parsing proxy port: " + proxyAddress);
     }
