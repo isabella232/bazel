@@ -118,17 +118,25 @@ cd $0.runfiles
       content=content)
 
 def _collect_comp_run_jars(ctx):
-  compile_jars = set()
-  runtime_jars = set()
+  compile_jars = set() # not transitive
+  runtime_jars = set() # this is transitive
   for target in ctx.attr.deps:
-    if hasattr(target, "runtime_jar_files"):
-      runtime_jars += target.runtime_jar_files
-    if hasattr(target, "interface_jar_files"):
-      compile_jars += target.interface_jar_files
+    found = False
+    if hasattr(target, "scala"):
+      compile_jars += [target.scala.outputs.ijar]
+      runtime_jars += target.scala.transitive_runtime_deps
+      found = True
     if hasattr(target, "java"):
-      runtime_jars += target.java.transitive_runtime_deps
-      #see JavaSkylarkApiProvider.java, this is just the compile-time deps
+      # see JavaSkylarkApiProvider.java, this is just the compile-time deps
+      # this should be improved in bazel 0.1.5 to get outputs.ijar
+      # compile_jars += [target.java.outputs.ijar]
       compile_jars += target.java.transitive_deps
+      runtime_jars += target.java.transitive_runtime_deps
+      found = True
+    if not found:
+      # support http_file pointed at a jar. http_jar uses ijar, which breaks scala macros
+      runtime_jars += target.files
+      compile_jars += target.files
   return (compile_jars, runtime_jars)
 
 def _scala_library_impl(ctx):
@@ -136,14 +144,14 @@ def _scala_library_impl(ctx):
   _write_manifest(ctx)
   _compile(ctx, cjars, True)
 
-  cjars += [ctx.outputs.ijar]
   rjars += [ctx.outputs.jar]
+  scalaattr = struct(outputs = struct(ijar=ctx.outputs.ijar, class_jar=ctx.outputs.jar),
+                     transitive_runtime_deps = rjars)
   runfiles = ctx.runfiles(
       files = list(rjars),
       collect_data = True)
   return struct(
-      runtime_jar_files=rjars,
-      interface_jar_files=cjars,
+      scala = scalaattr,
       runfiles=runfiles)
 
 def _scala_macro_library_impl(ctx):
@@ -152,14 +160,14 @@ def _scala_macro_library_impl(ctx):
   _compile(ctx, cjars, False)
 
   rjars += [ctx.outputs.jar]
-  # macro code needs to be available at compiletime
-  cjars += [ctx.outputs.jar]
+  # macro code needs to be available at compiletime, so set ijar == jar
+  scalaattr = struct(outputs = struct(ijar=ctx.outputs.jar, class_jar=ctx.outputs.jar),
+                     transitive_runtime_deps = rjars)
   runfiles = ctx.runfiles(
       files = list(rjars),
       collect_data = True)
   return struct(
-      runtime_jar_files=rjars,
-      interface_jar_files=cjars,
+      scala = scalaattr,
       runfiles=runfiles)
 
 # Common code shared by all scala binary implementations.
@@ -252,7 +260,7 @@ scala_test = rule(
   implementation=_scala_test_impl,
   attrs={
       "main_class": attr.string(default="org.scalatest.tools.Runner"),
-      "suites": attr.string_list(),
+      "suites": attr.string_list(non_empty=True, mandatory=True),
       "_scalatest": attr.label(executable=True, default=Label("@scalatest//file"), single_file=True, allow_files=True),
       "_java": attr.label(executable=True, default=Label("@bazel_tools//tools/jdk:java"), single_file=True, allow_files=True),
       } + _implicit_deps + _common_attrs,
@@ -263,3 +271,46 @@ scala_test = rule(
   executable=True,
   test=True,
 )
+
+SCALA_BUILD_FILE = """
+# scala.BUILD
+exports_files([
+  "bin/scala",
+  "bin/scalac",
+  "bin/scaladoc",
+  "lib/akka-actor_2.11-2.3.10.jar",
+  "lib/config-1.2.1.jar",
+  "lib/jline-2.12.1.jar",
+  "lib/scala-actors-2.11.0.jar",
+  "lib/scala-actors-migration_2.11-1.1.0.jar",
+  "lib/scala-compiler.jar",
+  "lib/scala-continuations-library_2.11-1.0.2.jar",
+  "lib/scala-continuations-plugin_2.11.7-1.0.2.jar",
+  "lib/scala-library.jar",
+  "lib/scala-parser-comscala-2.11.7/binators_2.11-1.0.4.jar",
+  "lib/scala-reflect.jar",
+  "lib/scala-swing_2.11-1.0.2.jar",
+  "lib/scala-xml_2.11-1.0.4.jar",
+  "lib/scalap-2.11.7.jar",
+])
+
+filegroup(
+    name = "sdk",
+    srcs = glob(["**"]),
+    visibility = ["//visibility:public"],
+)
+"""
+
+def scala_repositories():
+  native.new_http_archive(
+    name = "scala",
+    strip_prefix = "scala-2.11.7",
+    sha256 = "ffe4196f13ee98a66cf54baffb0940d29432b2bd820bd0781a8316eec22926d0",
+    url = "http://downloads.typesafe.com/scala/2.11.7/scala-2.11.7.tgz",
+    build_file_content = SCALA_BUILD_FILE,
+  )
+  native.http_file(
+    name = "scalatest",
+    url = "https://oss.sonatype.org/content/groups/public/org/scalatest/scalatest_2.11/2.2.6/scalatest_2.11-2.2.6.jar",
+    sha256 = "f198967436a5e7a69cfd182902adcfbcb9f2e41b349e1a5c8881a2407f615962",
+  )

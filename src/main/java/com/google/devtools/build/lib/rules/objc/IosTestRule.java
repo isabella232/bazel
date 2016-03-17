@@ -35,7 +35,6 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
-import com.google.devtools.build.lib.rules.java.J2ObjcConfiguration;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 
@@ -49,7 +48,7 @@ public class IosTestRule implements RuleDefinition {
   @Override
   public RuleClass build(RuleClass.Builder builder, final RuleDefinitionEnvironment env) {
     final ImmutableList<Label> gcov =
-        ImmutableList.of(env.getLabel(env.getToolsRepository() + "//tools/objc:gcov"));
+        ImmutableList.of(env.getToolsLabel("//tools/objc:gcov"));
     return builder
         .requiresConfigurationFragments(
             ObjcConfiguration.class, J2ObjcConfiguration.class, AppleConfiguration.class)
@@ -71,7 +70,7 @@ public class IosTestRule implements RuleDefinition {
                 .allowedFileTypes()
                 .allowedRuleClasses("ios_device")
                 .value(
-                    env.getLabel(env.getToolsRepository() + "//tools/objc/sim_devices:default")))
+                    env.getToolsLabel("//tools/objc/sim_devices:default")))
         /* <!-- #BLAZE_RULE(ios_test ).ATTRIBUTE(xctest) -->
         Whether this target contains tests using the XCTest testing framework.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
@@ -133,25 +132,24 @@ public class IosTestRule implements RuleDefinition {
         .add(attr("plugins", LABEL_LIST).allowedFileTypes(FileType.of("_deploy.jar")))
         .add(
             attr("$test_template", LABEL)
-                .value(
-                    env.getLabel(
-                        env.getToolsRepository() + "//tools/objc:ios_test.sh.bazel_template")))
+                .value(env.getToolsLabel("//tools/objc:ios_test.sh.bazel_template")))
         .add(
             attr("$test_runner", LABEL)
-                .value(env.getLabel(env.getToolsRepository() + "//tools/objc:testrunner")))
+                .value(env.getToolsLabel("//tools/objc:testrunner")))
         .add(
             attr(IosTest.MEMLEAKS_DEP, LABEL)
-                .value(env.getLabel(env.getToolsRepository() + "//tools/objc/memleaks:memleaks")))
+                .value(env.getToolsLabel("//tools/objc/memleaks:memleaks")))
         .add(
             attr(IosTest.MEMLEAKS_PLUGIN, LABEL)
-                .value(env.getLabel(env.getToolsRepository() + "//tools/objc:memleaks_plugin")))
+                .value(env.getToolsLabel("//tools/objc:memleaks_plugin")))
         .override(
             attr(":gcov", LABEL_LIST)
                 .cfg(HOST)
                 .value(
                     new LateBoundLabelList<BuildConfiguration>(gcov) {
                       @Override
-                      public List<Label> getDefault(Rule rule, BuildConfiguration configuration) {
+                      public List<Label> getDefault(Rule rule, AttributeMap attributes,
+                          BuildConfiguration configuration) {
                         if (!configuration.isCodeCoverageEnabled()) {
                           return ImmutableList.of();
                         }

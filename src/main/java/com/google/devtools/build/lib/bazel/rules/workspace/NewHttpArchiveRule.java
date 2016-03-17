@@ -42,17 +42,28 @@ public class NewHttpArchiveRule implements RuleDefinition {
         /* <!-- #BLAZE_RULE(new_http_archive).ATTRIBUTE(sha256) -->
          The expected SHA-256 hash of the file downloaded.
 
-         <p>This must match the SHA-256 hash of the file downloaded.</p>
+         <p>This must match the SHA-256 hash of the file downloaded. <em>It is a security risk to
+         omit the SHA-256 as remote files can change.</em> At best omitting this field will make
+         your build non-hermetic. It is optional to make development easier but should be set
+         before shipping.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
-        .add(attr("sha256", STRING).mandatory())
+        .add(attr("sha256", STRING))
         /* <!-- #BLAZE_RULE(new_http_archive).ATTRIBUTE(build_file) -->
          The file to use as the BUILD file for this repository.
+
+         <p>Either build_file or build_file_content must be specified.</p>
 
          <p>This path is relative to the build's workspace. The file does not need to be named
          BUILD, but can be something like BUILD.new-repo-name to distinguish it
          from the workspace's actual BUILD files.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
-        .add(attr("build_file", STRING).mandatory())
+        .add(attr("build_file", STRING))
+        /* <!-- #BLAZE_RULE(new_http_archive).ATTRIBUTE(build_file_content) -->
+        The content for the BUILD file for this repository.
+
+        <p>Either build_file or build_file_content must be specified.</p>
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(attr("build_file_content", STRING))
         /* <!-- #BLAZE_RULE(new_http_archive).ATTRIBUTE(type) -->
          The archive type of the downloaded file.
 

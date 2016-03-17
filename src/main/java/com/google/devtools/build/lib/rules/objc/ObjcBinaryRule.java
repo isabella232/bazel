@@ -26,7 +26,6 @@ import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
-import com.google.devtools.build.lib.rules.java.J2ObjcConfiguration;
 
 /**
  * Rule definition for objc_binary.
@@ -51,8 +50,7 @@ public class ObjcBinaryRule implements RuleDefinition {
             ImplicitOutputsFunction.fromFunctions(ReleaseBundlingSupport.IPA, XcodeSupport.PBXPROJ))
         // TODO(bazel-team): Remove these when this rule no longer produces a bundle.
         .add(attr("$runner_script_template", LABEL).cfg(HOST)
-            .value(env.getLabel(
-                env.getToolsRepository() + "//tools/objc:ios_runner.sh.mac_template")))
+            .value(env.getToolsLabel("//tools/objc:ios_runner.sh.mac_template")))
         .add(attr("$is_executable", BOOLEAN).value(true)
             .nonconfigurable("Called from RunCommand.isExecutable, which takes a Target"))
         .build();

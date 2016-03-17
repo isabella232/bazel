@@ -53,6 +53,11 @@ public class WindowsFileSystem extends JavaIoFileSystem {
     }
   }
 
+  @Override
+  public boolean supportsSymbolicLinksNatively() {
+    return false;
+  }
+
   private void createDirectoryJunction(File sourceDirectory, File targetPath) throws IOException {
     StringBuilder cl = new StringBuilder("cmd.exe /c ");
     cl.append("mklink /J ");
@@ -158,7 +163,6 @@ public class WindowsFileSystem extends JavaIoFileSystem {
           return false;
         }
       } catch (IOException e) {
-        e.printStackTrace();
         return false;
       }
     }

@@ -36,15 +36,13 @@ public class MavenJarRule implements RuleDefinition {
   public RuleClass build(Builder builder, RuleDefinitionEnvironment environment) {
     return builder
         /* <!-- #BLAZE_RULE(maven_jar).ATTRIBUTE(artifact) -->
-        A description of a Maven artifact.
+        A description of a Maven artifact using
+        <a href="https://maven.apache.org/pom.html#Maven_Coordinates">Maven coordinates</a>.
 
         <p>These descriptions are of the form &lt;groupId&gt:&lt;artifactId&gt;:&lt;version&gt;,
         see <a href="#maven_jar_examples">the documentation below</a> for an example.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("artifact", Type.STRING))
-        .add(attr("artifact_id", Type.STRING).undocumented("deprecated"))
-        .add(attr("group_id", Type.STRING).undocumented("deprecated"))
-        .add(attr("version", Type.STRING).undocumented("deprecated"))
         /* <!-- #BLAZE_RULE(maven_jar).ATTRIBUTE(repository) -->
         A URL for a Maven repository to fetch the jar from.
 
@@ -61,7 +59,10 @@ public class MavenJarRule implements RuleDefinition {
         /* <!-- #BLAZE_RULE(maven_jar).ATTRIBUTE(sha1) -->
          A SHA-1 hash of the desired jar.
 
-         <p>If the downloaded jar does not match this hash, Bazel will error out.</p>
+         <p>If the downloaded jar does not match this hash, Bazel will error out. <em>It is a
+         security risk to omit the SHA-1 as remote files can change.</em> At best omitting this
+         field will make your build non-hermetic. It is optional to make development easier but
+         should be set before shipping.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("sha1", Type.STRING))
         .setWorkspaceOnly()

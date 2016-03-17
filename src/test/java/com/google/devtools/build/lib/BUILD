@@ -397,6 +397,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib:vfs",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
+        "//src/main/java/com/google/devtools/build/lib/rules/objc",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:extra_actions_base_proto",
         "//third_party:guava",
@@ -659,6 +660,7 @@ java_test(
     data = [
         ":shell/killmyself",
     ],
+    flaky = True,
     tags = ["shell"],
     test_class = "com.google.devtools.build.lib.AllTests",
     deps = [
@@ -952,6 +954,20 @@ java_test(
         "//third_party:jsr305",
         "//third_party:junit4",
         "//third_party:protobuf",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
+    name = "objc-rules-tests",
+    srcs = glob(["rules/objc/XcodeProviderTest.java"]),
+    tags = ["rules"],
+    test_class = "com.google.devtools.build.lib.rules.objc.XcodeProviderTest",
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib:cmdline",
+        "//src/main/java/com/google/devtools/build/lib:vfs",
+        "//src/main/java/com/google/devtools/build/lib/rules/objc",
+        "//third_party:junit4",
         "//third_party:truth",
     ],
 )

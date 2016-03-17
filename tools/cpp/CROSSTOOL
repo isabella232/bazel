@@ -62,6 +62,7 @@ toolchain {
   tool_path { name: "objcopy" path: "/bin/false" }
   tool_path { name: "objdump" path: "/bin/false" }
   tool_path { name: "strip" path: "/bin/false" }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -184,6 +185,7 @@ toolchain {
     compiler_flag: "-fdata-sections"
     linker_flag: "-Wl,--gc-sections"
   }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -276,6 +278,7 @@ toolchain {
     compiler_flag: "-ffunction-sections"
     compiler_flag: "-fdata-sections"
   }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -397,6 +400,7 @@ toolchain {
     compiler_flag: "-fdata-sections"
     linker_flag: "-Wl,--gc-sections"
   }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -431,6 +435,7 @@ toolchain {
   objcopy_embed_flag: "binary"
   tool_path { name: "objdump" path: "C:/mingw/bin/objdump" }
   tool_path { name: "strip" path: "C:/mingw/bin/strip" }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -464,6 +469,7 @@ toolchain {
   objcopy_embed_flag: "binary"
   tool_path { name: "objdump" path: "C:/msys64/mingw64/bin/objdump" }
   tool_path { name: "strip" path: "C:/msys64/mingw64/bin/strip" }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -499,6 +505,7 @@ toolchain {
   objcopy_embed_flag: "binary"
   tool_path { name: "objdump" path: "C:/Program Files (x86)/LLVM/bin/objdump" }
   tool_path { name: "strip" path: "C:/Program Files (x86)/LLVM/bin/strip" }
+  linking_mode_flags { mode: DYNAMIC }
 }
 
 toolchain {
@@ -535,4 +542,5 @@ toolchain {
    objcopy_embed_flag: "binary"
    tool_path { name: "objdump" path: "C:/msys64/usr/bin/objdump" }
    tool_path { name: "strip" path: "C:/msys64/usr/bin/strip" }
+   linking_mode_flags { mode: DYNAMIC }
 }
