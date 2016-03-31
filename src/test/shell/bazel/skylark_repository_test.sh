@@ -18,8 +18,11 @@
 #
 
 # Load test environment
+src_dir=$(cd "$(dirname ${BASH_SOURCE[0]})" && pwd)
 source $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-setup.sh \
   || { echo "test-setup.sh not found!" >&2; exit 1; }
+source "$src_dir/remote_helpers.sh" \
+  || { echo "remote_helpers.sh not found!" >&2; exit 1; }
 
 # Basic test.
 function test_macro_local_repository() {
@@ -216,7 +219,367 @@ EOF
   expect_log "Tra-la!"
 }
 
+# Test cycle when loading a repository with a load statement in the WORKSPACE file that is not
+# yet defined.
+function test_cycle_load_repository() {
+  create_new_workspace
+  repo2=$new_workspace_dir
+
+  echo "Tra-la!" > data.txt
+  cat <<'EOF' >BUILD
+exports_files(["data.txt"])
+EOF
+
+  cat <<'EOF' >ext.bzl
+def macro():
+  print('bleh')
+EOF
+
+  cat >WORKSPACE
+
+  cd ${WORKSPACE_DIR}
+  cat > WORKSPACE <<EOF
+load("@foo//:ext.bzl", "macro")
+macro()
+local_repository(name='foo', path='$repo2')
+EOF
+
+  local exitCode=0
+  bazel build @foo//:data.txt >& $TEST_log || exitCode=$?
+  [ $exitCode != 0 ] || fail "building @foo//:data.txt succeed while expected failure"
+
+  expect_not_log "PACKAGE"
+  expect_log "Failed to load Skylark extension '@foo//:ext.bzl'"
+  expect_log "Maybe repository 'foo' was defined later in your WORKSPACE file?"
+}
+
+function test_skylark_local_repository() {
+  create_new_workspace
+  repo2=$new_workspace_dir
+
+  cat > BUILD <<'EOF'
+genrule(name='bar', cmd='echo foo | tee $@', outs=['bar.txt'])
+EOF
+
+  cd ${WORKSPACE_DIR}
+  cat > WORKSPACE <<EOF
+load('/test', 'repo')
+repo(name='foo', path='$repo2')
+EOF
+
+  # Our custom repository rule
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  repository_ctx.symlink(repository_ctx.path(repository_ctx.attr.path), repository_ctx.path(""))
+
+repo = repository_rule(
+    implementation=_impl,
+    local=True,
+    attrs={"path": attr.string(mandatory=True)})
+EOF
+  # Need to be in a package
+  cat > BUILD
+
+  bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "foo"
+  cat bazel-genfiles/external/foo/bar.txt >$TEST_log
+  expect_log "foo"
+}
+
+function setup_skylark_repository() {
+  create_new_workspace
+  repo2=$new_workspace_dir
+
+  cat > bar.txt
+  echo "filegroup(name='bar', srcs=['bar.txt'])" > BUILD
+
+  cd "${WORKSPACE_DIR}"
+  cat > WORKSPACE <<EOF
+load('/test', 'repo')
+repo(name = 'foo')
+EOF
+  # Need to be in a package
+  cat > BUILD
+}
+
+function test_skylark_repository_which_and_execute() {
+  setup_skylark_repository
+
+  # Test we are using the client environment, not the server one
+  bazel info &> /dev/null  # Start up the server.
+  echo "#!/bin/bash" > bin.sh
+  echo "exit 0" >> bin.sh
+  chmod +x bin.sh
+
+  # Our custom repository rule
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  bash = repository_ctx.which("bash")
+  if bash == None:
+    fail("Bash not found!")
+  bin = repository_ctx.which("bin.sh")
+  if bin == None:
+    fail("bin.sh not found!")
+  result = repository_ctx.execute([bash, "--version"])
+  if result.return_code != 0:
+    fail("Non-zero return code from bash: " + result.return_code)
+  if result.stderr != "":
+    fail("Non-empty error output: " + result.stderr)
+  print(result.stdout)
+  # Symlink so a repository is created
+  repository_ctx.symlink(repository_ctx.path("$repo2"), repository_ctx.path(""))
+repo = repository_rule(implementation=_impl, local=True)
+EOF
+
+  PATH="${PATH}:${PWD}" bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "version"
+}
+
+function test_skylark_repository_execute_stderr() {
+  setup_skylark_repository
+
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  result = repository_ctx.execute([str(repository_ctx.which("bash")), "-c", "echo erf >&2; exit 1"])
+  if result.return_code != 1:
+    fail("Incorrect return code from bash (should be 1): " + result.return_code)
+  if result.stdout != "":
+    fail("Non-empty output: %s (stderr was %s)" % (result.stdout, result.stderr))
+  print(result.stderr)
+  # Symlink so a repository is created
+  repository_ctx.symlink(repository_ctx.path("$repo2"), repository_ctx.path(""))
+repo = repository_rule(implementation=_impl, local=True)
+EOF
+
+  bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "erf"
+}
+
+function test_skylark_repository_environ() {
+  setup_skylark_repository
+
+  # Our custom repository rule
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  print(repository_ctx.os.environ["FOO"])
+  # Symlink so a repository is created
+  repository_ctx.symlink(repository_ctx.path("$repo2"), repository_ctx.path(""))
+repo = repository_rule(implementation=_impl, local=False)
+EOF
+
+  # TODO(dmarting): We should seriously have something better to force a refetch...
+  bazel clean --expunge
+  FOO=BAR bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "BAR"
+
+  FOO=BAR bazel clean --expunge >& $TEST_log
+  FOO=BAR bazel info >& $TEST_log
+
+  FOO=BAZ bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "BAZ"
+
+  # Test that we don't re-run on server restart.
+  FOO=BEZ bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_not_log "BEZ"
+  bazel shutdown >& $TEST_log
+  FOO=BEZ bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_not_log "BEZ"
+
+  # Test modifying test.bzl invalidate the repository
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  print(repository_ctx.os.environ["BAR"])
+  # Symlink so a repository is created
+  repository_ctx.symlink(repository_ctx.path("$repo2"), repository_ctx.path(""))
+repo = repository_rule(implementation=_impl, local=True)
+EOF
+  BAR=BEZ bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "BEZ"
+
+  # Shutdown and modify again
+  bazel shutdown
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  print(repository_ctx.os.environ["BAZ"])
+  # Symlink so a repository is created
+  repository_ctx.symlink(repository_ctx.path("$repo2"), repository_ctx.path(""))
+repo = repository_rule(implementation=_impl, local=True)
+EOF
+  BAZ=BOZ bazel build @foo//:bar >& $TEST_log || fail "Failed to build"
+  expect_log "BOZ"
+}
+
+function test_skylark_repository_executable_flag() {
+  setup_skylark_repository
+
+  # Our custom repository rule
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  repository_ctx.file("test.sh", "exit 0")
+  repository_ctx.file("BUILD", "sh_binary(name='bar',srcs=['test.sh'])", False)
+  repository_ctx.template("test2", Label("//:bar"), {}, False)
+  repository_ctx.template("test2.sh", Label("//:bar"), {}, True)
+repo = repository_rule(implementation=_impl, local=True)
+EOF
+  cat >bar
+
+  bazel run @foo//:bar >& $TEST_log || fail "Execution of @foo//:bar failed"
+  output_base=$(bazel info output_base)
+  test -x "${output_base}/external/foo/test.sh" || fail "test.sh is not executable"
+  test -x "${output_base}/external/foo/test2.sh" || fail "test2.sh is not executable"
+  test ! -x "${output_base}/external/foo/BUILD" || fail "BUILD is executable"
+  test ! -x "${output_base}/external/foo/test2" || fail "test2 is executable"
+}
+
+function test_skylark_repository_download() {
+  # Prepare HTTP server with Python
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  mkdir -p "${server_dir}"
+  local download_with_sha256="${server_dir}/download_with_sha256.txt"
+  local download_no_sha256="${server_dir}/download_no_sha256.txt"
+  echo "This is one file" > "${download_no_sha256}"
+  echo "This is another file" > "${download_with_sha256}"
+  file_sha256="$(sha256sum "${download_with_sha256}" | head -c 64)"
+
+  # Start HTTP server with Python
+  startup_server "${server_dir}"
+
+  setup_skylark_repository
+  # Our custom repository rule
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  repository_ctx.file("BUILD")
+  repository_ctx.download(
+    "http://localhost:${fileserver_port}/download_no_sha256.txt",
+    "download_no_sha256.txt")
+  repository_ctx.download(
+    "http://localhost:${fileserver_port}/download_with_sha256.txt",
+    "download_with_sha256.txt", "${file_sha256}")
+repo = repository_rule(implementation=_impl, local=False)
+EOF
+
+  bazel build @foo//:all >& $TEST_log && shutdown_server \
+    || fail "Execution of @foo//:all failed"
+
+  output_base="$(bazel info output_base)"
+  # Test download
+  test -e "${output_base}/external/foo/download_no_sha256.txt" \
+    || fail "download_no_sha256.txt is not downloaded"
+  test -e "${output_base}/external/foo/download_with_sha256.txt" \
+    || fail "download_with_sha256.txt is not downloaded"
+  # Test download
+  diff "${output_base}/external/foo/download_no_sha256.txt" \
+    "${download_no_sha256}" >/dev/null \
+    || fail "download_no_sha256.txt is not downloaded successfully"
+  diff "${output_base}/external/foo/download_with_sha256.txt" \
+    "${download_with_sha256}" >/dev/null \
+    || fail "download_with_sha256.txt is not downloaded successfully"
+}
+
+function test_skylark_repository_download_and_extract() {
+  # Prepare HTTP server with Python
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  mkdir -p "${server_dir}"
+  local file_prefix="${server_dir}/download_and_extract"
+
+  pushd ${TEST_TMPDIR}
+  echo "This is one file" > server_dir/download_and_extract1.txt
+  echo "This is another file" > server_dir/download_and_extract2.txt
+  echo "This is a third file" > server_dir/download_and_extract3.txt
+  tar -zcvf server_dir/download_and_extract1.tar.gz server_dir/download_and_extract1.txt
+  zip server_dir/download_and_extract2.zip server_dir/download_and_extract2.txt
+  zip server_dir/download_and_extract3.zip server_dir/download_and_extract3.txt
+  file_sha256="$(sha256sum server_dir/download_and_extract3.zip | head -c 64)"
+  popd
+
+  # Start HTTP server with Python
+  startup_server "${server_dir}"
+
+  setup_skylark_repository
+  # Our custom repository rule
+  cat >test.bzl <<EOF
+def _impl(repository_ctx):
+  repository_ctx.file("BUILD")
+  repository_ctx.download_and_extract(
+    "http://localhost:${fileserver_port}/download_and_extract1.tar.gz", "")
+  repository_ctx.download_and_extract(
+    "http://localhost:${fileserver_port}/download_and_extract2.zip", "", "")
+  repository_ctx.download_and_extract(
+    "http://localhost:${fileserver_port}/download_and_extract3.zip", ".", "${file_sha256}", "", "")
+repo = repository_rule(implementation=_impl, local=False)
+EOF
+
+  bazel clean --expunge_async >& $TEST_log || fail "bazel clean failed"
+  bazel build @foo//:all >& $TEST_log && shutdown_server \
+    || fail "Execution of @foo//:all failed"
+
+  output_base="$(bazel info output_base)"
+  # Test cleanup
+  test -e "${output_base}/external/foo/server_dir/download_and_extract1.tar.gz" \
+    && fail "temp file is not deleted successfully" || true
+  test -e "${output_base}/external/foo/server_dir/download_and_extract2.zip" \
+    && fail "temp file is not deleted successfully" || true
+  test -e "${output_base}/external/foo/server_dir/download_and_extract3.zip" \
+    && fail "temp file is not deleted successfully" || true
+  # Test download_and_extract
+  diff "${output_base}/external/foo/server_dir/download_and_extract1.txt" \
+    "${file_prefix}1.txt" >/dev/null \
+    || fail "download_and_extract1.tar.gz is not extracted successfully"
+  diff "${output_base}/external/foo/server_dir/download_and_extract2.txt" \
+    "${file_prefix}2.txt" >/dev/null \
+    || fail "download_and_extract2.zip is not extracted successfully"
+  diff "${output_base}/external/foo/server_dir/download_and_extract3.txt" \
+    "${file_prefix}3.txt" >/dev/null \
+    || fail "download_and_extract3.zip is not extracted successfully"
+}
+
+# Test native.bazel_version
+function test_bazel_version() {
+  create_new_workspace
+  repo2=$new_workspace_dir
+
+  cat > BUILD <<'EOF'
+genrule(
+    name = "test",
+    cmd = "echo 'Tra-la!' | tee $@",
+    outs = ["test.txt"],
+    visibility = ["//visibility:public"],
+)
+EOF
+
+  cd ${WORKSPACE_DIR}
+  cat > WORKSPACE <<EOF
+load('/test', 'macro')
+
+macro('$repo2')
+EOF
+
+  # Empty package for the .bzl file
+  echo -n >BUILD
+
+  # Our macro
+  cat >test.bzl <<EOF
+def macro(path):
+  print(native.bazel_version)
+  native.local_repository(name='test', path=path)
+EOF
+
+  local version="$(bazel info release)"
+  # On release, Bazel binary get stamped, else we might run with an unstamped version.
+  if [ "$version" == "development version" ]; then
+    version=""
+  else
+    version="${version#* }"
+  fi
+  bazel build @test//:test >& $TEST_log || fail "Failed to build"
+  expect_log ": ${version}."
+}
+
 function tear_down() {
+  shutdown_server
+  if [ -d "${TEST_TMPDIR}/server_dir" ]; then
+    rm -fr "${TEST_TMPDIR}/server_dir"
+  fi
   true
 }
 

@@ -40,7 +40,7 @@ filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
         "//tools/objc/memleaks:srcs",
-        "//tools/objc/sim_devices:BUILD",
+        "//tools/objc/sim_devices:srcs",
     ],
 )
 
@@ -52,11 +52,6 @@ filegroup(
 filegroup(
     name = "memleaks_plugin",
     srcs = [":memleaks_plugin_stub"],
-)
-
-filegroup(
-    name = "dump_syms",
-    srcs = [":dump_syms_stub"],
 )
 
 sh_binary(
@@ -100,6 +95,11 @@ sh_binary(
     srcs = [":xcrunwrapper.sh"],
 )
 
+filegroup(
+    name = "xctest_infoplist",
+    srcs = ["XCTest-Info.plist"],
+)
+
 sh_binary(
     name = "environment_plist",
     srcs = [":environment_plist.sh"],
@@ -110,17 +110,23 @@ filegroup(
     srcs = [":gcov_stub"],
 )
 
+filegroup(
+    name = "mcov",
+    srcs = [":mcov_stub"],
+)
+
 xcode_config(
     name = "host_xcodes",
 )
 
-# TODO(bazel-team): Open-source the script once J2ObjC support is open-sourced.
-py_library(
+filegroup(
     name = "j2objc_dead_code_pruner",
     srcs = ["j2objc_dead_code_pruner.py"],
 )
 
 objc_library(
     name = "dummy_lib",
-    srcs = ["dummy.c"],
+    srcs = [
+        "objc_dummy.mm",
+    ],
 )

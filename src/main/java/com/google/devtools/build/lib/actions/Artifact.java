@@ -21,6 +21,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.actions.Action.MiddlemanType;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -28,6 +29,7 @@ import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -95,7 +97,8 @@ import javax.annotation.Nullable;
 @SkylarkModule(name = "File",
     doc = "This type represents a file used by the build system. It can be "
         + "either a source file or a derived file produced by a rule.")
-public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValue {
+public class Artifact
+    implements FileType.HasFilename, ArtifactFile, SkylarkValue , Comparable<Object> {
 
   /**
    * Compares artifact according to their exec paths. Sorts null values first.
@@ -114,6 +117,15 @@ public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValu
       }
     }
   };
+
+  @Override
+  public int compareTo(Object o) {
+    if (o instanceof Artifact) {
+      return EXEC_PATH_COMPARATOR.compare(this, (Artifact) o);
+    }
+    return EvalUtils.compareByClass(this, o);
+  }
+
 
   /** An object that can expand middleman artifacts. */
   public interface ArtifactExpander {
@@ -143,8 +155,7 @@ public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValu
   private final Root root;
   private final PathFragment execPath;
   private final PathFragment rootRelativePath;
-  // Non-final only for use when dealing with deserialized artifacts.
-  private ArtifactOwner owner;
+  private final ArtifactOwner owner;
 
   /**
    * Constructs an artifact for the specified path, root and execPath. The root must be an ancestor
@@ -279,24 +290,16 @@ public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValu
    * ArtifactOwner#NULL_OWNER} or a dummy owner set in tests. Such a dummy value should only occur
    * for source artifacts if created without specifying the owner, or for special derived artifacts,
    * such as target completion middleman artifacts, build info artifacts, and the like.
-   *
-   * <p>When deserializing artifacts we end up with a dummy owner. In that case,
-   * it must be set using {@link #setArtifactOwner} before this method is called.
    */
   public final ArtifactOwner getArtifactOwner() {
-    Preconditions.checkState(owner != DESERIALIZED_MARKER_OWNER, this);
     return owner;
   }
 
-  /**
-   * Sets the artifact owner of this artifact. Should only be called for artifacts that were created
-   * through deserialization, and so their owner was unknown at the time of creation.
-   */
-  public final void setArtifactOwner(ArtifactOwner owner) {
-    if (this.owner == DESERIALIZED_MARKER_OWNER) {
-      // We tolerate multiple calls of this method to accommodate shared actions.
-      this.owner = Preconditions.checkNotNull(owner, this);
-    }
+  @SkylarkCallable(name = "owner", structField = true, allowReturnNones = true,
+    doc = "A label of a target that produces this File. Can be None."
+  )
+  public Label getOwnerLabel() {
+    return owner.getLabel();
   }
 
   /**
@@ -438,13 +441,20 @@ public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValu
    * Returns this.getExecPath().getPathString().
    */
   @Override
-  @SkylarkCallable(name = "path", structField = true,
-      doc = "The execution path of this file, relative to the execution directory. It consists of "
-      + "two parts, an optional first part called the <i>root</i> (see also the <a "
-      + "href=\"root.html\">root</a> module), and the second part which is the "
-      + "<code>short_path</code>. The root may be empty, which it usually is for non-generated "
-      + "files. For generated files it usually contains a configuration-specific path fragment that"
-      + " encodes things like the target CPU architecture that was used while building said file.")
+  @SkylarkCallable(
+    name = "path",
+    structField = true,
+    doc =
+        "The execution path of this file, relative to the workspace's execution directory. It "
+            + "consists of two parts, an optional first part called the <i>root</i> (see also the "
+            + "<a href=\"root.html\">root</a> module), and the second part which is the "
+            + "<code>short_path</code>. The root may be empty, which it usually is for "
+            + "non-generated files. For generated files it usually contains a "
+            + "configuration-specific path fragment that encodes things like the target CPU "
+            + "architecture that was used while building said file. Use the "
+            + "<code>short_path</code> for the path under which the file is mapped if it's in the "
+            + "runfiles of a binary."
+  )
   public final String getExecPathString() {
     return getExecPath().getPathString();
   }
@@ -456,10 +466,14 @@ public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValu
     return ShellUtils.shellEscape(getExecPathString());
   }
 
-  @SkylarkCallable(name = "short_path", structField = true,
-      doc = "The path of this file relative to its root. This excludes the aforementioned "
-      + "<i>root</i>, i.e. configuration-specific fragments of the path. This is also the path "
-      + "under which the file is mapped if its in the runfiles of a binary.")
+  @SkylarkCallable(
+    name = "short_path",
+    structField = true,
+    doc =
+        "The path of this file relative to its root. This excludes the aforementioned "
+            + "<i>root</i>, i.e. configuration-specific fragments of the path. This is also the "
+            + "path under which the file is mapped if it's in the runfiles of a binary."
+  )
   public final String getRootRelativePathString() {
     return getRootRelativePath().getPathString();
   }
@@ -775,11 +789,14 @@ public class Artifact implements FileType.HasFilename, ArtifactFile, SkylarkValu
     return ImmutableList.copyOf(Iterables.transform(artifacts, EXEC_PATH_FORMATTER));
   }
 
-  static final ArtifactOwner DESERIALIZED_MARKER_OWNER = new ArtifactOwner() {
-    @Override
-    public Label getLabel() {
-      return null;
-    }};
+  /**
+   * Returns the exec paths of the input artifacts in alphabetical order.
+   */
+  public static ImmutableList<PathFragment> asSortedPathFragments(Iterable<Artifact> input) {
+    return Ordering.natural().immutableSortedCopy(Iterables.transform(
+        input, EXEC_PATH_FORMATTER));
+  }
+
 
   @Override
   public boolean isImmutable() {

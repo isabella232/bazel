@@ -274,7 +274,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
             path.getParentDirectory(), "Must pass in files, not root directory");
         Preconditions.checkArgument(!parent.isAbsolute(), path);
         SkyKey depKey =
-            ContainingPackageLookupValue.key(PackageIdentifier.createInDefaultRepo(parent));
+            ContainingPackageLookupValue.key(PackageIdentifier.createInMainRepo(parent));
         depKeys.put(path, depKey);
         keysRequested.add(depKey);
       }
@@ -311,6 +311,15 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
 
       // If some values are missing, return null.
       return env.valuesMissing() ? null : result;
+    }
+
+    @Override
+    @Nullable
+    public Map<PathFragment, Root> findPackageRoots(Iterable<PathFragment> execPaths)
+        throws PackageRootResolutionException {
+      // call sites for this implementation of PackageRootResolver shouldn't be passing in
+      // directories.
+      return findPackageRootsForFiles(execPaths);
     }
   }
 
@@ -435,7 +444,8 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
         ActionExecutionException exception =
             new ActionExecutionException(errorMessage, action, /*catastrophe=*/ false);
         LoggingUtil.logToRemote(Level.SEVERE, errorMessage, exception);
-        throw exception;
+        throw skyframeActionExecutor.processAndThrow(
+            exception, action, actionExecutionContext.getFileOutErr());
       }
     }
     Preconditions.checkState(!env.valuesMissing(), action);

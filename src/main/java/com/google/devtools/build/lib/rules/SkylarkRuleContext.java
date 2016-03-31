@@ -43,6 +43,7 @@ import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SkylarkImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.OutputFile;
+import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.shell.ShellUtils.TokenizationException;
@@ -52,6 +53,7 @@ import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression.FuncallException;
 import com.google.devtools.build.lib.syntax.Runtime;
+import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkType;
@@ -62,6 +64,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -152,7 +155,7 @@ public final class SkylarkRuleContext {
 
   private final FragmentCollection hostFragments;
 
-  private final ImmutableMap<String, String> makeVariables;
+  private final SkylarkDict<String, String> makeVariables;
   private final SkylarkRuleAttributesCollection attributesCollection;
   private final SkylarkRuleAttributesCollection ruleAttributesCollection;
 
@@ -277,6 +280,7 @@ public final class SkylarkRuleContext {
     Builder<Artifact, FilesToRunProvider> executableRunfilesbuilder = new Builder<>();
     Builder<String, Object> fileBuilder = new Builder<>();
     Builder<String, Object> filesBuilder = new Builder<>();
+    HashSet<Artifact> seenExecutables = new HashSet<>();
     for (Attribute a : attributes) {
       Type<?> type = a.getType();
       Object val = attributeValueExtractor.apply(a);
@@ -294,7 +298,16 @@ public final class SkylarkRuleContext {
         if (provider != null && provider.getExecutable() != null) {
           Artifact executable = provider.getExecutable();
           executableBuilder.put(skyname, executable);
-          executableRunfilesbuilder.put(executable, provider);
+          if (!seenExecutables.contains(executable)) {
+            // todo(dslomov,laurentlb): In general, this is incorrect.
+            // We associate the first encountered FilesToRunProvider with
+            // the executable (this provider is later used to build the spawn).
+            // However ideally we should associate a provider with the attribute name,
+            // and pass the correct FilesToRunProvider to the spawn depending on
+            // what attribute is used to access the executable.
+            executableRunfilesbuilder.put(executable, provider);
+            seenExecutables.add(executable);
+          }
         } else {
           executableBuilder.put(skyname, Runtime.NONE);
         }
@@ -399,7 +412,6 @@ public final class SkylarkRuleContext {
       return ruleClassName;
     }
 
-
     public ImmutableMap<Artifact, FilesToRunProvider> getExecutableRunfilesMap() {
       return executableRunfilesMap;
     }
@@ -461,21 +473,13 @@ public final class SkylarkRuleContext {
   }
 
   @SkylarkCallable(name = "fragments", structField = true,
-      doc = "Allows access to configuration fragments in target configuration. "
-          + "Possible fields are <code>apple</code>, <code>cpp</code>, "
-          + "<code>java</code> and <code>jvm</code>. "
-          + "However, rules have to declare their required fragments in order to access them "
-          + "(see <a href=\"../rules.html#fragments\">here</a>).")
+      doc = "Allows access to configuration fragments in target configuration.")
   public FragmentCollection getFragments() {
     return fragments;
   }
 
   @SkylarkCallable(name = "host_fragments", structField = true,
-      doc = "Allows access to configuration fragments in host configuration. "
-          + "Possible fields are <code>apple</code>, <code>cpp</code>, "
-          + "<code>java</code> and <code>jvm</code>. "
-          + "However, rules have to declare their required fragments in order to access them "
-          + "(see <a href=\"../rules.html#fragments\">here</a>).")
+      doc = "Allows access to configuration fragments in host configuration.")
   public FragmentCollection getHostFragments() {
     return hostFragments;
   }
@@ -492,6 +496,13 @@ public final class SkylarkRuleContext {
           + "configuration</a> type for more details.")
   public BuildConfiguration getHostConfiguration() {
     return ruleContext.getHostConfiguration();
+  }
+
+  @SkylarkCallable(name = "features", structField = true,
+      doc = "Returns the set of features that are enabled for this rule."
+  )
+  public ImmutableList<String> getFeatures() {
+    return ImmutableList.copyOf(ruleContext.getFeatures());
   }
 
   @SkylarkCallable(structField = true, doc = OUTPUTS_DOC)
@@ -515,7 +526,7 @@ public final class SkylarkRuleContext {
 
   @SkylarkCallable(structField = true,
       doc = "Dictionary (String to String) of configuration variables")
-  public ImmutableMap<String, String> var() {
+  public SkylarkDict<String, String> var() {
     return makeVariables;
   }
 
@@ -525,7 +536,7 @@ public final class SkylarkRuleContext {
   }
 
   @SkylarkCallable(doc = "Splits a shell command to a list of tokens.", documented = false)
-  public MutableList tokenize(String optionString) throws FuncallException {
+  public MutableList<String> tokenize(String optionString) throws FuncallException {
     List<String> options = new ArrayList<>();
     try {
       ShellUtils.tokenize(options, optionString);
@@ -542,7 +553,8 @@ public final class SkylarkRuleContext {
           + "Deprecated.",
     documented = false
   )
-  public String expand(@Nullable String expression, SkylarkList artifacts, Label labelResolver)
+  public String expand(
+      @Nullable String expression, SkylarkList<Object> artifacts, Label labelResolver)
       throws EvalException, FuncallException {
     try {
       Map<Label, Iterable<Artifact>> labelMap = new HashMap<>();
@@ -594,7 +606,7 @@ public final class SkylarkRuleContext {
   }
 
   @SkylarkCallable(documented = false)
-  public boolean checkPlaceholders(String template, SkylarkList allowedPlaceholders)
+  public boolean checkPlaceholders(String template, SkylarkList<Object> allowedPlaceholders)
       throws EvalException {
     List<String> actualPlaceHolders = new LinkedList<>();
     Set<String> allowedPlaceholderSet =
@@ -658,5 +670,14 @@ public final class SkylarkRuleContext {
           + "current build request.")
   public Artifact getVolatileWorkspaceStatus() {
     return ruleContext.getAnalysisEnvironment().getVolatileWorkspaceStatusArtifact();
+  }
+
+  @SkylarkCallable(name = "build_file_path", structField = true, documented = true,
+      doc = "Returns path to the BUILD file for this rule, relative to the source root"
+  )
+  public String getBuildFileRelativePath() {
+    Package pkg = ruleContext.getRule().getPackage();
+    Root root = Root.asSourceRoot(pkg.getSourceRoot());
+    return pkg.getBuildFile().getPath().relativeTo(root.getPath()).getPathString();
   }
 }

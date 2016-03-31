@@ -57,7 +57,7 @@ genrule(
     outs = ["java.version"],
     cmd = """
           VERSION_LINE=$$(cat $< | grep target_version);
-          JAVA_VERSION=$$(echo $${VERSION_LINE} | sed 's/.*value="\\([^"]\\)".*/\\1/');
+          JAVA_VERSION=$$(echo $${VERSION_LINE} | sed 's/.*value=\\"\\([^\\"]\\)\\".*/\\1/');
           if [ -z "$${JAVA_VERSION}" ]; then
             echo "1.8" >$@  # Java 8 is the default
           elif [[ "$${JAVA_VERSION}" =~ ^[0-9]+$$ ]]; then
@@ -107,9 +107,16 @@ genrule(
         "//third_party/ijar",
         "//third_party/java/apkbuilder:embedded_tools",
     ] + select({
-        ":darwin": [":darwin_tools"],
-        ":darwin_x86_64": [":darwin_tools"],
-        "//conditions:default": [],
+        ":darwin": [
+            ":darwin_tools",
+            "//third_party/ijar:zipper",
+        ],
+        ":darwin_x86_64": [
+            ":darwin_tools",
+            "//third_party/ijar:zipper",
+        ],
+        ":windows": [],  # Windows specifically exclude zipper for now.
+        "//conditions:default": ["//third_party/ijar:zipper"],
     }),
     outs = ["embedded_tools.zip"],
     cmd = "$(location :create_embedded_tools.sh) $@ $(SRCS)",
@@ -209,4 +216,44 @@ config_setting(
     name = "windows",
     values = {"cpu": "x64_windows"},
     visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]) + [
+        "//src/java_tools/buildjar:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/junit4:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/internal:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/junit4:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/model:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/sharding:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/sharding/api:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/sharding/testing:srcs",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/util:srcs",
+        "//src/java_tools/singlejar:srcs",
+        "//src/main/cpp:srcs",
+        "//src/main/java/com/google/devtools/build/docgen:srcs",
+        "//src/main/java/com/google/devtools/build/lib:srcs",
+        "//src/main/java/com/google/devtools/build/skyframe:srcs",
+        "//src/main/java/com/google/devtools/common/options:srcs",
+        "//src/main/native:srcs",
+        "//src/main/protobuf:srcs",
+        "//src/main/tools:srcs",
+        "//src/objc_tools/bundlemerge:srcs",
+        "//src/objc_tools/plmerge:srcs",
+        "//src/objc_tools/xcodegen:srcs",
+        "//src/tools/android/java/com/google/devtools/build/android:srcs",
+        "//src/tools/generate_workspace:srcs",
+        "//src/tools/xcode/actoolwrapper:srcs",
+        "//src/tools/xcode/environment:srcs",
+        "//src/tools/xcode/ibtoolwrapper:srcs",
+        "//src/tools/xcode/momcwrapper:srcs",
+        "//src/tools/xcode/realpath:srcs",
+        "//src/tools/xcode/stdredirect:srcs",
+        "//src/tools/xcode/swiftstdlibtoolwrapper:srcs",
+        "//src/tools/xcode/xcrunwrapper:srcs",
+        "//src/tools/xcode-common:srcs",
+    ],
+    visibility = ["//:__pkg__"],
 )

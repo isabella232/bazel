@@ -557,17 +557,14 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
     List<Label> yesFiles = attributes(pkg.getRule("yes")).get("srcs", BuildType.LABEL_LIST);
     List<Label> noFiles = attributes(pkg.getRule("no")).get("srcs", BuildType.LABEL_LIST);
 
-    assertThat(
-            Lists.newArrayList(
-                Label.create("fruit", "data/apple"), Label.create("fruit", "data/pear")))
-        .containsExactlyElementsIn(yesFiles);
+    assertThat(yesFiles).containsExactly(
+        Label.parseAbsolute("@//fruit:data/apple"),
+        Label.parseAbsolute("@//fruit:data/pear"));
 
-    assertThat(
-            Lists.newArrayList(
-                Label.create("fruit", "data/apple"),
-                Label.create("fruit", "data/pear"),
-                Label.create("fruit", "data/berry")))
-        .containsExactlyElementsIn(noFiles);
+    assertThat(noFiles).containsExactly(
+        Label.parseAbsolute("@//fruit:data/apple"),
+        Label.parseAbsolute("@//fruit:data/pear"),
+        Label.parseAbsolute("@//fruit:data/berry"));
   }
 
   // TODO(bazel-team): This is really a test for GlobCache.
@@ -586,6 +583,21 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
             "cc_library(name = 're', srcs = glob(['*.cc'], ['**/*.c']))");
     Package pkg = packages.eval("rg", file);
     events.assertNoWarningsOrErrors();
+
+    assertEvaluates(
+        pkg,
+        ImmutableList.of(
+            "BUILD",
+            "a.cc",
+            "foo",
+            "foo/bar.cc",
+            "foo/foo.cc",
+            "foo/wiz",
+            "foo/wiz/bam.cc",
+            "foo/wiz/bum.cc",
+            "foo/wiz/quid",
+            "foo/wiz/quid/gav.cc"),
+        "**");
 
     assertEvaluates(
         pkg,

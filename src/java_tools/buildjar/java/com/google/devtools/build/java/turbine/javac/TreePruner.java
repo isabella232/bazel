@@ -22,16 +22,24 @@ import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.ParenthesizedTree;
+import com.sun.source.tree.Tree.Kind;
 import com.sun.source.tree.TypeCastTree;
 import com.sun.source.tree.UnaryTree;
 import com.sun.source.util.SimpleTreeVisitor;
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCBlock;
+import com.sun.tools.javac.tree.JCTree.JCClassDecl;
+import com.sun.tools.javac.tree.JCTree.JCExpression;
+import com.sun.tools.javac.tree.JCTree.JCExpressionStatement;
+import com.sun.tools.javac.tree.JCTree.JCIdent;
 import com.sun.tools.javac.tree.JCTree.JCMethodDecl;
+import com.sun.tools.javac.tree.JCTree.JCMethodInvocation;
+import com.sun.tools.javac.tree.JCTree.JCStatement;
 import com.sun.tools.javac.tree.JCTree.JCVariableDecl;
 import com.sun.tools.javac.tree.TreeScanner;
 import com.sun.tools.javac.util.List;
+import com.sun.tools.javac.util.Name;
 
 /**
  * Prunes AST nodes that are not required for header compilation.
@@ -60,9 +68,28 @@ public class TreePruner {
   private static final TreeScanner PRUNING_VISITOR =
       new TreeScanner() {
 
+        JCClassDecl enclClass = null;
+
+        @Override
+        public void visitClassDef(JCClassDecl tree) {
+          JCClassDecl prev = enclClass;
+          enclClass = tree;
+          try {
+            super.visitClassDef(tree);
+          } finally {
+            enclClass = prev;
+          }
+        }
+
         @Override
         public void visitMethodDef(JCMethodDecl tree) {
           if (tree.body == null) {
+            return;
+          }
+          if (tree.getReturnType() == null && delegatingConstructor(tree.body.stats)) {
+            // if the first statement of a constructor declaration delegates to another
+            // constructor, it needs to be preserved to satisfy checks in Resolve
+            tree.body.stats = com.sun.tools.javac.util.List.of(tree.body.stats.get(0));
             return;
           }
           tree.body.stats = com.sun.tools.javac.util.List.nil();
@@ -80,15 +107,46 @@ public class TreePruner {
             return;
           }
           // drop field initializers unless the field looks like a JLS §4.12.4 constant variable
-          if (isConstantVariable(tree)) {
+          if (isConstantVariable(enclClass, tree)) {
             return;
           }
           tree.init = null;
         }
       };
 
-  private static boolean isConstantVariable(JCVariableDecl tree) {
-    if ((tree.mods.flags & Flags.FINAL) != Flags.FINAL) {
+  private static boolean delegatingConstructor(List<JCStatement> stats) {
+    if (stats.isEmpty()) {
+      return false;
+    }
+    JCStatement stat = stats.get(0);
+    if (stat.getKind() != Kind.EXPRESSION_STATEMENT) {
+      return false;
+    }
+    JCExpression expr = ((JCExpressionStatement) stat).getExpression();
+    if (expr.getKind() != Kind.METHOD_INVOCATION) {
+      return false;
+    }
+    JCExpression select = ((JCMethodInvocation) expr).getMethodSelect();
+    if (select.getKind() != Kind.IDENTIFIER) {
+      return false;
+    }
+    Name name = ((JCIdent) select).getName();
+    return name.contentEquals("this") || name.contentEquals("super");
+  }
+
+  private static boolean isFinal(JCClassDecl enclClass, JCVariableDecl tree) {
+    if ((tree.mods.flags & Flags.FINAL) == Flags.FINAL) {
+      return true;
+    }
+    if (enclClass != null && (enclClass.mods.flags & (Flags.ANNOTATION | Flags.INTERFACE)) != 0) {
+      // Fields in annotation declarations and interfaces are implicitly final
+      return true;
+    }
+    return false;
+  }
+
+  private static boolean isConstantVariable(JCClassDecl enclClass, JCVariableDecl tree) {
+    if (!isFinal(enclClass, tree)) {
       return false;
     }
     if (!constantType(tree.getType())) {

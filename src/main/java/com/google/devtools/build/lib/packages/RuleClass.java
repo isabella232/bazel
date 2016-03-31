@@ -30,6 +30,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
@@ -103,6 +104,9 @@ import javax.annotation.concurrent.Immutable;
 public final class RuleClass {
   public static final Function<? super Rule, Map<String, Label>> NO_EXTERNAL_BINDINGS =
         Functions.<Map<String, Label>>constant(ImmutableMap.<String, Label>of());
+
+  private static final PathFragment THIRD_PARTY_PREFIX = new PathFragment("third_party");
+
   /**
    * A constraint for the package name of the Rule instances.
    */
@@ -559,10 +563,11 @@ public final class RuleClass {
       Preconditions.checkState(
           (type == RuleClassType.ABSTRACT)
           == (configuredTargetFactory == null && configuredTargetFunction == null));
-      Preconditions.checkState(skylarkExecutable == (configuredTargetFunction != null));
-      Preconditions.checkState(skylarkExecutable == (ruleDefinitionEnvironment != null));
-      Preconditions.checkState(workspaceOnly || externalBindingsFunction == NO_EXTERNAL_BINDINGS);
-
+      if (!workspaceOnly) {
+        Preconditions.checkState(skylarkExecutable == (configuredTargetFunction != null));
+        Preconditions.checkState(skylarkExecutable == (ruleDefinitionEnvironment != null));
+        Preconditions.checkState(externalBindingsFunction == NO_EXTERNAL_BINDINGS);
+      }
       return new RuleClass(name, skylark, skylarkExecutable, documented, publicByDefault,
           binaryOutput, workspaceOnly, outputsDefaultExecutable, implicitOutputsFunction,
           configurator, configuredTargetFactory, validityPredicate, preferredDependencyPredicate,
@@ -1539,7 +1544,7 @@ public final class RuleClass {
    */
   private static void checkThirdPartyRuleHasLicense(Rule rule,
       Package.Builder pkgBuilder, EventHandler eventHandler) {
-    if (rule.getLabel().getPackageName().startsWith("third_party/")) {
+    if (isThirdPartyPackage(rule.getLabel().getPackageIdentifier())) {
       License license = rule.getLicense();
       if (license == null) {
         license = pkgBuilder.getDefaultLicense();
@@ -1776,5 +1781,21 @@ public final class RuleClass {
    */
   public boolean outputsDefaultExecutable() {
     return outputsDefaultExecutable;
+  }
+
+  public static boolean isThirdPartyPackage(PackageIdentifier packageIdentifier) {
+    if (!packageIdentifier.getRepository().isMain()) {
+      return false;
+    }
+
+    if (!packageIdentifier.getPackageFragment().startsWith(THIRD_PARTY_PREFIX)) {
+      return false;
+    }
+
+    if (packageIdentifier.getPackageFragment().segmentCount() <= 1) {
+      return false;
+    }
+
+    return true;
   }
 }

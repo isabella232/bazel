@@ -47,16 +47,48 @@ public class AppleCommandLineOptions extends FragmentOptions {
 
   @Option(
     name = "ios_sdk_version",
-    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
-    defaultValue = DEFAULT_IOS_SDK_VERSION,
+    defaultValue = "null",
     converter = DottedVersionConverter.class,
     category = "build",
     help = "Specifies the version of the iOS SDK to use to build iOS applications."
   )
   public DottedVersion iosSdkVersion;
 
+  @Option(
+    name = "watchos_sdk_version",
+    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
+    defaultValue = DEFAULT_WATCHOS_SDK_VERSION,
+    converter = DottedVersionConverter.class,
+    category = "build",
+    help = "Specifies the version of the WatchOS SDK to use to build WatchOS applications."
+  )
+  public DottedVersion watchOsSdkVersion;
+
+  @Option(
+    name = "tvos_sdk_version",
+    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
+    defaultValue = DEFAULT_APPLETVOS_SDK_VERSION,
+    converter = DottedVersionConverter.class,
+    category = "build",
+    help = "Specifies the version of the AppleTVOS SDK to use to build AppleTVOS applications."
+  )
+  public DottedVersion tvOsSdkVersion;
+
+  @Option(
+    name = "macosx_sdk_version",
+    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
+    defaultValue = DEFAULT_MACOSX_SDK_VERSION,
+    converter = DottedVersionConverter.class,
+    category = "build",
+    help = "Specifies the version of the Mac OS X SDK to use to build Mac OS X applications."
+  )
+  public DottedVersion macOsXSdkVersion;
+
   @VisibleForTesting public static final String DEFAULT_IOS_SDK_VERSION = "8.4";
-  
+  @VisibleForTesting public static final String DEFAULT_WATCHOS_SDK_VERSION = "2.0";
+  @VisibleForTesting public static final String DEFAULT_MACOSX_SDK_VERSION = "10.10";
+  @VisibleForTesting public static final String DEFAULT_APPLETVOS_SDK_VERSION = "1.0";
+
   @Option(name = "ios_cpu",
       defaultValue = DEFAULT_IOS_CPU,
       category = "build",
@@ -196,6 +228,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
     // Set options needed in the host configuration.
     host.xcodeVersionConfig = xcodeVersionConfig;
     host.xcodeVersion = xcodeVersion;
+    host.iosSdkVersion = iosSdkVersion;
     host.appleBitcodeMode = appleBitcodeMode;
 
     return host;

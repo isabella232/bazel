@@ -45,7 +45,7 @@ import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider;
-import com.google.devtools.build.lib.rules.java.JavaCompilationHelper;
+import com.google.devtools.build.lib.rules.java.JavaHelper;
 import com.google.devtools.build.lib.rules.java.JavaSourceInfoProvider;
 import com.google.devtools.build.lib.rules.java.Jvm;
 import com.google.devtools.build.lib.rules.objc.J2ObjcSource.SourceType;
@@ -95,6 +95,9 @@ public class J2ObjcAspect implements ConfiguredNativeAspectFactory {
             .singleArtifact()
             .value(Label.parseAbsoluteUnchecked(
                 Constants.TOOLS_REPOSITORY + "//tools/j2objc:j2objc_wrapper")))
+        .add(attr("$jre_emul_jar", LABEL).cfg(HOST)
+            .value(Label.parseAbsoluteUnchecked(
+                Constants.TOOLS_REPOSITORY + "//third_party/java/j2objc:jre_emul.jar")))
         .add(attr("$jre_emul_lib", LABEL)
             .value(Label.parseAbsoluteUnchecked("//third_party/java/j2objc:jre_emul_lib")))
         .add(attr("$xcrunwrapper", LABEL).cfg(HOST).exec()
@@ -250,6 +253,9 @@ public class J2ObjcAspect implements ConfiguredNativeAspectFactory {
     Artifact compiledLibrary = ObjcRuleClasses.j2objcIntermediateArtifacts(ruleContext).archive();
     argBuilder.addExecPath("--compiled_archive_file_path", compiledLibrary);
 
+    Artifact bootclasspathJar = ruleContext.getPrerequisiteArtifact("$jre_emul_jar", Mode.HOST);
+    argBuilder.add("-Xbootclasspath:" + bootclasspathJar.getExecPathString());
+
     argBuilder.add("-d").addPath(j2ObjcSource.getObjcFilePath());
 
     // In J2ObjC, the jars you pass as dependencies must be precisely the same as the
@@ -274,9 +280,10 @@ public class J2ObjcAspect implements ConfiguredNativeAspectFactory {
         .setExecutable(ruleContext.getPrerequisiteArtifact("$j2objc_wrapper", Mode.HOST))
         .addInput(ruleContext.getPrerequisiteArtifact("$j2objc_wrapper", Mode.HOST))
         .addInput(j2ObjcDeployJar)
+        .addInput(bootclasspathJar)
         .addInputs(sources)
         .addTransitiveInputs(compileTimeJars)
-        .addInputs(JavaCompilationHelper.getHostJavabaseInputs(ruleContext))
+        .addInputs(JavaHelper.getHostJavabaseInputs(ruleContext))
         .addTransitiveInputs(depsHeaderMappingFiles)
         .addTransitiveInputs(depsClassMappingFiles)
         .addInput(paramFile)

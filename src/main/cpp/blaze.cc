@@ -213,6 +213,13 @@ static vector<string> GetArgumentArray() {
     die(jvm_args_exit_code, "%s", error.c_str());
   }
 
+  if (globals->options.batch && globals->options.oom_more_eagerly) {
+    // Put this OOM trigger with kill after --host_jvm_args, in case
+    // --host_jvm_args contains user-specified OOM triggers since we want those
+    // to execute first.
+    result.push_back("-XX:OnOutOfMemoryError=kill -USR2 %p");
+  }
+
   // We put all directories on the java.library.path that contain .so files.
   string java_library_path = "-Djava.library.path=";
   string real_install_dir = blaze_util::JoinPath(globals->options.install_base,
@@ -270,6 +277,9 @@ static vector<string> GetArgumentArray() {
     result.push_back("--deep_execroot");
   } else {
     result.push_back("--nodeep_execroot");
+  }
+  if (globals->options.oom_more_eagerly) {
+    result.push_back("--experimental_oom_more_eagerly");
   }
   if (globals->options.watchfs) {
     result.push_back("--watchfs");
@@ -1009,15 +1019,17 @@ static void EnsureCorrectRunningVersion() {
   // installation is running.
   string installation_path = globals->options.output_base + "/install";
   char prev_installation[PATH_MAX + 1] = "";  // NULs the whole array
+  // TODO(dslomov): On Windows, readlink always fails,
+  // so we do the linking every time.
   if (readlink(installation_path.c_str(),
                prev_installation, PATH_MAX) == -1 ||
       prev_installation != globals->options.install_base) {
     if (KillRunningServerIfAny()) {
       globals->restart_reason = NEW_VERSION;
     }
-    unlink(installation_path.c_str());
-    if (symlink(globals->options.install_base.c_str(),
-                installation_path.c_str())) {
+    UnlinkPath(installation_path.c_str());
+    if (!SymlinkDirectories(globals->options.install_base.c_str(),
+                            installation_path.c_str())) {
       pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
            "failed to create installation symlink '%s'",
            installation_path.c_str());
@@ -1031,7 +1043,6 @@ static void EnsureCorrectRunningVersion() {
     }
   }
 }
-
 
 // A signal-safe version of fprintf(stderr, ...).
 //

@@ -38,6 +38,7 @@ import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature.Param;
 import com.google.devtools.build.lib.syntax.BuiltinFunction;
+import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Printer;
@@ -69,7 +70,8 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
     mandatoryPositionals = {@Param(name = "mandatory", doc = "")},
     optionalPositionals = {@Param(name = "optional", doc = "")},
     mandatoryNamedOnly = {@Param(name = "mandatory_key", doc = "")},
-    optionalNamedOnly = {@Param(name = "optional_key", doc = "", defaultValue = "'x'")}
+    optionalNamedOnly = {@Param(name = "optional_key", doc = "", defaultValue = "'x'")},
+    useEnvironment = true
   )
   private BuiltinFunction mockFunc;
 
@@ -122,8 +124,10 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
         new BuiltinFunction("mock") {
           @SuppressWarnings("unused")
           public Object invoke(
-              Object mandatory, Object optional, Object mandatoryKey, Object optionalKey) {
+              Object mandatory, Object optional, Object mandatoryKey, Object optionalKey,
+              Environment env) {
             return EvalUtils.optionMap(
+                env,
                 "mandatory",
                 mandatory,
                 "optional",
@@ -680,15 +684,6 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
   }
 
   @Test
-  public void testRunfilesStatelessWorksAsOnlyPosArg() throws Exception {
-    SkylarkRuleContext ruleContext = createRuleContext("//foo:bar");
-    Object result =
-        evalRuleContextCode(ruleContext, "ruleContext.runfiles(collect_default = True)");
-    assertThat(ActionsTestUtil.baseArtifactNames(getRunfileArtifacts(result)))
-        .contains("libjl.jar");
-  }
-
-  @Test
   public void testRunfilesBadListGenericType() throws Exception {
     checkErrorContains(
         "Illegal argument: expected type File for 'files' element but got type string instead",
@@ -701,6 +696,24 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
         "expected set of Files or NoneType for 'transitive_files' while calling runfiles "
             + "but got set of ints instead: set([1, 2, 3])",
         "ruleContext.runfiles(transitive_files=set([1, 2, 3]))");
+  }
+
+  @Test
+  public void testRunfilesBadMapGenericType() throws Exception {
+    checkErrorContains(
+        "Illegal argument: expected type string for 'symlinks' key " + "but got type int instead",
+        "ruleContext.runfiles(symlinks = {123: ruleContext.files.srcs[0]})");
+    checkErrorContains(
+        "Illegal argument: expected type File for 'symlinks' value " + "but got type int instead",
+        "ruleContext.runfiles(symlinks = {'some string': 123})");
+    checkErrorContains(
+        "Illegal argument: expected type string for 'root_symlinks' key "
+            + "but got type int instead",
+        "ruleContext.runfiles(root_symlinks = {123: ruleContext.files.srcs[0]})");
+    checkErrorContains(
+        "Illegal argument: expected type File for 'root_symlinks' value "
+            + "but got type int instead",
+        "ruleContext.runfiles(root_symlinks = {'some string': 123})");
   }
 
   @Test
@@ -754,6 +767,42 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
     assertEquals(
         ActionsTestUtil.baseArtifactNames(getRunfileArtifacts(result)),
         ImmutableList.of("libjl.jar", "gl.a", "gl.gcgox"));
+  }
+
+  @Test
+  public void testRunfilesArtifactsFromSymlink() throws Exception {
+    Object result =
+        evalRuleContextCode(
+            "artifacts = ruleContext.files.srcs",
+            "ruleContext.runfiles(symlinks = {'sym1': artifacts[0]})");
+    assertEquals(
+        ActionsTestUtil.baseArtifactNames(getRunfileArtifacts(result)), ImmutableList.of("a.txt"));
+  }
+
+  @Test
+  public void testRunfilesArtifactsFromRootSymlink() throws Exception {
+    Object result =
+        evalRuleContextCode(
+            "artifacts = ruleContext.files.srcs",
+            "ruleContext.runfiles(root_symlinks = {'sym1': artifacts[0]})");
+    assertEquals(
+        ActionsTestUtil.baseArtifactNames(getRunfileArtifacts(result)), ImmutableList.of("a.txt"));
+  }
+
+  @Test
+  public void testRunfilesSymlinkConflict() throws Exception {
+    // Two different artifacts mapped to same path in runfiles
+    Object result =
+        evalRuleContextCode(
+            "artifacts = ruleContext.files.srcs",
+            "prefix = ruleContext.workspace_name + '/' if ruleContext.workspace_name else ''",
+            "ruleContext.runfiles(",
+            "root_symlinks = {prefix + 'sym1': artifacts[0]},",
+            "symlinks = {'sym1': artifacts[1]})");
+    Runfiles runfiles = (Runfiles) result;
+    reporter.removeHandler(failFastHandler); // So it doesn't throw exception
+    runfiles.getRunfilesInputs(reporter, null);
+    assertContainsEvent("ERROR <no location>: overwrote runfile");
   }
 
   private Iterable<Artifact> getRunfileArtifacts(Object runfiles) {

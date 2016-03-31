@@ -37,6 +37,7 @@ import com.google.devtools.build.lib.analysis.actions.BinaryFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
@@ -82,11 +83,6 @@ public final class ReleaseBundlingSupport {
    * Template for the containing application folder.
    */
   public static final SafeImplicitOutputsFunction IPA = fromTemplates("%{name}.ipa");
-
-  // This is not an actual implicit output. This function is used to compute the name of an
-  // artifact.
-  public static final SafeImplicitOutputsFunction IPA_UNSIGNED =
-      fromTemplates("%{name}.ipa.unsigned");
 
   @VisibleForTesting
   static final String NO_ASSET_CATALOG_ERROR_FORMAT =
@@ -230,35 +226,15 @@ public final class ReleaseBundlingSupport {
       ruleContext.attributeError("families", INVALID_FAMILIES_ERROR);
     }
 
-    validateLaunchScreen();
+    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+    if (attributes.provisioningProfile() == null
+        && appleConfiguration.getBundlingPlatform() != Platform.IOS_SIMULATOR) {
+      ruleContext.attributeError("provisioning_profile", DEVICE_NO_PROVISIONING_PROFILE);
+    }
 
     return this;
   }
 
-  private void validateLaunchScreen() {
-    if (ruleContext.attributes().isAttributeValueExplicitlySpecified("launch_storyboard")) {
-      DottedVersion minimumOs = bundling.getMinimumOsVersion();
-      if (ObjcRuleClasses.useLaunchStoryboard(ruleContext, bundling.getMinimumOsVersion())) {
-        if (ruleContext.attributes().isAttributeValueExplicitlySpecified("launch_image")) {
-          ruleContext.attributeWarning(
-              "launch_image",
-              String.format(
-                  "launch_image was specified but since --ios_minimum_os=%s (>=8.0), the also "
-                      + "specified launch_storyboard will be used instead",
-                  minimumOs));
-        }
-      } else {
-        if (!ruleContext.attributes().isAttributeValueExplicitlySpecified("launch_image")) {
-          ruleContext.attributeWarning(
-              "launch_storyboard",
-              String.format(
-                  "launch_storyboard was specified but since --ios_minimum_os=%s (<8.0) and no "
-                      + "launch_image was specified instead it will be ignored",
-                  minimumOs));
-        }
-      }
-    }
-  }
 
   /**
    * Validates that resources defined in this rule and its dependencies and written to this bundle
@@ -278,7 +254,7 @@ public final class ReleaseBundlingSupport {
    * multi-architecture binary.
    *
    * @return this application support
-   * @throws InterruptedException 
+   * @throws InterruptedException
    */
   ReleaseBundlingSupport registerActions() throws InterruptedException {
     bundleSupport.registerActions(objcProvider);
@@ -287,30 +263,16 @@ public final class ReleaseBundlingSupport {
     registerTransformAndCopyBreakpadFilesAction();
     registerSwiftStdlibActionsIfNecessary();
 
-    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
-    Artifact ipaOutput = ruleContext.getImplicitOutputArtifact(IPA);
-
-    Artifact maybeSignedIpa;
-    if (appleConfiguration.getBundlingPlatform() == Platform.IOS_SIMULATOR) {
-      maybeSignedIpa = ipaOutput;
-    } else if (attributes.provisioningProfile() == null) {
-      throw new IllegalStateException(DEVICE_NO_PROVISIONING_PROFILE);
-    } else {
-      maybeSignedIpa = registerBundleSigningActions(ipaOutput);
-    }
-
     registerEmbedLabelPlistAction();
     registerEnvironmentPlistAction();
     registerAutomaticPlistAction();
 
-    if (ObjcRuleClasses.useLaunchStoryboard(ruleContext, bundling.getMinimumOsVersion())) {
+    if (attributes.launchStoryboard() != null) {
       registerLaunchStoryboardPlistAction();
     }
 
-    BundleMergeControlBytes bundleMergeControlBytes = new BundleMergeControlBytes(
-        bundling, maybeSignedIpa, appleConfiguration, bundleSupport.targetDeviceFamilies());
-    registerBundleMergeActions(
-        maybeSignedIpa, bundling.getBundleContentArtifacts(), bundleMergeControlBytes);
+    registerBundleMergeActions();
+    registerPostProcessAndSigningActions();
 
     return this;
   }
@@ -356,19 +318,9 @@ public final class ReleaseBundlingSupport {
   private void registerLaunchStoryboardPlistAction() {
     String launchStoryboard = attributes.launchStoryboard().getFilename();
     String launchStoryboardName = launchStoryboard.substring(0, launchStoryboard.lastIndexOf('.'));
-    String contents =
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-            + "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
-            + "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-            + "<plist version=\"1.0\">\n"
-            + "<dict>\n"
-            + "  <key>UILaunchStoryboardName</key>\n"
-            + "  <string>"
-            + launchStoryboardName
-            + "</string>\n"
-            + "</dict>\n"
-            + "</plist>\n";
-
+    NSDictionary result = new NSDictionary();
+    result.put("UILaunchStoryboardName", launchStoryboardName);
+    String contents = result.toGnuStepASCIIPropertyList();
     ruleContext.registerAction(
         new FileWriteAction(
             ruleContext.getActionOwner(), getLaunchStoryboardPlist(), contents, false));
@@ -417,21 +369,105 @@ public final class ReleaseBundlingSupport {
     NSDictionary result = new NSDictionary();
 
     if (uiDeviceFamily != null) {
-      result.put("UIDeviceFamily", NSObject.wrap(uiDeviceFamily.toArray()));
+      result.put("UIDeviceFamily", uiDeviceFamily.toArray());
     }
-    result.put("DTPlatformName", NSObject.wrap(platform.getLowerCaseNameInPlist()));
+    result.put("DTPlatformName", platform.getLowerCaseNameInPlist());
     result.put(
         "DTSDKName",
-        NSObject.wrap(platform.getLowerCaseNameInPlist() + appleConfiguration.getIosSdkVersion()));
+        platform.getLowerCaseNameInPlist() + appleConfiguration.getIosSdkVersion());
     result.put("CFBundleSupportedPlatforms", new NSArray(NSObject.wrap(platform.getNameInPlist())));
-    result.put("MinimumOSVersion", NSObject.wrap(bundling.getMinimumOsVersion().toString()));
+    result.put("MinimumOSVersion", bundling.getMinimumOsVersion().toString());
 
     return result;
   }
 
-  private Artifact registerBundleSigningActions(Artifact ipaOutput) throws InterruptedException {
-    IntermediateArtifacts intermediateArtifacts =
-        ObjcRuleClasses.intermediateArtifacts(ruleContext);
+  /**
+   * Registers all actions necessary to create a processed and signed IPA from the initial merged
+   * IPA.
+   *
+   * <p>Includes user-provided actions to process IPA contents (via {@code ipa_post_processor}),
+   * and signing actions if the IPA is being built for device architectures. If signing is necessary
+   * also includes entitlements generation and processing actions.
+   *
+   * <p>Note that multiple "actions" on the IPA contents may be run in a single blaze action to
+   * avoid excessive zipping/unzipping of IPA contents.
+   */
+  private void registerPostProcessAndSigningActions() throws InterruptedException {
+    Artifact processedIpa = ruleContext.getImplicitOutputArtifact(IPA);
+    Artifact unprocessedIpa = intermediateArtifacts.unprocessedIpa();
+
+    boolean processingNeeded = false;
+    NestedSetBuilder<Artifact> inputs =
+        NestedSetBuilder.<Artifact>stableOrder().add(unprocessedIpa);
+
+    String actionCommandLine =
+        "set -e && "
+            + "t=$(mktemp -d \"${TMPDIR:-/tmp}/signing_intermediate.XXXXXX\") && "
+            + "trap \"rm -rf ${t}\" EXIT && "
+            // Get an absolute path since we need to cd into the temp directory for zip.
+            + "signed_ipa=${PWD}/"
+            + processedIpa.getShellEscapedExecPathString()
+            + " && "
+            + "/usr/bin/unzip -qq "
+            + unprocessedIpa.getShellEscapedExecPathString()
+            + " -d ${t} && ";
+
+    FilesToRunProvider processor = attributes.ipaPostProcessor();
+    if (processor != null) {
+      processingNeeded = true;
+      actionCommandLine += processor.getExecutable().getShellEscapedExecPathString() + " ${t} && ";
+    }
+
+    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+    if (appleConfiguration.getBundlingPlatform() == Platform.IOS_DEVICE) {
+      processingNeeded = true;
+      registerEntitlementsActions();
+      actionCommandLine += signingCommandLine();
+      inputs.add(attributes.provisioningProfile()).add(intermediateArtifacts.entitlements());
+    }
+
+    actionCommandLine += "cd ${t} && /usr/bin/zip -q -r \"${signed_ipa}\" .";
+
+    if (processingNeeded) {
+      SpawnAction.Builder processAction =
+          ObjcRuleClasses.spawnBashOnDarwinActionBuilder(actionCommandLine)
+              .setMnemonic("ObjcProcessIpa")
+              .setProgressMessage("Processing iOS IPA: " + ruleContext.getLabel())
+              .addTransitiveInputs(inputs.build())
+              .addOutput(processedIpa);
+
+      if (processor != null) {
+        processAction.addTool(processor);
+      }
+
+      ruleContext.registerAction(processAction.build(ruleContext));
+    } else {
+      ruleContext.registerAction(
+          new SymlinkAction(
+              ruleContext.getActionOwner(), unprocessedIpa, processedIpa, "Processing IPA"));
+    }
+  }
+
+  private String signingCommandLine() {
+    ImmutableList.Builder<String> dirsToSign = new ImmutableList.Builder<>();
+
+    // Explicitly sign Swift dylibs. Unfortunately --deep option on codesign doesn't do this
+    // automatically.
+    // The order here is important. The innermost code must singed first.
+    String bundleDir = ShellUtils.shellEscape(bundling.getBundleDir());
+    if (objcProvider.is(USES_SWIFT)) {
+      dirsToSign.add(bundleDir + "/Frameworks/*");
+    }
+    dirsToSign.add(bundleDir);
+
+    StringBuilder codesignCommandLineBuilder = new StringBuilder();
+    for (String dir : dirsToSign.build()) {
+      codesignCommandLineBuilder.append(codesignCommand("${t}/" + dir)).append(" && ");
+    }
+    return codesignCommandLineBuilder.toString();
+  }
+
+  private void registerEntitlementsActions() throws InterruptedException {
     Artifact teamPrefixFile =
         intermediateArtifacts.appendExtensionForEntitlementArtifact(".team_prefix_file");
     registerExtractTeamPrefixAction(teamPrefixFile);
@@ -443,13 +479,7 @@ public final class ReleaseBundlingSupport {
               ".entitlements_with_variables");
       registerExtractEntitlementsAction(entitlementsNeedingSubstitution);
     }
-    Artifact entitlements =
-        intermediateArtifacts.appendExtensionForEntitlementArtifact(".entitlements");
-    registerEntitlementsVariableSubstitutionAction(
-        entitlementsNeedingSubstitution, entitlements, teamPrefixFile);
-    Artifact ipaUnsigned = ruleContext.getImplicitOutputArtifact(IPA_UNSIGNED);
-    registerSignBundleAction(entitlements, ipaOutput, ipaUnsigned);
-    return ipaUnsigned;
+    registerEntitlementsVariableSubstitutionAction(entitlementsNeedingSubstitution, teamPrefixFile);
   }
 
   /**
@@ -568,8 +598,7 @@ public final class ReleaseBundlingSupport {
     if (attributes.appIcon() != null) {
       extraArgs.add("--app-icon", attributes.appIcon());
     }
-    if (attributes.launchImage() != null
-        && !ObjcRuleClasses.useLaunchStoryboard(ruleContext, bundling.getMinimumOsVersion())) {
+    if (attributes.launchImage() != null) {
       extraArgs.add("--launch-image", attributes.launchImage());
     }
     return new ExtraActoolArgs(extraArgs.build());
@@ -617,7 +646,7 @@ public final class ReleaseBundlingSupport {
             .setFallbackBundleId(fallbackBundleId)
             .setMinimumOsVersion(minimumOsVersion);
 
-    if (ObjcRuleClasses.useLaunchStoryboard(ruleContext, minimumOsVersion)) {
+    if (attributes.launchStoryboard() != null) {
       bundling.addInfoplistInput(getLaunchStoryboardPlist());
     }
 
@@ -659,8 +688,7 @@ public final class ReleaseBundlingSupport {
           .setValue(attributes.appIcon())
           .build());
     }
-    if (attributes.launchImage() != null
-        && !ObjcRuleClasses.useLaunchStoryboard(ruleContext, bundling.getMinimumOsVersion())) {
+    if (attributes.launchImage() != null) {
       buildSettings.add(XcodeprojBuildSetting.newBuilder()
           .setName("ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME")
           .setValue(attributes.launchImage())
@@ -687,69 +715,30 @@ public final class ReleaseBundlingSupport {
     return buildSettings.build();
   }
 
-  private ReleaseBundlingSupport registerSignBundleAction(
-      Artifact entitlements, Artifact ipaOutput, Artifact ipaUnsigned) {
-    // TODO(bazel-team): Support variable substitution
-
-    ImmutableList.Builder<String> dirsToSign = new ImmutableList.Builder<>();
-
-    // Explicitly sign Swift dylibs. Unfortunately --deep option on codesign doesn't do this
-    // automatically.
-    // The order here is important. The innermost code must singed first.
-    String bundleDir = ShellUtils.shellEscape(bundling.getBundleDir());
-    if (objcProvider.is(USES_SWIFT)) {
-      dirsToSign.add(bundleDir + "/Frameworks/*");
-    }
-    dirsToSign.add(bundleDir);
-
-    StringBuilder codesignCommandLineBuilder = new StringBuilder();
-    for (String dir : dirsToSign.build()) {
-      codesignCommandLineBuilder
-          .append(codesignCommand(entitlements, "${t}/" + dir))
-          .append(" && ");
-    }
-
-    // TODO(bazel-team): Support nested code signing.
-    String shellCommand = "set -e && "
-        + "t=$(mktemp -d -t signing_intermediate) && "
-        + "trap \"rm -rf ${t}\" EXIT && "
-        // Get an absolute path since we need to cd into the temp directory for zip.
-        + "signed_ipa=${PWD}/" + ipaOutput.getShellEscapedExecPathString() + " && "
-        + "/usr/bin/unzip -qq " + ipaUnsigned.getShellEscapedExecPathString() + " -d ${t} && "
-        + codesignCommandLineBuilder.toString()
-        // Using zip since we need to preserve permissions
-        + "cd ${t} && /usr/bin/zip -q -r \"${signed_ipa}\" .";
-    ruleContext.registerAction(
-        ObjcRuleClasses.spawnBashOnDarwinActionBuilder(shellCommand)
-            .setMnemonic("IosSignBundle")
-            .setProgressMessage("Signing iOS bundle: " + ruleContext.getLabel())
-            .addInput(ipaUnsigned)
-            .addInput(attributes.provisioningProfile())
-            .addInput(entitlements)
-            .addOutput(ipaOutput)
-            .build(ruleContext));
-
-    return this;
-  }
-
-  private void registerBundleMergeActions(Artifact ipaUnsigned,
-      NestedSet<Artifact> bundleContentArtifacts, BundleMergeControlBytes controlBytes) {
+  private void registerBundleMergeActions() {
     Artifact bundleMergeControlArtifact =
         ObjcRuleClasses.artifactByAppendingToBaseName(ruleContext, ".ipa-control");
+
+    BundleMergeControlBytes controlBytes =
+        new BundleMergeControlBytes(
+            bundling,
+            intermediateArtifacts.unprocessedIpa(),
+            ruleContext.getFragment(AppleConfiguration.class));
 
     ruleContext.registerAction(
         new BinaryFileWriteAction(
             ruleContext.getActionOwner(), bundleMergeControlArtifact, controlBytes,
             /*makeExecutable=*/false));
 
-    ruleContext.registerAction(new SpawnAction.Builder()
-        .setMnemonic("IosBundle")
-        .setProgressMessage("Bundling iOS application: " + ruleContext.getLabel())
-        .setExecutable(attributes.bundleMergeExecutable())
-        .addInputArgument(bundleMergeControlArtifact)
-        .addTransitiveInputs(bundleContentArtifacts)
-        .addOutput(ipaUnsigned)
-        .build(ruleContext));
+    ruleContext.registerAction(
+        new SpawnAction.Builder()
+            .setMnemonic("IosBundle")
+            .setProgressMessage("Bundling iOS application: " + ruleContext.getLabel())
+            .setExecutable(attributes.bundleMergeExecutable())
+            .addInputArgument(bundleMergeControlArtifact)
+            .addTransitiveInputs(bundling.getBundleContentArtifacts())
+            .addOutput(intermediateArtifacts.unprocessedIpa())
+            .build(ruleContext));
   }
 
   /**
@@ -841,28 +830,37 @@ public final class ReleaseBundlingSupport {
     return this;
   }
 
-  private void registerEntitlementsVariableSubstitutionAction(Artifact in, Artifact out,
-      Artifact prefix) {
+  private void registerEntitlementsVariableSubstitutionAction(
+      Artifact inputEntitlements, Artifact prefix) {
+    Artifact substitutedEntitlements = intermediateArtifacts.entitlements();
     String escapedBundleId = ShellUtils.shellEscape(attributes.bundleId());
-    String shellCommand = "set -e && "
-        + "PREFIX=\"$(cat " + prefix.getShellEscapedExecPathString() + ")\" && "
-        + "sed "
-        // Replace .* from default entitlements file with bundle ID where suitable.
-        + "-e \"s#${PREFIX}\\.\\*#${PREFIX}." + escapedBundleId + "#g\" "
+    String shellCommand =
+        "set -e && "
+            + "PREFIX=\"$(cat "
+            + prefix.getShellEscapedExecPathString()
+            + ")\" && "
+            + "sed "
+            // Replace .* from default entitlements file with bundle ID where suitable.
+            + "-e \"s#${PREFIX}\\.\\*#${PREFIX}."
+            + escapedBundleId
+            + "#g\" "
 
-        // Replace some variables that people put in their own entitlements files
-        + "-e \"s#\\$(AppIdentifierPrefix)#${PREFIX}.#g\" "
-        + "-e \"s#\\$(CFBundleIdentifier)#" + escapedBundleId + "#g\" "
-
-        + in.getShellEscapedExecPathString() + " "
-        + "> " + out.getShellEscapedExecPathString();
-    ruleContext.registerAction(new SpawnAction.Builder()
-        .setMnemonic("SubstituteIosEntitlements")
-        .setShellCommand(shellCommand)
-        .addInput(in)
-        .addInput(prefix)
-        .addOutput(out)
-        .build(ruleContext));
+            // Replace some variables that people put in their own entitlements files
+            + "-e \"s#\\$(AppIdentifierPrefix)#${PREFIX}.#g\" "
+            + "-e \"s#\\$(CFBundleIdentifier)#"
+            + escapedBundleId
+            + "#g\" "
+            + inputEntitlements.getShellEscapedExecPathString()
+            + " > "
+            + substitutedEntitlements.getShellEscapedExecPathString();
+    ruleContext.registerAction(
+        new SpawnAction.Builder()
+            .setMnemonic("SubstituteIosEntitlements")
+            .setShellCommand(shellCommand)
+            .addInput(inputEntitlements)
+            .addInput(prefix)
+            .addOutput(substitutedEntitlements)
+            .build(ruleContext));
   }
 
   /** Registers an action to copy Swift standard library dylibs into app bundle. */
@@ -892,8 +890,9 @@ public final class ReleaseBundlingSupport {
     return "security cms -D -i " + ShellUtils.shellEscape(provisioningProfile.getExecPathString());
   }
 
-  private String codesignCommand(Artifact entitlements, String appDir) {
+  private String codesignCommand(String appDir) {
     String signingCertName = ObjcRuleClasses.objcConfiguration(ruleContext).getSigningCertName();
+    Artifact entitlements = intermediateArtifacts.entitlements();
 
     final String identity;
     if (signingCertName != null) {
@@ -973,6 +972,17 @@ public final class ReleaseBundlingSupport {
         return explicitProvisioningProfile;
       }
       return ruleContext.getPrerequisiteArtifact(":default_provisioning_profile", Mode.TARGET);
+    }
+
+    /**
+     * Returns this target's user-specified {@code ipa_post_processor} or null if not present.
+     */
+    @Nullable
+    FilesToRunProvider ipaPostProcessor() {
+      if (!ruleContext.attributes().has("ipa_post_processor", BuildType.LABEL)) {
+        return null;
+      }
+      return ruleContext.getExecutablePrerequisite("ipa_post_processor", Mode.TARGET);
     }
 
     @Nullable

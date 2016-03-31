@@ -468,7 +468,7 @@ public class CcCommonConfiguredTargetTest extends BuildViewTestCase {
         "       deps = [':lib1'],",
         "       alwayslink=1)");
     reporter.removeHandler(failFastHandler);
-    getPackageManager().getPackage(reporter, PackageIdentifier.createInDefaultRepo("cc/common"));
+    getPackageManager().getPackage(reporter, PackageIdentifier.createInMainRepo("cc/common"));
     assertContainsEvent(
         "//cc/common:testlib: no such attribute 'alwayslink'" + " in 'cc_test' rule");
   }
@@ -502,6 +502,21 @@ public class CcCommonConfiguredTargetTest extends BuildViewTestCase {
         "cc_library(name = 'flaky_lib',",
         "   srcs = [ 'ok.cc' ],",
         "   includes = [ '//third_party/procps/proc' ])");
+  }
+
+  @Test
+  public void testCcLibraryUplevelIncludesWarned() throws Exception {
+    checkWarning(
+        "uplevel",
+        "lib",
+        // message:
+        "in includes attribute of cc_library rule //uplevel:lib: '../bar' resolves to 'bar' not "
+            + "below the relative path of its package 'uplevel'. This will be an error in the "
+            + "future",
+        // build file:
+        "cc_library(name = 'lib',",
+        "           srcs = ['foo.cc'],",
+        "           includes = ['../bar'])");
   }
 
   @Test

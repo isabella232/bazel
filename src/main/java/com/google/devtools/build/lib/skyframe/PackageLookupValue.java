@@ -89,18 +89,20 @@ public abstract class PackageLookupValue implements SkyValue {
    * For an unsuccessful package lookup, gets a detailed error message for {@link #getErrorReason}
    * that is suitable for reporting to a user.
    */
-  abstract String getErrorMsg();
+  public abstract String getErrorMsg();
 
   static SkyKey key(PathFragment directory) {
     Preconditions.checkArgument(!directory.isAbsolute(), directory);
-    return key(PackageIdentifier.createInDefaultRepo(directory));
+    return key(PackageIdentifier.createInMainRepo(directory));
   }
 
   public static SkyKey key(PackageIdentifier pkgIdentifier) {
-    return new SkyKey(SkyFunctions.PACKAGE_LOOKUP, pkgIdentifier);
+    Preconditions.checkArgument(!pkgIdentifier.getRepository().isDefault());
+    return SkyKey.create(SkyFunctions.PACKAGE_LOOKUP, pkgIdentifier);
   }
 
-  private static class SuccessfulPackageLookupValue extends PackageLookupValue {
+  /** Successful lookup value. */
+  public static class SuccessfulPackageLookupValue extends PackageLookupValue {
 
     private final Path root;
 
@@ -124,7 +126,7 @@ public abstract class PackageLookupValue implements SkyValue {
     }
 
     @Override
-    String getErrorMsg() {
+    public String getErrorMsg() {
       throw new IllegalStateException();
     }
 
@@ -145,7 +147,8 @@ public abstract class PackageLookupValue implements SkyValue {
 
   // TODO(kchodorow): fix these semantics.  This class should not exist, WORKSPACE lookup should
   // just return success/failure like a "normal" package.
-  private static class WorkspacePackageLookupValue extends SuccessfulPackageLookupValue {
+  /** Successful workspace package lookup value. */
+  public static class WorkspacePackageLookupValue extends SuccessfulPackageLookupValue {
 
     private WorkspacePackageLookupValue(Path root) {
       super(root);
@@ -189,12 +192,13 @@ public abstract class PackageLookupValue implements SkyValue {
     }
 
     @Override
-    String getErrorMsg() {
+    public String getErrorMsg() {
       return "BUILD file not found on package path";
     }
   }
 
-  private static class InvalidNamePackageLookupValue extends UnsuccessfulPackageLookupValue {
+  /** Value indicating the package name was in error. */
+  public static class InvalidNamePackageLookupValue extends UnsuccessfulPackageLookupValue {
 
     private final String errorMsg;
 
@@ -208,7 +212,7 @@ public abstract class PackageLookupValue implements SkyValue {
     }
 
     @Override
-    String getErrorMsg() {
+    public String getErrorMsg() {
       return errorMsg;
     }
 
@@ -239,7 +243,7 @@ public abstract class PackageLookupValue implements SkyValue {
     }
 
     @Override
-    String getErrorMsg() {
+    public String getErrorMsg() {
       return "Package is considered deleted due to --deleted_packages";
     }
   }

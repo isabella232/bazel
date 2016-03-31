@@ -176,14 +176,14 @@ public final class SkylarkNestedSet implements Iterable<Object>, SkylarkValue {
    * A not type safe constructor for SkylarkNestedSet, specifying type as a Java class.
    * It's discouraged to use it unless type generic safety is guaranteed from the caller side.
    */
-  SkylarkNestedSet(Class<?> contentType, NestedSet<?> set) {
+  public SkylarkNestedSet(Class<?> contentType, NestedSet<?> set) {
     this(SkylarkType.of(contentType), set);
   }
 
   private static SkylarkType checkType(SkylarkType builderType, SkylarkType itemType, Location loc)
       throws EvalException {
     if (SkylarkType.intersection(
-        SkylarkType.Union.of(SkylarkType.MAP, SkylarkType.LIST, SkylarkType.STRUCT),
+        SkylarkType.Union.of(SkylarkType.DICT, SkylarkType.LIST, SkylarkType.STRUCT),
         itemType) != SkylarkType.BOTTOM) {
       throw new EvalException(
           loc, String.format("sets cannot contain items of type '%s'", itemType));

@@ -17,13 +17,13 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/standalone",
         "//src/main/java/com/google/devtools/common/options",
-        "//src/main/protobuf:remote_protocol_proto",
+        "//src/main/protobuf:remote_protocol_java_proto",
         "//third_party:apache_httpclient",
         "//third_party:apache_httpcore",
         "//third_party:gson",
         "//third_party:guava",
         "//third_party:hazelcast",
-        "//third_party:protobuf",
+        "//third_party/protobuf",
     ],
 )
 

@@ -117,12 +117,14 @@ import com.google.devtools.build.lib.pkgcache.TransitivePackageLoader;
 import com.google.devtools.build.lib.rules.extra.ExtraAction;
 import com.google.devtools.build.lib.rules.test.BaselineCoverageAction;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
+import com.google.devtools.build.lib.runtime.InvocationPolicyEnforcer;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.DiffAwareness;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker;
+import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
@@ -277,6 +279,10 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
       optionsParser.parse(configurationArgs);
       optionsParser.parse(args);
 
+      InvocationPolicyEnforcer optionsPolicyEnforcer =
+            new InvocationPolicyEnforcer(TestConstants.TEST_INVOCATION_POLICY);
+      optionsPolicyEnforcer.enforce(optionsParser, "");
+
       configurationFactory.forbidSanityCheck();
       BuildOptions buildOptions = ruleClassProvider.createBuildOptions(optionsParser);
       ensureTargetsVisited(buildOptions.getAllLabels().values());
@@ -306,7 +312,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         packageCacheOptions.defaultVisibility, true,
         7, ruleClassProvider.getDefaultsPackageContent(optionsParser),
         UUID.randomUUID());
-    skyframeExecutor.setDeletedPackages(ImmutableSet.copyOf(packageCacheOptions.deletedPackages));
+    skyframeExecutor.setDeletedPackages(ImmutableSet.copyOf(packageCacheOptions.getDeletedPackages()));
   }
 
   protected void setPackageCacheOptions(String... options) throws Exception {
@@ -372,7 +378,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     view.setConfigurationsForTesting(masterConfig);
 
     view.setArtifactRoots(
-        ImmutableMap.of(PackageIdentifier.createInDefaultRepo(""), rootDirectory), masterConfig);
+        ImmutableMap.of(PackageIdentifier.createInMainRepo(""), rootDirectory), masterConfig);
     simulateLoadingPhase();
   }
 
@@ -514,6 +520,17 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return getActionGraph().getGeneratingAction(artifact);
   }
 
+  protected Action getGeneratingAction(ConfiguredTarget target, String outputName) {
+    NestedSet<Artifact> filesToBuild = getFilesToBuild(target);
+    Artifact artifact = Iterables.find(filesToBuild, artifactNamed(outputName), null);
+    if (artifact == null) {
+      fail(
+          String.format(
+              "Artifact named '%s' not found in filesToBuild (%s)", outputName, filesToBuild));
+    }
+    return getGeneratingAction(artifact);
+  }
+
   /**
    * Returns the SpawnAction that generates an artifact.
    * Implicitly assumes the action is a SpawnAction.
@@ -522,6 +539,11 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return (SpawnAction) getGeneratingAction(artifact);
   }
 
+  protected SpawnAction getGeneratingSpawnAction(ConfiguredTarget target, String outputName) {
+    return getGeneratingSpawnAction(
+        Iterables.find(getFilesToBuild(target), artifactNamed(outputName)));
+  }
+ 
   protected void simulateLoadingPhase() {
     try {
       ensureTargetsVisited(targetConfig.getAllLabels().values());
@@ -562,8 +584,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
       Collection<Label> targets, Collection<Label> labels, boolean keepGoing)
           throws InterruptedException, NoSuchTargetException, NoSuchPackageException {
     boolean success = visitor.sync(reporter,
-        ImmutableSet.copyOf(getTargets(targets)),
-        ImmutableSet.copyOf(labels),
+        getTargets(BlazeTestUtils.convertLabels(targets)),
+        ImmutableSet.copyOf(BlazeTestUtils.convertLabels(labels)),
         keepGoing,
         /*parallelThreads=*/4,
         /*maxDepth=*/Integer.MAX_VALUE);
@@ -618,7 +640,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected ConfiguredTarget getConfiguredTarget(Label label, BuildConfiguration config)
       throws NoSuchPackageException, NoSuchTargetException, InterruptedException {
     ensureTargetsVisited(label);
-    return view.getConfiguredTargetForTesting(reporter, label, config);
+    return view.getConfiguredTargetForTesting(
+        reporter, BlazeTestUtils.convertLabel(label), config);
   }
 
   /**
@@ -902,6 +925,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
             AspectValue.key(
                     owner.getLabel(),
                     owner.getConfiguration(),
+                    owner.getConfiguration(),
                     new NativeAspectClass(creatingAspectFactory),
                     AspectParameters.EMPTY)
                 .argument());
@@ -966,6 +990,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         (AspectValue.AspectKey)
             AspectValue.key(
                     owner.getLabel(),
+                    owner.getConfiguration(),
                     owner.getConfiguration(),
                     new NativeAspectClass(creatingAspectFactory),
                     AspectParameters.EMPTY)
@@ -1385,11 +1410,6 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return result;
   }
 
-  protected SpawnAction getGeneratingAction(ConfiguredTarget target, String outputName) {
-    return getGeneratingSpawnAction(
-        Iterables.find(getFilesToBuild(target), artifactNamed(outputName)));
-  }
-
   protected String getErrorMsgSingleFile(String attrName, String ruleType, String ruleName,
       String depRuleName) {
     return "in " + attrName + " attribute of " + ruleType + " rule " + ruleName + ": '"
@@ -1461,7 +1481,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     reporter.removeHandler(failFastHandler);
     scratch.file("" + packageName + "/BUILD", lines);
     return getPackageManager()
-        .getPackage(reporter, PackageIdentifier.createInDefaultRepo(packageName));
+        .getPackage(reporter, PackageIdentifier.createInMainRepo(packageName));
   }
 
   /**
@@ -1564,7 +1584,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
       BaselineCoverageAction baselineAction =
           (BaselineCoverageAction) getGeneratingAction(baselineCoverage);
       ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-      baselineAction.newDeterministicWriter(null, null).writeOutputFile(bytes);
+      baselineAction.newDeterministicWriter(ActionsTestUtil.createContext(reporter))
+          .writeOutputFile(bytes);
 
       for (String line : new String(bytes.toByteArray(), StandardCharsets.UTF_8).split("\n")) {
         if (line.startsWith("SF:")) {

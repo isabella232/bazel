@@ -54,6 +54,7 @@ import com.google.devtools.build.lib.syntax.Identifier;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
 import com.google.devtools.build.lib.syntax.Runtime;
+import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
@@ -329,19 +330,19 @@ public final class PackageFactory {
    */
   @VisibleForTesting
   public PackageFactory(RuleClassProvider ruleClassProvider) {
-    this(ruleClassProvider, null, ImmutableList.<EnvironmentExtension>of());
+    this(ruleClassProvider, null, ImmutableList.<EnvironmentExtension>of(), "test");
   }
 
   @VisibleForTesting
   public PackageFactory(RuleClassProvider ruleClassProvider,
       EnvironmentExtension environmentExtension) {
-    this(ruleClassProvider, null, ImmutableList.of(environmentExtension));
+    this(ruleClassProvider, null, ImmutableList.of(environmentExtension), "test");
   }
 
   @VisibleForTesting
   public PackageFactory(RuleClassProvider ruleClassProvider,
       Iterable<EnvironmentExtension> environmentExtensions) {
-    this(ruleClassProvider, null, environmentExtensions);
+    this(ruleClassProvider, null, environmentExtensions, "test");
   }
 
   /**
@@ -350,7 +351,8 @@ public final class PackageFactory {
    */
   public PackageFactory(RuleClassProvider ruleClassProvider,
       Map<String, String> platformSetRegexps,
-      Iterable<EnvironmentExtension> environmentExtensions) {
+      Iterable<EnvironmentExtension> environmentExtensions,
+      String version) {
     this.platformSetRegexps = platformSetRegexps;
     this.ruleFactory = new RuleFactory(ruleClassProvider);
     this.ruleClassProvider = ruleClassProvider;
@@ -362,7 +364,7 @@ public final class PackageFactory {
     this.environmentExtensions = ImmutableList.copyOf(environmentExtensions);
     this.packageArguments = createPackageArguments();
     this.nativeModule = newNativeModule();
-    this.workspaceNativeModule = WorkspaceFactory.newNativeModule(ruleClassProvider);
+    this.workspaceNativeModule = WorkspaceFactory.newNativeModule(ruleClassProvider, version);
   }
 
   /**
@@ -697,7 +699,7 @@ public final class PackageFactory {
                   inputFile.getName()));
         }
         if (license == null && pkgBuilder.getDefaultLicense() == License.NO_LICENSE
-            && pkgBuilder.getBuildFileLabel().toString().startsWith("//third_party/")) {
+            && RuleClass.isThirdPartyPackage(pkgBuilder.getPackageIdentifier())) {
           throw new EvalException(ast.getLocation(),
               "third-party file '" + inputFile.getName() + "' lacks a license declaration "
               + "with one of the following types: notice, reciprocal, permissive, "
@@ -815,21 +817,23 @@ public final class PackageFactory {
       };
 
   @Nullable
-  static Map<String, Object> callGetRuleFunction(
+  static SkylarkDict<String, Object> callGetRuleFunction(
       String name, FuncallExpression ast, Environment env)
       throws EvalException, ConversionException {
     PackageContext context = getContext(env, ast);
     Target target = context.pkgBuilder.getTarget(name);
 
-    return targetDict(target);
+    return targetDict(target, ast.getLocation(), env);
   }
 
   @Nullable
-  private static Map<String, Object> targetDict(Target target) throws NotRepresentableException {
+  private static SkylarkDict<String, Object> targetDict(
+      Target target, Location loc, Environment env)
+      throws NotRepresentableException, EvalException {
     if (target == null && !(target instanceof Rule)) {
       return null;
     }
-    Map<String, Object> values = new TreeMap<>();
+    SkylarkDict<String, Object> values = SkylarkDict.<String, Object>of(env);
 
     Rule rule = (Rule) target;
     AttributeContainer cont = rule.getAttributeContainer();
@@ -849,7 +853,7 @@ public final class PackageFactory {
         if (val == null) {
           continue;
         }
-        values.put(attr.getName(), val);
+        values.put(attr.getName(), val, loc, env);
       } catch (NotRepresentableException e) {
         throw new NotRepresentableException(
             String.format(
@@ -857,8 +861,8 @@ public final class PackageFactory {
       }
     }
 
-    values.put("name", rule.getName());
-    values.put("kind", rule.getRuleClass());
+    values.put("name", rule.getName(), loc, env);
+    values.put("kind", rule.getRuleClass(), loc, env);
     return values;
   }
 
@@ -979,18 +983,21 @@ public final class PackageFactory {
   }
 
 
-  static Map callGetRulesFunction(FuncallExpression ast, Environment env) throws EvalException {
+  static SkylarkDict<String, SkylarkDict<String, Object>> callGetRulesFunction(
+      FuncallExpression ast, Environment env)
+      throws EvalException {
     PackageContext context = getContext(env, ast);
     Collection<Target> targets = context.pkgBuilder.getTargets();
+    Location loc = ast.getLocation();
 
     // Sort by name.
-    Map<String, Map<String, Object>> rules = new TreeMap<>();
+    SkylarkDict<String, SkylarkDict<String, Object>> rules =
+        SkylarkDict.<String, SkylarkDict<String, Object>>of(env);
     for (Target t : targets) {
       if (t instanceof Rule) {
-        Map<String, Object> m = targetDict(t);
+        SkylarkDict<String, Object> m = targetDict(t, loc, env);
         Preconditions.checkNotNull(m);
-
-        rules.put(t.getName(), m);
+        rules.put(t.getName(), m, loc, env);
       }
     }
 
@@ -1303,8 +1310,8 @@ public final class PackageFactory {
   public Preprocessor.Result preprocess(
       PackageIdentifier packageId, Path buildFile, CachingPackageLocator locator)
       throws InterruptedException, IOException {
-    byte[] buildFileBytes = FileSystemUtils.readWithKnownFileSize(
-        buildFile, buildFile.getFileSize());
+    byte[] buildFileBytes =
+        FileSystemUtils.readWithKnownFileSize(buildFile, buildFile.getFileSize());
     Globber globber = createLegacyGlobber(buildFile.getParentDirectory(), packageId, locator);
     try {
       return preprocess(buildFile, packageId, buildFileBytes, globber);
@@ -1391,6 +1398,13 @@ public final class PackageFactory {
      */
     public MakeEnvironment.Builder getMakeEnvironment() {
       return pkgBuilder.getMakeEnvironment();
+    }
+
+    /**
+     * Returns the builder of this Package.
+     */
+    public Package.Builder getBuilder() {
+      return pkgBuilder;
     }
   }
 
@@ -1637,6 +1651,7 @@ public final class PackageFactory {
     SkylarkSignatureProcessor.configureSkylarkFunctions(PackageFactory.class);
   }
 
+  /** Empty EnvironmentExtension */
   public static class EmptyEnvironmentExtension implements EnvironmentExtension {
     @Override
     public void update(Environment environment) {}

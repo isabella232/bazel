@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.runtime;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
@@ -24,6 +25,7 @@ import com.google.devtools.build.lib.util.io.OutErr;
 import java.io.PrintStream;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -42,6 +44,8 @@ public abstract class BugReport {
   private static BlazeVersionInfo versionInfo = BlazeVersionInfo.instance();
 
   private static BlazeRuntime runtime = null;
+
+  private static AtomicBoolean alreadyHandlingCrash = new AtomicBoolean(false);
 
   public static void setRuntime(BlazeRuntime newRuntime) {
     Preconditions.checkNotNull(newRuntime);
@@ -65,25 +69,56 @@ public abstract class BugReport {
     logException(exception, filterClientEnv(args), values);
   }
 
-  /**
-   * Print and send a bug report, and exit with the proper Blaze code.
-   */
-  public static void handleCrash(Throwable throwable, String... args) {
+  private static void logCrash(Throwable throwable, String... args) {
     BugReport.sendBugReport(throwable, Arrays.asList(args));
     BugReport.printBug(OutErr.SYSTEM_OUT_ERR, throwable);
     System.err.println("Blaze crash in async thread:");
     throwable.printStackTrace();
+  }
+
+  /**
+   * Print and send a bug report, and exit with the proper Blaze code. Does not exit if called a
+   * second time. This method tries hard to catch any throwables thrown during its execution and
+   * halts the runtime in that case.
+   */
+  public static void handleCrash(Throwable throwable, String... args) {
     int exitCode = getExitCodeForThrowable(throwable);
-    if (runtime != null) {
-      runtime.notifyCommandComplete(exitCode);
-      // We don't call runtime#shutDown() here because all it does is shut down the modules, and who
-      // knows if they can be trusted.
+    try {
+      if (alreadyHandlingCrash.compareAndSet(false, true)) {
+        try {
+          logCrash(throwable, args);
+          if (runtime != null) {
+            runtime.notifyCommandComplete(exitCode);
+            // We don't call runtime#shutDown() here because all it does is shut down the modules,
+            // and who knows if they can be trusted.
+          }
+        } finally {
+          // Avoid shutdown deadlock issues: If an application shutdown hook crashes, it will
+          // trigger our Blaze crash handler (this method). Calling System#exit() here, would
+          // therefore induce a deadlock. This call would block on the shutdown sequence completing,
+          // but the shutdown sequence would in turn be blocked on this thread finishing. Instead,
+          // exit fast via halt().
+          Runtime.getRuntime().halt(exitCode);
+        }
+      } else {
+        logCrash(throwable, args);
+      }
+    } catch (Throwable t) {
+      System.err.println(
+          "An crash occurred while "
+              + Constants.PRODUCT_NAME
+              + " was trying to handle a crash! Please file a bug against "
+              + Constants.PRODUCT_NAME
+              + " and include the information below.");
+
+      System.err.println("Original uncaught exception:");
+      throwable.printStackTrace(System.err);
+
+      System.err.println("Exception encountered during BugReport#handleCrash:");
+      t.printStackTrace(System.err);
+
+      Runtime.getRuntime().halt(exitCode);
     }
-    // Avoid shutdown deadlock issues: If an application shutdown hook crashes, it will trigger our
-    // Blaze crash handler (this method). Calling System#exit() here, would therefore induce a
-    // deadlock. This call would block on the shutdown sequence completing, but the shutdown
-    // sequence would in turn be blocked on this thread finishing. Instead, exit fast via halt().
-    Runtime.getRuntime().halt(exitCode);
   }
 
   /** Get exit code corresponding to throwable. */

@@ -55,6 +55,7 @@ public class AbstractQueueVisitorTest {
     counter.enqueue();
     counter.awaitQuiescence(/*interruptWorkers=*/ false);
     assertSame(10, counter.getCount());
+    assertSame(0, counter.activeParallelTasks());
   }
 
   @Test
@@ -486,7 +487,7 @@ public class AbstractQueueVisitorTest {
     private final Object lock = new Object();
 
     public CountingQueueVisitor() {
-      super(5, 3L, TimeUnit.SECONDS, THREAD_NAME);
+      super(/*parallelism=*/ 5, /*keepAlive=*/ 3L, TimeUnit.SECONDS, THREAD_NAME);
     }
 
     public CountingQueueVisitor(ThreadPoolExecutor executor) {
@@ -519,10 +520,6 @@ public class AbstractQueueVisitorTest {
 
     public ConcreteQueueVisitor() {
       super(5, 3L, TimeUnit.SECONDS, THREAD_NAME);
-    }
-
-    public ConcreteQueueVisitor(boolean failFast) {
-      super(true, 5, 3L, TimeUnit.SECONDS, failFast, THREAD_NAME);
     }
 
     public ConcreteQueueVisitor(boolean failFast, boolean failFastOnInterrupt) {

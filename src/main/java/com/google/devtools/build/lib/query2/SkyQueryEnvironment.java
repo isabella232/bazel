@@ -47,10 +47,14 @@ import com.google.devtools.build.lib.pkgcache.TargetPatternEvaluator;
 import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.query2.engine.AllRdepsFunction;
 import com.google.devtools.build.lib.query2.engine.Callback;
+import com.google.devtools.build.lib.query2.engine.FunctionExpression;
 import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
+import com.google.devtools.build.lib.query2.engine.QueryExpressionMapper;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.AbstractUniquifier;
+import com.google.devtools.build.lib.query2.engine.RdepsFunction;
+import com.google.devtools.build.lib.query2.engine.TargetLiteral;
 import com.google.devtools.build.lib.query2.engine.Uniquifier;
 import com.google.devtools.build.lib.skyframe.FileValue;
 import com.google.devtools.build.lib.skyframe.GraphBackedRecursivePackageProvider;
@@ -101,7 +105,7 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
   // TODO(janakr): Unify with RecursivePackageProviderBackedTargetPatternResolver's constant.
   private static final int BATCH_CALLBACK_SIZE = 10000;
 
-  private WalkableGraph graph;
+  protected WalkableGraph graph;
 
   private ImmutableList<TargetPatternKey> universeTargetPatternKeys;
 
@@ -173,6 +177,42 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
   }
 
   @Override
+  public QueryExpression transformParsedQuery(QueryExpression queryExpression) {
+    // Transform each occurrence of an expressions of the form 'rdeps(<universeScope>, <T>)' to
+    // 'allrdeps(<T>)'. The latter is more efficient.
+    if (universeScope.size() != 1) {
+      return queryExpression;
+    }
+    final TargetPattern.Parser targetPatternParser = new TargetPattern.Parser(parserPrefix);
+    String universeScopePattern = Iterables.getOnlyElement(universeScope);
+    final String absoluteUniverseScopePattern =
+        targetPatternParser.absolutize(universeScopePattern);
+    QueryExpressionMapper rdepsToAllRDepsMapper = new QueryExpressionMapper() {
+      @Override
+      public QueryExpression map(FunctionExpression functionExpression) {
+        if (functionExpression.getFunction().getName().equals(new RdepsFunction().getName())) {
+          List<Argument> args = functionExpression.getArgs();
+          QueryExpression universeExpression = args.get(0).getExpression();
+          if (universeExpression instanceof TargetLiteral) {
+            TargetLiteral literalUniverseExpression = (TargetLiteral) universeExpression;
+            String absolutizedUniverseExpression =
+                targetPatternParser.absolutize(literalUniverseExpression.getPattern());
+            if (absolutizedUniverseExpression.equals(absoluteUniverseScopePattern)) {
+              List<Argument> argsTail = args.subList(1, functionExpression.getArgs().size());
+              return new FunctionExpression(new AllRdepsFunction(), argsTail);
+            }
+          }
+        }
+        return super.map(functionExpression);
+      }
+    };
+    QueryExpression transformedQueryExpression = queryExpression.getMapped(rdepsToAllRDepsMapper);
+    LOG.info(String.format("transformed query [%s] to [%s]", queryExpression,
+        transformedQueryExpression));
+    return transformedQueryExpression;
+  }
+
+  @Override
   public QueryEvalResult evaluateQuery(QueryExpression expr, Callback<Target> callback)
       throws QueryException, InterruptedException {
     // Some errors are reported as QueryExceptions and others as ERROR events (if --keep_going). The
@@ -180,9 +220,7 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
     // errors here.
     eventHandler.resetErrors();
     init();
-    QueryEvalResult result = super.evaluateQuery(expr, callback);
-    graphFactory.afterUse(graph);
-    return result;
+    return super.evaluateQuery(expr, callback);
   }
 
   private Map<Target, Collection<Target>> makeTargetsMap(Map<SkyKey, Iterable<SkyKey>> input) {
@@ -733,7 +771,7 @@ public class SkyQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
       Map<SkyKey, PathFragment> keys = new HashMap<>();
       for (PathFragment pathFragment : currentToOriginal.keySet()) {
         keys.put(
-            PackageLookupValue.key(PackageIdentifier.createInDefaultRepo(pathFragment)),
+            PackageLookupValue.key(PackageIdentifier.createInMainRepo(pathFragment)),
             pathFragment);
       }
       Map<SkyKey, SkyValue> lookupValues = graph.getSuccessfulValues(keys.keySet());

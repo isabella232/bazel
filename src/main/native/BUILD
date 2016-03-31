@@ -52,12 +52,18 @@ cc_binary(
     ],
 )
 
-# HACK for Mac: copy libunix.so to libunix.dylib. We'll need to come up with a
-# way to support platform-specific dynamic library extensions.
+# TODO(bazel-team): Come up with a way to support platform-specific dynamic
+# library extensions.  This is issue #914.
 genrule(
     name = "mac-compat",
     srcs = ["libunix.so"],
     outs = ["libunix.dylib"],
     cmd = "cp $< $@",
     visibility = ["//src:__subpackages__"],
+)
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//src:__pkg__"],
 )

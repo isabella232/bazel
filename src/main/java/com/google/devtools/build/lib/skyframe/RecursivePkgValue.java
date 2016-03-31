@@ -58,8 +58,8 @@ public class RecursivePkgValue implements SkyValue {
   @ThreadSafe
   public static SkyKey key(RepositoryName repositoryName, RootedPath rootedPath,
       ImmutableSet<PathFragment> excludedPaths) {
-    return new SkyKey(SkyFunctions.RECURSIVE_PKG,
-        new RecursivePkgKey(repositoryName, rootedPath, excludedPaths));
+    return SkyKey.create(
+        SkyFunctions.RECURSIVE_PKG, new RecursivePkgKey(repositoryName, rootedPath, excludedPaths));
   }
 
   public NestedSet<String> getPackages() {
@@ -85,6 +85,7 @@ public class RecursivePkgValue implements SkyValue {
         ImmutableSet<PathFragment> excludedPaths) {
       PathFragment.checkAllPathsAreUnder(excludedPaths,
           rootedPath.getRelativePath());
+      Preconditions.checkState(!repositoryName.isDefault());
       this.repositoryName = repositoryName;
       this.rootedPath = Preconditions.checkNotNull(rootedPath);
       this.excludedPaths = Preconditions.checkNotNull(excludedPaths);

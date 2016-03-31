@@ -18,12 +18,11 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.Executor;
-import com.google.devtools.build.lib.analysis.BuildInfoHelper;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Preconditions;
 
@@ -65,8 +64,7 @@ public final class WriteBuildInfoHeaderAction extends AbstractFileWriteAction {
    */
   public WriteBuildInfoHeaderAction(Collection<Artifact> inputs,
       Artifact output, boolean writeVolatileInfo, boolean writeStableInfo) {
-    super(BuildInfoHelper.BUILD_INFO_ACTION_OWNER,
-        inputs, output, /*makeExecutable=*/false);
+    super(ActionOwner.SYSTEM_ACTION_OWNER, inputs, output, /*makeExecutable=*/ false);
     valueArtifacts = ImmutableList.copyOf(inputs);
     if (!inputs.isEmpty()) {
       // With non-empty inputs we should not generate both volatile and non-volatile data
@@ -81,10 +79,10 @@ public final class WriteBuildInfoHeaderAction extends AbstractFileWriteAction {
   }
 
   @Override
-  public DeterministicWriter newDeterministicWriter(EventHandler eventHandler, Executor executor)
+  public DeterministicWriter newDeterministicWriter(ActionExecutionContext ctx)
       throws IOException {
     WorkspaceStatusAction.Context context =
-        executor.getContext(WorkspaceStatusAction.Context.class);
+        ctx.getExecutor().getContext(WorkspaceStatusAction.Context.class);
 
     final Map<String, WorkspaceStatusAction.Key> keys = new LinkedHashMap<>();
     if (writeVolatileInfo) {

@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.bazel.repository;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
+import com.google.devtools.build.lib.bazel.repository.downloader.HttpDownloader;
 import com.google.devtools.build.lib.bazel.rules.workspace.HttpArchiveRule;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
@@ -34,7 +35,7 @@ import java.io.IOException;
  */
 public class HttpArchiveFunction extends RepositoryFunction {
   @Override
-  public boolean isLocal() {
+  public boolean isLocal(Rule rule) {
     return false;
   }
 

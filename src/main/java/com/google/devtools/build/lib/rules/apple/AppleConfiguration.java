@@ -56,6 +56,9 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
   private static final DottedVersion MINIMUM_BITCODE_XCODE_VERSION = DottedVersion.fromString("7");
 
   private final DottedVersion iosSdkVersion;
+  private final DottedVersion watchOsSdkVersion;
+  private final DottedVersion tvOsSdkVersion;
+  private final DottedVersion macOsXSdkVersion;
   private final String iosCpu;
   private final Optional<DottedVersion> xcodeVersion;
   private final ImmutableList<String> iosMultiCpus;
@@ -64,8 +67,16 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
   @Nullable private final Label defaultProvisioningProfileLabel;
 
   AppleConfiguration(AppleCommandLineOptions appleOptions,
-      Optional<DottedVersion> xcodeVersionOverride) {
-    this.iosSdkVersion = Preconditions.checkNotNull(appleOptions.iosSdkVersion, "iosSdkVersion");
+      Optional<DottedVersion> xcodeVersionOverride,
+      DottedVersion iosSdkVersion) {
+    this.iosSdkVersion = Preconditions.checkNotNull(iosSdkVersion, "iosSdkVersion");
+    this.watchOsSdkVersion =
+        Preconditions.checkNotNull(appleOptions.watchOsSdkVersion, "watchOsSdkVersion");
+    this.tvOsSdkVersion =
+        Preconditions.checkNotNull(appleOptions.tvOsSdkVersion, "tvOsSdkVersion");
+    this.macOsXSdkVersion =
+        Preconditions.checkNotNull(appleOptions.macOsXSdkVersion, "macOsXSdkVersion");
+
     this.xcodeVersion = Preconditions.checkNotNull(xcodeVersionOverride);
     this.iosCpu = Preconditions.checkNotNull(appleOptions.iosCpu, "iosCpu");
     this.iosMultiCpus = ImmutableList.copyOf(
@@ -78,10 +89,34 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
 
   /**
    * Returns the SDK version for ios SDKs (whether they be for simulator or device). This is
-   * directly derived from --ios_sdk_version. Format "x.y" (for example, "6.4").
+   * directly derived from --ios_sdk_version.
+   *
+   * @deprecated - use {@link #getSdkVersionForPlatform()}
    */
-  public DottedVersion getIosSdkVersion() {
-    return iosSdkVersion;
+  @Deprecated public DottedVersion getIosSdkVersion() {
+    return getSdkVersionForPlatform(Platform.IOS_DEVICE);
+  }
+
+  /**
+   * Returns the SDK version for a platform (whether they be for simulator or device). This is
+   * directly derived from command line args.
+   */
+  public DottedVersion getSdkVersionForPlatform(Platform platform) {
+    switch (platform) {
+      case IOS_DEVICE:
+      case IOS_SIMULATOR:
+        return iosSdkVersion;
+      case TVOS_DEVICE:
+      case TVOS_SIMULATOR:
+        return tvOsSdkVersion;
+      case WATCHOS_DEVICE:
+      case WATCHOS_SIMULATOR:
+        return watchOsSdkVersion;
+      case MACOS_X:
+        return macOsXSdkVersion;
+    }
+    throw new AssertionError();
+
   }
 
   /**
@@ -137,7 +172,8 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
 
     // TODO(bazel-team): Handle non-ios platforms.
     if (platform == Platform.IOS_DEVICE || platform == Platform.IOS_SIMULATOR) {
-      builder.put(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME, getIosSdkVersion().toString())
+      String sdkVersion = getSdkVersionForPlatform(platform).toString();
+      builder.put(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME, sdkVersion)
           .put(AppleConfiguration.APPLE_SDK_PLATFORM_ENV_NAME, platform.getNameInPlist());
     }
     return builder.build();
@@ -226,8 +262,13 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
     public AppleConfiguration create(ConfigurationEnvironment env, BuildOptions buildOptions)
         throws InvalidConfigurationException {
       AppleCommandLineOptions appleOptions = buildOptions.get(AppleCommandLineOptions.class);
-      Optional<DottedVersion> xcodeVersionFlag = getXcodeVersion(env, appleOptions);
-      AppleConfiguration configuration = new AppleConfiguration(appleOptions, xcodeVersionFlag);
+      XcodeVersionProperties xcodeVersionProperties = getXcodeVersionProperties(env, appleOptions);
+
+      DottedVersion iosSdkVersion = (appleOptions.iosSdkVersion != null)
+          ? appleOptions.iosSdkVersion : xcodeVersionProperties.getDefaultIosSdkVersion();
+      AppleConfiguration configuration =
+          new AppleConfiguration(appleOptions, xcodeVersionProperties.getXcodeVersion(),
+              iosSdkVersion);
 
       validate(configuration);
       return configuration;
@@ -258,15 +299,15 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
     /**
      * Uses the {@link AppleCommandLineOptions#xcodeVersion} and
      * {@link AppleCommandLineOptions#xcodeVersionConfig} command line options to determine and
-     * return the effective xcode version. Returns absent if no explicit xcode version is
-     * declared, and host system defaults should be used.
+     * return the effective xcode version properties. Returns absent if no explicit xcode version
+     * is declared, and host system defaults should be used.
      *
      * @param env the current configuration environment
      * @param appleOptions the command line options
      * @throws InvalidConfigurationException if the options given (or configuration targets) were
      *     malformed and thus the xcode version could not be determined
      */
-    private Optional<DottedVersion> getXcodeVersion(ConfigurationEnvironment env,
+    private XcodeVersionProperties getXcodeVersionProperties(ConfigurationEnvironment env,
         AppleCommandLineOptions appleOptions) throws InvalidConfigurationException {
       Optional<DottedVersion> xcodeVersionCommandLineFlag = 
           Optional.fromNullable(appleOptions.xcodeVersion);

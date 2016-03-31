@@ -424,7 +424,7 @@ public class JavaCompileAction extends AbstractAction {
 
   @Override
   public ResourceSet estimateResourceConsumption(Executor executor) {
-    if (getContext(executor).isRemotable(getMnemonic(), true)) {
+    if (getContext(executor).willExecuteRemotely(true)) {
       return ResourceSet.ZERO;
     }
     return LOCAL_RESOURCES;
@@ -560,7 +560,7 @@ public class JavaCompileAction extends AbstractAction {
       for (Artifact extjar : extdirInputs) {
         extdirs.add(extjar.getExecPath().getParentDirectory());
       }
-      result.add(Joiner.on(configuration.getHostPathSeparator()).join(extdirs)); 
+      result.add(Joiner.on(configuration.getHostPathSeparator()).join(extdirs));
     }
 
     if (!processorPath.isEmpty()) {
@@ -629,7 +629,8 @@ public class JavaCompileAction extends AbstractAction {
     }
     if (targetLabel != null) {
       result.add("--target_label");
-      if (targetLabel.getPackageIdentifier().getRepository().isDefault()) {
+      if (targetLabel.getPackageIdentifier().getRepository().isDefault()
+          || targetLabel.getPackageIdentifier().getRepository().isMain()) {
         result.add(targetLabel.toString());
       } else {
         // @-prefixed strings will be assumed to be filenames and expanded by
@@ -666,7 +667,7 @@ public class JavaCompileAction extends AbstractAction {
    * Builds the list of mappings between jars on the classpath and their
    * originating targets names.
    */
-  private static ImmutableList<String> addJarsToTargets(
+  static ImmutableList<String> addJarsToTargets(
       NestedSet<Artifact> classpath, Collection<Artifact> directJars) {
     ImmutableList.Builder<String> builder = ImmutableList.builder();
     for (Artifact jar : classpath) {
@@ -677,6 +678,7 @@ public class JavaCompileAction extends AbstractAction {
       Label label = getTargetName(jar);
       builder.add(
           label.getPackageIdentifier().getRepository().isDefault()
+              || label.getPackageIdentifier().getRepository().isMain()
               ? label.toString()
               // Escape '@' prefix for .params file.
               : "@" + label);

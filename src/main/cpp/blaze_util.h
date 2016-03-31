@@ -55,9 +55,9 @@ bool ReadFileDescriptor(int fd, string *content);
 // Returns false on failure, sets errno.
 bool WriteFile(const string &content, const string &filename);
 
-// Deletes the file 'filename'.
-// Returns false on failure, sets errno.
-bool DeleteFile(const string &filename);
+// Unlinks the file given by 'file_path'.
+// Returns true on success. In case of failure sets errno.
+bool UnlinkPath(const string &file_path);
 
 // Returns true iff the current terminal can support color and cursor movement.
 bool IsStandardTerminal();
@@ -65,10 +65,6 @@ bool IsStandardTerminal();
 // Returns the number of columns of the terminal to which stdout is
 // connected, or 80 if there is no such terminal.
 int GetTerminalColumns();
-
-// Adds JVM arguments particular to running blaze with JVM v3 or higher.
-void AddJVMSpecificArguments(const string &host_javabase,
-                             std::vector<string> *result);
 
 // If 'arg' matches 'key=value', returns address of 'value'.
 // If it matches 'key' alone, returns address of next_arg.

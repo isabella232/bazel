@@ -28,7 +28,7 @@ message ArtifactLocation {
   string relative_path = 2;
   bool is_source = 3;
 
-  // set for derived artifacts (isSource = false)
+  // set for derived artifacts (is_source = false)
   string root_execution_path_fragment = 4;
 }
 
@@ -46,19 +46,42 @@ message JavaRuleIdeInfo {
   ArtifactLocation jdeps = 5;
 }
 
+message CRuleIdeInfo {
+  repeated ArtifactLocation source = 1;
+  repeated ArtifactLocation exported_header = 2;
+
+  repeated string transitive_include_directory = 3;
+  repeated string transitive_quote_include_directory = 4;
+  repeated string transitive_define = 5;
+  repeated string transitive_system_include_directory = 6;
+
+  repeated string rule_copt = 7;
+  repeated string rule_define = 8;
+  repeated string rule_include = 9;
+}
+
 message AndroidRuleIdeInfo {
   repeated ArtifactLocation resources = 1;
   ArtifactLocation apk = 3;
   repeated ArtifactLocation dependency_apk = 4;
-  ArtifactLocation manifest= 5;
+  ArtifactLocation manifest = 5;
   string java_package = 7;
   bool has_idl_sources = 8;
   LibraryArtifact idl_jar = 9;
   bool generate_resource_class = 10;
+  string legacy_resources = 11;
 }
 
-message AndroidSdkRuleInfo {
-  string android_sdk_path = 1;
+message CToolchainIdeInfo {
+  string target_name = 1;
+  repeated string base_compiler_option = 2;
+  repeated string cpp_option = 3;
+  repeated string c_option = 4;
+  string preprocessor_executable = 5;
+  string cpp_executable = 6;
+  repeated string link_option = 7;
+  repeated string built_in_include_directory = 8;
+  repeated string unfiltered_compiler_option = 9;
 }
 
 message RuleIdeInfo {
@@ -74,6 +97,12 @@ message RuleIdeInfo {
     PROTO_LIBRARY = 8;
     ANDROID_SDK = 9;
     JAVA_PLUGIN = 10;
+    ANDROID_RESOURCES = 11;
+    CC_LIBRARY = 12;
+    CC_BINARY = 13;
+    CC_TEST = 14;
+    CC_INC_LIBRARY = 15;
+    CC_TOOLCHAIN = 16;
   }
 
   string label = 1;
@@ -81,9 +110,6 @@ message RuleIdeInfo {
   // deprecated -- this is not machine agnostic and will be removed in a future release
   string build_file = 3 [deprecated=true];
   repeated string dependencies = 4;
-
-  // kind is ANDROID_SDK
-  AndroidSdkRuleInfo android_sdk_rule_info = 6;
 
   // kind is one of {JAVA,ANDROID}_{LIBRARY,BINARY,TEST} and JAVA_IMPORT
   JavaRuleIdeInfo java_rule_ide_info = 7;
@@ -93,4 +119,7 @@ message RuleIdeInfo {
   repeated string runtime_deps = 10;
 
   ArtifactLocation build_file_artifact_location = 11;
+
+  CRuleIdeInfo c_rule_ide_info = 12;
+  CToolchainIdeInfo c_toolchain_ide_info = 13;
 }

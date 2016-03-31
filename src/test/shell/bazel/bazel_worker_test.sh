@@ -27,24 +27,7 @@ source $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-setup.sh \
 example_worker=$(find $TEST_SRCDIR -name ExampleWorker_deploy.jar)
 
 function set_up() {
-  workers=$(print_workers)
-  if [[ ! -z "${workers}" ]]; then
-    kill $workers
-
-    # Wait at most 3 seconds for all workers to shut down.
-    for i in 0 1 2 3; do
-      still_running_workers=$(for pid in $workers; do ps -p $pid | sed 1d; done)
-
-      if [[ ! -z "${still_running_workers}" ]]; then
-        if [[ $i -eq 3 ]]; then
-          kill -TERM $still_running_workers
-        fi
-
-        sleep 1
-      fi
-    done
-  fi
-
+  bazel build --worker_quit_after_build
   assert_workers_not_running
 }
 
@@ -90,23 +73,6 @@ function print_workers() {
   pgrep -P $pid || true
 }
 
-function shutdown_and_print_unkilled_workers() {
-  workers=$(print_workers)
-  bazel shutdown || fail "shutdown failed"
-
-  # Wait at most 10 seconds for all workers to shut down, then print the remaining (if any).
-  for i in 0 1 2 3 4 5 6 7 8 9; do
-    still_running_workers=$(for pid in $workers; do ps -p $pid | sed 1d; done)
-    if [[ ! -z "${still_running_workers}" ]]; then
-      sleep 1
-    fi
-  done
-
-  if [ ! -z "$still_running_workers" ]; then
-    fail "Worker processes were still running after shutdown: ${unkilled_workers}"
-  fi
-}
-
 function assert_workers_running() {
   workers=$(print_workers)
   if [[ -z "${workers}" ]]; then
@@ -127,29 +93,6 @@ function test_compiles_hello_library_using_persistent_javac() {
   bazel build --strategy=Javac=worker //java/main:main || fail "build failed"
   bazel-bin/java/main/main | grep -q "Hello, Library!;Hello, World!" \
     || fail "comparison failed"
-  assert_workers_running
-  shutdown_and_print_unkilled_workers
-}
-
-function test_incremental_heuristic() {
-  write_hello_library_files
-
-  # Default strategy is assumed to not use workers.
-  bazel build //java/main:main || fail "build failed"
-  assert_workers_not_running
-
-  # No workers used, because too many files changed.
-  echo '// hello '>> java/hello_library/HelloLibrary.java
-  echo '// hello' >> java/main/Main.java
-  bazel build --worker_max_changed_files=1 --strategy=Javac=worker //java/main:main \
-    || fail "build failed"
-  assert_workers_not_running
-
-  # Workers used, because changed number of files is less-or-equal to --worker_max_changed_files=2.
-  echo '// again '>> java/hello_library/HelloLibrary.java
-  echo '// again' >> java/main/Main.java
-  bazel build --worker_max_changed_files=2 --strategy=Javac=worker //java/main:main \
-    || fail "build failed"
   assert_workers_running
 }
 

@@ -41,6 +41,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import javax.annotation.Nullable;
+
 /**
  * Tests {@link ArtifactFactory}. Also see {@link ArtifactTest} for a test
  * of individual artifacts.
@@ -79,11 +81,11 @@ public class ArtifactFactoryTest {
     outRoot = Root.asDerivedRoot(execRoot, execRoot.getRelative("out-root/x/bin"));
 
     fooPath = new PathFragment("foo");
-    fooPackage = PackageIdentifier.createInDefaultRepo(fooPath);
+    fooPackage = PackageIdentifier.createInMainRepo(fooPath);
     fooRelative = fooPath.getRelative("foosource.txt");
 
     barPath = new PathFragment("foo/bar");
-    barPackage = PackageIdentifier.createInDefaultRepo(barPath);
+    barPackage = PackageIdentifier.createInMainRepo(barPath);
     barRelative = barPath.getRelative("barsource.txt");
 
     alienPath = new PathFragment("external/alien");
@@ -152,7 +154,7 @@ public class ArtifactFactoryTest {
     // We need a package in the root directory to make every exec path (even one with up-level
     // references) be in a package.
     Map<PackageIdentifier, Root> packageRoots = ImmutableMap.of(
-        PackageIdentifier.createInDefaultRepo(new PathFragment("")), clientRoot);
+        PackageIdentifier.createInMainRepo(new PathFragment("")), clientRoot);
     artifactFactory.setPackageRoots(packageRoots);
     PathFragment outsideWorkspace = new PathFragment("../foo");
     PathFragment insideWorkspace =
@@ -250,38 +252,12 @@ public class ArtifactFactoryTest {
       }
       return result;
     }
-  }
-
-  @Test
-  public void testArtifactDeserializationWithoutReusedArtifacts() throws Exception {
-    PathFragment derivedPath = outRoot.getExecPath().getRelative("fruit/banana");
-    artifactFactory.clear();
-    artifactFactory.setDerivedArtifactRoots(ImmutableList.of(outRoot));
-    MockPackageRootResolver rootResolver = new MockPackageRootResolver();
-    rootResolver.setPackageRoots(
-        ImmutableMap.of(PackageIdentifier.createInDefaultRepo(""), clientRoot));
-    Artifact artifact1 = artifactFactory.deserializeArtifact(derivedPath, rootResolver);
-    Artifact artifact2 = artifactFactory.deserializeArtifact(derivedPath, rootResolver);
-    assertEquals(artifact1, artifact2);
-    assertNull(artifact1.getOwner());
-    assertNull(artifact2.getOwner());
-    assertEquals(derivedPath, artifact1.getExecPath());
-    assertEquals(derivedPath, artifact2.getExecPath());
-
-    // Source artifacts are always reused
-    PathFragment sourcePath = clientRoot.getExecPath().getRelative("fruit/mango");
-    artifact1 = artifactFactory.deserializeArtifact(sourcePath, rootResolver);
-    artifact2 = artifactFactory.deserializeArtifact(sourcePath, rootResolver);
-    assertSame(artifact1, artifact2);
-    assertEquals(sourcePath, artifact1.getExecPath());
-  }
-
-  @Test
-  public void testDeserializationWithInvalidPath() throws Exception {
-    artifactFactory.clear();
-    PathFragment randomPath = new PathFragment("maracuja/lemon/kiwi");
-    Artifact artifact = artifactFactory.deserializeArtifact(randomPath,
-        new MockPackageRootResolver());
-    assertNull(artifact);
+    
+    @Override
+    @Nullable
+    public Map<PathFragment, Root> findPackageRoots(Iterable<PathFragment> execPaths)
+        throws PackageRootResolutionException {
+      return null; // unused
+    }
   }
 }

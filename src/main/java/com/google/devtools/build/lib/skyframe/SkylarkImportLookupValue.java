@@ -69,6 +69,7 @@ public class SkylarkImportLookupValue implements SkyValue {
 
     public SkylarkImportLookupKey(Label importLabel, boolean inWorkspace) {
       Preconditions.checkNotNull(importLabel);
+      Preconditions.checkArgument(!importLabel.getPackageIdentifier().getRepository().isDefault());
       this.importLabel = importLabel;
       this.inWorkspace = inWorkspace;
     }
@@ -93,7 +94,7 @@ public class SkylarkImportLookupValue implements SkyValue {
   }
 
   static SkyKey key(Label importLabel, boolean inWorkspace) {
-    return new SkyKey(
+    return SkyKey.create(
         SkyFunctions.SKYLARK_IMPORTS_LOOKUP, new SkylarkImportLookupKey(importLabel, inWorkspace));
   }
 }

@@ -88,7 +88,6 @@ public class JavaOptions extends FragmentOptions {
     }
   }
 
-
   /** Converter for --singlejar_top. */
   public static class SingleJarConverter extends DefaultLabelConverter {
     public SingleJarConverter() {
@@ -234,6 +233,14 @@ public class JavaOptions extends FragmentOptions {
       help = "No-op. Kept here for backwards compatibility.")
   public boolean useSourceIjars;
 
+  @Option(
+    name = "experimental_java_header_compilation",
+    defaultValue = "false",
+    category = "undocumented",
+    help = "Experimental: compile ijars directly from source."
+  )
+  public boolean headerCompilation;
+
   @Deprecated
   @Option(name = "experimental_incremental_ijars",
       defaultValue = "false",
@@ -288,13 +295,6 @@ public class JavaOptions extends FragmentOptions {
       converter = JavaBuilderConverter.class,
       help = "Label of the filegroup that contains the JavaBuilder jar.")
   public Label javaBuilderTop;
-
-  @Option(name = "javabuilder_jvmopt",
-      allowMultiple = true,
-      defaultValue = "",
-      category = "undocumented",
-      help = "Additional options to pass to the JVM when invoking JavaBuilder.")
-  public List<String> javaBuilderJvmOpts;
 
   @Option(name = "singlejar_top",
       defaultValue = "",
@@ -398,7 +398,7 @@ public class JavaOptions extends FragmentOptions {
   public JavaOptimizationMode javaOptimizationMode;
 
   @Option(name = "legacy_bazel_java_test",
-      defaultValue = "true",
+      defaultValue = "false",
       category = "undocumented",
       help = "Use the legacy mode of Bazel for java_test.")
   public boolean legacyBazelJavaTest;
@@ -413,6 +413,7 @@ public class JavaOptions extends FragmentOptions {
     host.javacOpts = javacOpts;
     host.javaLangtoolsJar = javaLangtoolsJar;
     host.javacExtdir = javacExtdir;
+    host.headerCompilation = headerCompilation;
     host.javaBuilderTop = javaBuilderTop;
     host.javaToolchain = javaToolchain;
     host.singleJarTop = singleJarTop;

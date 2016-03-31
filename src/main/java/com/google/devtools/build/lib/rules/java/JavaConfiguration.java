@@ -127,9 +127,9 @@ public final class JavaConfiguration extends Fragment {
   private final ImmutableList<String> commandLineJavacFlags;
   private final Label javaLauncherLabel;
   private final Label javaBuilderTop;
-  private final ImmutableList<String> defaultJavaBuilderJvmOpts;
   private final Label javaLangtoolsJar;
   private final boolean useIjars;
+  private final boolean useHeaderCompilation;
   private final boolean generateJavaDeps;
   private final JavaClasspathMode experimentalJavaClasspath;
   private final ImmutableList<String> javaWarns;
@@ -151,16 +151,15 @@ public final class JavaConfiguration extends Fragment {
   private final boolean legacyBazelJavaTest;
 
   JavaConfiguration(boolean generateJavaDeps,
-      List<String> defaultJvmFlags, JavaOptions javaOptions, Label javaToolchain, String javaCpu,
-      ImmutableList<String> defaultJavaBuilderJvmOpts)
+      List<String> defaultJvmFlags, JavaOptions javaOptions, Label javaToolchain, String javaCpu)
           throws InvalidConfigurationException {
     this.commandLineJavacFlags =
         ImmutableList.copyOf(JavaHelper.tokenizeJavaOptions(javaOptions.javacOpts));
     this.javaLauncherLabel = javaOptions.javaLauncher;
     this.javaBuilderTop = javaOptions.javaBuilderTop;
-    this.defaultJavaBuilderJvmOpts = defaultJavaBuilderJvmOpts;
     this.javaLangtoolsJar = javaOptions.javaLangtoolsJar;
     this.useIjars = javaOptions.useIjars;
+    this.useHeaderCompilation = javaOptions.headerCompilation;
     this.generateJavaDeps = generateJavaDeps;
     this.experimentalJavaClasspath = javaOptions.experimentalJavaClasspath;
     this.javaWarns = ImmutableList.copyOf(javaOptions.javaWarns);
@@ -221,13 +220,6 @@ public final class JavaConfiguration extends Fragment {
   }
 
   /**
-   * Returns the default JVM flags to be used when invoking javabuilder.
-   */
-  public ImmutableList<String> getDefaultJavaBuilderJvmFlags() {
-    return defaultJavaBuilderJvmOpts;
-  }
-
-  /**
    * Returns the default java langtools jar
    */
   public Label getDefaultJavaLangtoolsJar() {
@@ -239,6 +231,11 @@ public final class JavaConfiguration extends Fragment {
    */
   public boolean getUseIjars() {
     return useIjars;
+  }
+
+  /** Returns true iff Java header compilation is enabled. */
+  public boolean useHeaderCompilation() {
+    return useHeaderCompilation;
   }
 
   /**

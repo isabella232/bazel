@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import static com.google.devtools.build.lib.packages.Attribute.ANY_RULE;
 import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition.HOST;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
@@ -35,6 +36,7 @@ import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
+import com.google.devtools.build.lib.analysis.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -50,7 +52,6 @@ import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain.RequiresXcodeConfigRule;
-import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
@@ -67,9 +68,6 @@ public class ObjcRuleClasses {
   static final String DSYMUTIL = "dsymutil";
   static final String LIPO = "lipo";
   static final String STRIP = "strip";
-
-  private static final DottedVersion MIN_LAUNCH_STORYBOARD_OS_VERSION =
-      DottedVersion.fromString("8.0");
 
   private ObjcRuleClasses() {
     throw new UnsupportedOperationException("static-only");
@@ -190,31 +188,6 @@ public class ObjcRuleClasses {
   }
 
   /**
-   * Returns {@code true} if the given rule context has a launch storyboard set and the given
-   * {@code iosMinimumOs} supports launch storyboards.
-   */
-  static boolean useLaunchStoryboard(RuleContext ruleContext, DottedVersion iosMinimumOs) {
-    if (!ruleContext.attributes().has("launch_storyboard", LABEL)) {
-      return false;
-    }
-    Artifact launchStoryboard =
-        ruleContext.getPrerequisiteArtifact("launch_storyboard", Mode.TARGET);
-    return launchStoryboard != null
-        && iosMinimumOs.compareTo(MIN_LAUNCH_STORYBOARD_OS_VERSION) >= 0;
-  }
-
-  /**
-   * Returns {@code true} if the given rule context has a launch storyboard set and its
-   * configuration (--ios_minimum_os) supports launch storyboards.
-   */
-  static boolean useLaunchStoryboard(RuleContext ruleContext) {
-    // We check launch_storyboard before retrieving the minimum os from the configuration,
-    // allowing this to be invoked even in contexts which do not depend on ObjcConfiguration.
-    return (ruleContext.attributes().has("launch_storyboard", LABEL)
-        && useLaunchStoryboard(ruleContext, objcConfiguration(ruleContext).getMinimumOs()));
-  }
-
-  /**
    * Attributes for {@code objc_*} rules that have compiler options.
    */
   public static class CoptsRule implements RuleDefinition {
@@ -240,37 +213,6 @@ public class ObjcRuleClasses {
     public Metadata getMetadata() {
       return RuleDefinition.Metadata.builder()
           .name("$objc_opts_rule")
-          .type(RuleClassType.ABSTRACT)
-          .build();
-    }
-  }
-
-  /**
-   * Common attributes for {@code objc_*} rules that use plists or copts.
-   */
-  public static class OptionsRule implements RuleDefinition {
-    @Override
-    public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
-      return builder
-          // TODO(bazel-team): Remove options and replace with: (a) a plists attribute (instead of
-          // the current infoplist, defined on all rules and propagated to the next bundling rule)
-          // and (b) a way to share copts e.g. by being able to include constants across package
-          // boundaries in bazel.
-          //
-          // For now the semantics of this attribute are: any copts in the options will be used if
-          // defined on a compiling/linking rule, otherwise ignored. Infoplists are merged in if
-          // defined on a bundling rule, otherwise ignored.
-          .add(attr("options", LABEL)
-              .undocumented("objc_options will be removed")
-              .allowedFileTypes()
-              .allowedRuleClasses("objc_options"))
-          .build();
-    }
-
-    @Override
-    public Metadata getMetadata() {
-      return RuleDefinition.Metadata.builder()
-          .name("$objc_options_rule")
           .type(RuleClassType.ABSTRACT)
           .build();
     }
@@ -515,7 +457,7 @@ public class ObjcRuleClasses {
           .add(attr("$xcodegen", LABEL).cfg(HOST).exec()
               .value(env.getToolsLabel("//tools/objc:xcodegen")))
           .add(attr("$dummy_source", LABEL)
-              .value(env.getToolsLabel("//tools/objc:dummy.c")))
+              .value(env.getToolsLabel("//tools/objc:objc_dummy.mm")))
           .build();
     }
     @Override
@@ -637,8 +579,11 @@ public class ObjcRuleClasses {
           /* <!-- #BLAZE_RULE($objc_compiling_rule).ATTRIBUTE(pch) -->
            Header file to prepend to every source file being compiled (both arc
            and non-arc).
-           Note that the file will not be precompiled - this is simply a
-           convenience, not a build-speed enhancement.
+           Use of pch files is actively discouraged in BUILD files, and this should be
+           considered deprecated. Since pch files are not actually precompiled this is not
+           a build-speed enhancement, and instead is just a global dependency. From a build
+           efficiency point of view you are actually better including what you need directly
+           in your sources where you need it.
            <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
           .add(attr("pch", LABEL).direct_compile_time_input().allowedFileTypes(FileType.of(".pch")))
           /* <!-- #BLAZE_RULE($objc_compiling_rule).ATTRIBUTE(deps) -->
@@ -663,7 +608,7 @@ public class ObjcRuleClasses {
           /* <!-- #BLAZE_RULE($objc_compiling_rule).ATTRIBUTE(defines) -->
            Extra <code>-D</code> flags to pass to the compiler. They should be in
            the form <code>KEY=VALUE</code> or simply <code>KEY</code> and are
-           passed not only the compiler for this target (as <code>copts</code>
+           passed not only to the compiler for this target (as <code>copts</code>
            are) but also to all <code>objc_</code> dependers of this target.
            Subject to <a href="make-variables.html">"Make variable"</a> substitution and
            <a href="common-definitions.html#sh-tokenization">Bourne shell tokenization</a>.
@@ -686,7 +631,6 @@ public class ObjcRuleClasses {
           .ancestors(
               BaseRuleClasses.RuleBase.class,
               CompileDependencyRule.class,
-              OptionsRule.class,
               CoptsRule.class,
               XcrunRule.class)
           .build();
@@ -729,19 +673,20 @@ public class ObjcRuleClasses {
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
-          .add(attr("$dumpsyms", LABEL)
-          .cfg(HOST)
-          .singleArtifact()
-          .value(env.getToolsLabel("//tools/objc:dump_syms")))
-          .add(attr("$j2objc_dead_code_pruner", LABEL)
-              .allowedFileTypes(FileType.of(".py"))
-              .cfg(HOST)
-              .exec()
-              .singleArtifact()
-              .value(env.getToolsLabel("//tools/objc:j2objc_dead_code_pruner")))
-          .add(attr("$dummy_lib", LABEL)
-              .value(env.getToolsLabel("//tools/objc:dummy_lib")))
-        .build();
+          .add(
+              attr("$dumpsyms", LABEL)
+                  .cfg(HOST)
+                  .singleArtifact()
+                  .value(env.getToolsLabel("//tools/osx/crosstool:dump_syms")))
+          .add(
+              attr("$j2objc_dead_code_pruner", LABEL)
+                  .allowedFileTypes(FileType.of(".py"))
+                  .cfg(HOST)
+                  .exec()
+                  .singleArtifact()
+                  .value(env.getToolsLabel("//tools/objc:j2objc_dead_code_pruner")))
+          .add(attr("$dummy_lib", LABEL).value(env.getToolsLabel("//tools/objc:dummy_lib")))
+          .build();
     }
     @Override
     public Metadata getMetadata() {
@@ -757,6 +702,8 @@ public class ObjcRuleClasses {
    * Common attributes for {@code objc_*} rules that create a bundle.
    */
   public static class BundlingRule implements RuleDefinition {
+    static final String INFOPLIST_ATTR = "infoplist";
+
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
@@ -772,7 +719,7 @@ public class ObjcRuleClasses {
              <li><code>${PRODUCT_NAME}</code>: This target's name.
           </ul>
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-          .add(attr("infoplist", LABEL).allowedFileTypes(PLIST_TYPE))
+          .add(attr(INFOPLIST_ATTR, LABEL).allowedFileTypes(PLIST_TYPE))
           /* <!-- #BLAZE_RULE($objc_bundling_rule).ATTRIBUTE(infoplists) -->
            Infoplist files to be merged. The merged output corresponds to <i>appname</i>-Info.plist
            in Xcode projects.  Duplicate keys between infoplist files will cause an error if
@@ -820,8 +767,11 @@ public class ObjcRuleClasses {
       return RuleDefinition.Metadata.builder()
           .name("$objc_bundling_rule")
           .type(RuleClassType.ABSTRACT)
-          .ancestors(OptionsRule.class, ResourceToolsRule.class, XcrunRule.class,
-              AppleToolchain.RequiresXcodeConfigRule.class)
+          .ancestors(
+              AppleToolchain.RequiresXcodeConfigRule.class,
+              ResourcesRule.class,
+              ResourceToolsRule.class,
+              XcrunRule.class)
           .build();
     }
   }
@@ -969,16 +919,56 @@ public class ObjcRuleClasses {
   }
 
   /**
+   * Common attributes for {@code objc_*} rules that create a signed IPA.
+   */
+  public static class IpaRule implements RuleDefinition {
+    @Override
+    public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+      return builder
+          /* <!-- #BLAZE_RULE($objc_ipa_rule).ATTRIBUTE(ipa_post_processor) -->
+          A tool that edits this target's IPA output after it is assembled but before it is
+          (optionally) signed.
+          <p>
+          The tool is invoked with a single positional argument which represents the path to a
+          directory containing the unzipped contents of the IPA. The only entry in this directory
+          will be the <code>Payload</code> root directory of the IPA. Any changes made by the tool
+          must be made in this directory, whose contents will be (optionally) signed and then
+          zipped up as the final IPA after the tool terminates.
+          <p>
+          The tool's execution must be hermetic given these inputs to ensure that its result can be
+          safely cached.
+          <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
+          .add(
+              attr("ipa_post_processor", LABEL)
+                  .allowedRuleClasses(ANY_RULE)
+                  .allowedFileTypes(FileTypeSet.ANY_FILE)
+                  .exec())
+          .build();
+    }
+
+    @Override
+    public Metadata getMetadata() {
+      return RuleDefinition.Metadata.builder()
+          .name("$objc_ipa_rule")
+          .type(RuleClassType.ABSTRACT)
+          .build();
+    }
+  }
+
+  /**
    * Common attributes for {@code objc_*} rules that use the iOS simulator.
    */
   public static class SimulatorRule implements RuleDefinition {
+    static final String IOSSIM_ATTR = "$iossim";
+    static final String STD_REDIRECT_DYLIB_ATTR = "$std_redirect_dylib";
+
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
           // Needed to run the binary in the simulator.
-          .add(attr("$iossim", LABEL).cfg(HOST).exec()
+          .add(attr(IOSSIM_ATTR, LABEL).cfg(HOST).exec()
               .value(env.getToolsLabel("//third_party/iossim:iossim")))
-          .add(attr("$std_redirect_dylib", LABEL).cfg(HOST).exec()
+          .add(attr(STD_REDIRECT_DYLIB_ATTR, LABEL).cfg(HOST).exec()
               .value(env.getToolsLabel("//tools/objc:StdRedirect.dylib")))
           .build();
     }

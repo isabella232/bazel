@@ -20,6 +20,7 @@ import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.DefaultLabelConverter;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration.EmptyToNullLabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
@@ -43,17 +44,29 @@ import java.util.List;
 @Immutable
 public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
-  /** Converter for --android_crosstool_top. */
-  public static class AndroidCrosstoolTopConverter extends DefaultLabelConverter {
-    public AndroidCrosstoolTopConverter() {
-      super(Constants.ANDROID_DEFAULT_CROSSTOOL);
-    }
-  }
-
   /** Converter for --android_sdk. */
   public static class AndroidSdkConverter extends DefaultLabelConverter {
     public AndroidSdkConverter() {
       super(Constants.ANDROID_DEFAULT_SDK);
+    }
+  }
+
+  /**
+   * Converter for {@link com.google.devtools.build.lib.rules.android.AndroidConfiguration.ConfigurationDistinguisher}
+   */
+  public static final class ConfigurationDistinguisherConverter
+      extends EnumConverter<ConfigurationDistinguisher> {
+    public ConfigurationDistinguisherConverter() {
+      super(ConfigurationDistinguisher.class, "Android configuration distinguisher");
+    }
+  }
+
+  /**
+   * Converter for {@link IncrementalDexing}.
+   */
+  public static final class IncrementalDexingConverter extends EnumConverter<IncrementalDexing> {
+    public IncrementalDexingConverter() {
+      super(IncrementalDexing.class, "use incremental dexing");
     }
   }
 
@@ -79,14 +92,9 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     }
   }
 
-  /**
-   * Converter for {@link com.google.devtools.build.lib.rules.android.AndroidConfiguration.ConfigurationDistinguisher}
-   */
-  public static final class ConfigurationDistinguisherConverter
-      extends EnumConverter<ConfigurationDistinguisher> {
-    public ConfigurationDistinguisherConverter() {
-      super(ConfigurationDistinguisher.class, "Android configuration distinguisher");
-    }
+  /** When to use incremental dexing (using {@link DexArchiveProvider}). */
+  public enum IncrementalDexing {
+    OFF, WITH_DEX_SHARDS,
   }
 
   /**
@@ -109,9 +117,9 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     public boolean incrementalNativeLibs;
 
     @Option(name = "android_crosstool_top",
-        defaultValue = "",
+        defaultValue = "//external:android/crosstool",
         category = "semantics",
-        converter = AndroidCrosstoolTopConverter.class,
+        converter = EmptyToNullLabelConverter.class,
         help = "The location of the C++ compiler used for Android builds.")
     public Label androidCrosstoolTop;
 
@@ -179,6 +187,41 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
         help = "Enables sanity checks for Jack and Jill compilation.")
     public boolean jackSanityChecks;
 
+    // Do not use on the command line.
+    // The idea is that once this option works, we'll flip the default value in a config file, then
+    // once it is proven that it works, remove it from Bazel and said config file.
+    @Option(name = "experimental_incremental_dexing",
+        defaultValue = "off",
+        category = "undocumented",
+        converter = IncrementalDexingConverter.class,
+        help = "Does most of the work for dexing separately for each Jar file.  Incompatible with "
+            + "Jack and Jill.")
+    public IncrementalDexing dexingStrategy;
+
+    @Option(name = "non_incremental_per_target_dexopts",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "--no-locals",
+        category = "undocumented",
+        help = "dx flags that that prevent incremental dexing for binary targets that list any of "
+            + "the flags listed here in their 'dexopts' attribute, which are ignored with "
+            + "incremental dexing.  Defaults to --no-locals for safety but can in general be used "
+            + "to make sure the listed dx flags are honored, with additional build latency.  "
+            + "Please notify us if you find yourself needing this flag.")
+    public List<String> nonIncrementalPerTargetDexopts;
+
+    @Option(name = "experimental_allow_android_library_deps_without_srcs",
+        defaultValue = "true",
+        category = "undocumented",
+        help = "Flag to help transition from allowing to disallowing srcs-less android_library"
+            + " rules with deps. The depot needs to be cleaned up to roll this out by default.")
+    public boolean allowAndroidLibraryDepsWithoutSrcs;
+
+    @Option(name = "experimental_android_resource_shrinking",
+        defaultValue = "false",
+        category = "undocumented",
+        help = "Enables resource shrinking for android_binary APKs that use proguard.")
+    public boolean useAndroidResourceShrinking;
+
     @Override
     public void addAllLabels(Multimap<String, Label> labelMap) {
       if (androidCrosstoolTop != null) {
@@ -186,6 +229,13 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       }
 
       labelMap.put("android_sdk", sdk);
+    }
+
+    @Override
+    public FragmentOptions getHost(boolean fallback) {
+      Options host = (Options) super.getHost(fallback);
+      host.androidCrosstoolTop = androidCrosstoolTop;
+      return host;
     }
 
     // This method is here because Constants.ANDROID_DEFAULT_FAT_APK_CPUS cannot be a constant
@@ -240,6 +290,10 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   private final ConfigurationDistinguisher configurationDistinguisher;
   private final boolean useJackForDexing;
   private final boolean jackSanityChecks;
+  private final IncrementalDexing dexingStrategy;
+  private final ImmutableList<String> targetDexoptsThatPreventIncrementalDexing;
+  private final boolean allowAndroidLibraryDepsWithoutSrcs;
+  private final boolean useAndroidResourceShrinking;
 
   AndroidConfiguration(Options options) {
     this.sdk = options.sdk;
@@ -251,6 +305,11 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     this.configurationDistinguisher = options.configurationDistinguisher;
     this.useJackForDexing = options.useJackForDexing;
     this.jackSanityChecks = options.jackSanityChecks;
+    this.dexingStrategy = options.dexingStrategy;
+    this.targetDexoptsThatPreventIncrementalDexing =
+        ImmutableList.copyOf(options.nonIncrementalPerTargetDexopts);
+    this.allowAndroidLibraryDepsWithoutSrcs = options.allowAndroidLibraryDepsWithoutSrcs;
+    this.useAndroidResourceShrinking = options.useAndroidResourceShrinking;
   }
 
   public String getCpu() {
@@ -290,6 +349,30 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   public boolean useIncrementalNativeLibs() {
     return incrementalNativeLibs;
+  }
+
+  /**
+   * Returns when to use incremental dexing using {@link DexArchiveProvider}.  Note this is disabled
+   * if {@link #isJackUsedForDexing()}.
+   */
+  public IncrementalDexing getIncrementalDexing() {
+    return isJackUsedForDexing() ? IncrementalDexing.OFF : dexingStrategy;
+  }
+
+  /**
+   * Regardless of {@link #getIncrementalDexing}, incremental dexing must not be used for binaries
+   * that list any of these flags in their {@code dexopts} attribute.
+   */
+  public ImmutableList<String> getTargetDexoptsThatPreventIncrementalDexing() {
+    return targetDexoptsThatPreventIncrementalDexing;
+  }
+
+  public boolean allowSrcsLessAndroidLibraryDeps() {
+    return allowAndroidLibraryDepsWithoutSrcs;
+  }
+
+  public boolean useAndroidResourceShrinking() {
+    return useAndroidResourceShrinking;
   }
 
   @Override

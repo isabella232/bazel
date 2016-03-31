@@ -47,6 +47,7 @@ import org.objectweb.asm.util.TraceClassVisitor;
 import java.io.BufferedInputStream;
 import java.io.IOError;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -85,7 +86,7 @@ import javax.tools.StandardLocation;
 @RunWith(JUnit4.class)
 public class JavacTurbineTest {
 
-  @Rule public TemporaryFolder temp = new TemporaryFolder();
+  @Rule public final TemporaryFolder temp = new TemporaryFolder();
 
   Path sourcedir;
   List<Path> sources;
@@ -93,7 +94,7 @@ public class JavacTurbineTest {
   Path output;
   Path outputDeps;
 
-  TurbineOptions.Builder optionsBuilder = TurbineOptions.builder();
+  final TurbineOptions.Builder optionsBuilder = TurbineOptions.builder();
 
   @Before
   public void setUp() throws IOException {
@@ -828,5 +829,147 @@ public class JavacTurbineTest {
       assertThat(result).isEqualTo(Result.ERROR);
       assertThat(sw.toString()).contains("error reading");
     }
+  }
+
+  @Test
+  public void requiredConstructor() throws Exception {
+    addSourceLines("Super.java", "class Super {", "  public Super(int x) {}", "}");
+    addSourceLines(
+        "Hello.java",
+        "class Hello extends Super {",
+        "  public Hello() {",
+        "    super(42);",
+        "  }",
+        "}");
+
+    compile();
+
+    Map<String, byte[]> outputs = collectOutputs();
+
+    assertThat(outputs.keySet()).containsExactly("Super.class", "Hello.class");
+
+    String text = textify(outputs.get("Hello.class"));
+    String[] expected = {
+      "// class version 51.0 (51)",
+      "// access flags 0x20",
+      "class Hello extends Super  {",
+      "",
+      "",
+      "  // access flags 0x1",
+      "  public <init>()V",
+      "}",
+      ""
+    };
+    assertThat(text).isEqualTo(Joiner.on('\n').join(expected));
+  }
+
+  @Test
+  public void annotationDeclaration() throws Exception {
+    addSourceLines(
+        "Anno.java",
+        "import java.lang.annotation.Retention;",
+        "import java.lang.annotation.RetentionPolicy;",
+        "@Retention(RetentionPolicy.RUNTIME)",
+        "@interface Anno {",
+        "  public int value() default CONST;",
+        "  int CONST = 42;",
+        "  int NONCONST = new Integer(42);",
+        "}");
+    addSourceLines("Hello.java", "@Anno(value=Anno.CONST)", "class Hello {", "}");
+
+    compile();
+
+    Map<String, byte[]> outputs = collectOutputs();
+
+    assertThat(outputs.keySet()).containsExactly("Anno.class", "Hello.class");
+
+    String text = textify(outputs.get("Hello.class"));
+    String[] expected = {
+      "// class version 51.0 (51)",
+      "// access flags 0x20",
+      "class Hello {",
+      "",
+      "",
+      "  @LAnno;(value=42)",
+      "",
+      "  // access flags 0x0",
+      "  <init>()V",
+      "}",
+      ""
+    };
+    assertThat(text).isEqualTo(Joiner.on('\n').join(expected));
+  }
+
+  @SupportedAnnotationTypes("*")
+  public static class HostClasspathProcessor extends AbstractProcessor {
+
+    @Override
+    public SourceVersion getSupportedSourceVersion() {
+      return SourceVersion.latest();
+    }
+
+    boolean first = true;
+
+    @Override
+    public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+      if (!first) {
+        return false;
+      }
+      first = false;
+
+      String message;
+      try {
+        JavacTurbine.class.toString();
+        message = "ok";
+      } catch (Throwable e) {
+        StringWriter stringWriter = new StringWriter();
+        e.printStackTrace(new PrintWriter(stringWriter));
+        message = stringWriter.toString();
+      }
+      try {
+        FileObject fileObject =
+            processingEnv
+                .getFiler()
+                .createResource(StandardLocation.CLASS_OUTPUT, "", "result.txt");
+        try (OutputStream os = fileObject.openOutputStream()) {
+          os.write(message.getBytes(StandardCharsets.UTF_8));
+        }
+      } catch (IOException e) {
+        throw new IOError(e);
+      }
+      return false;
+    }
+  }
+
+  @Test
+  public void maskProcessorClasspath() throws Exception {
+    addSourceLines("MyAnnotation.java", "public @interface MyAnnotation {}");
+    addSourceLines("Hello.java", "@MyAnnotation class Hello {}");
+
+    // create a jar containing only HostClasspathProcessor
+    Path processorJar = temp.newFile("libprocessor.jar").toPath();
+    try (OutputStream os = Files.newOutputStream(processorJar);
+        JarOutputStream jos = new JarOutputStream(os)) {
+      String classFileName = HostClasspathProcessor.class.getName().replace('.', '/') + ".class";
+      jos.putNextEntry(new JarEntry(classFileName));
+      try (InputStream is = getClass().getClassLoader().getResourceAsStream(classFileName)) {
+        ByteStreams.copy(is, jos);
+      }
+    }
+
+    optionsBuilder.setProcessors(ImmutableList.of(HostClasspathProcessor.class.getName()));
+    optionsBuilder.addProcessorPathEntries(ImmutableList.of(processorJar.toString()));
+    optionsBuilder.addClassPathEntries(ImmutableList.<String>of());
+
+    compile();
+
+    Map<String, byte[]> outputs = collectOutputs();
+    assertThat(outputs.keySet()).contains("result.txt");
+
+    String text = new String(outputs.get("result.txt"), StandardCharsets.UTF_8);
+    assertThat(text)
+        .contains(
+            "java.lang.NoClassDefFoundError:"
+                + " com/google/devtools/build/java/turbine/javac/JavacTurbine");
   }
 }

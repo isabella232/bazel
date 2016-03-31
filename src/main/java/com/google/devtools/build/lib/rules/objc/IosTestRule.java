@@ -18,6 +18,7 @@ import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTran
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.BundlingRule;
 import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
@@ -28,6 +29,7 @@ import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
+import com.google.devtools.build.lib.packages.Attribute.LateBoundLabel;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundLabelList;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
@@ -49,6 +51,7 @@ public class IosTestRule implements RuleDefinition {
   public RuleClass build(RuleClass.Builder builder, final RuleDefinitionEnvironment env) {
     final ImmutableList<Label> gcov =
         ImmutableList.of(env.getToolsLabel("//tools/objc:gcov"));
+    final Label mcov = env.getToolsLabel("//tools/objc:mcov");
     return builder
         .requiresConfigurationFragments(
             ObjcConfiguration.class, J2ObjcConfiguration.class, AppleConfiguration.class)
@@ -62,31 +65,29 @@ public class IosTestRule implements RuleDefinition {
         <!-- #END_BLAZE_RULE.IMPLICIT_OUTPUTS -->*/
         .setImplicitOutputsFunction(
             ImplicitOutputsFunction.fromFunctions(ReleaseBundlingSupport.IPA, XcodeSupport.PBXPROJ))
-        /* <!-- #BLAZE_RULE(ios_test ).ATTRIBUTE(target_device) -->
+        /* <!-- #BLAZE_RULE(ios_test).ATTRIBUTE(target_device) -->
         The device against which to run the test.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(
             attr(IosTest.TARGET_DEVICE, LABEL)
                 .allowedFileTypes()
                 .allowedRuleClasses("ios_device")
-                .value(
-                    env.getToolsLabel("//tools/objc/sim_devices:default")))
-        /* <!-- #BLAZE_RULE(ios_test ).ATTRIBUTE(xctest) -->
+                .value(env.getToolsLabel("//tools/objc/sim_devices:default")))
+        /* <!-- #BLAZE_RULE(ios_test).ATTRIBUTE(xctest) -->
         Whether this target contains tests using the XCTest testing framework.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .add(attr(IosTest.IS_XCTEST, BOOLEAN).value(true))
-        /* <!-- #BLAZE_RULE(ios_test ).ATTRIBUTE(xctest_app) -->
-        A <code>objc_binary</code> or <code>ios_application</code> target that contains the
-        app bundle to test against in XCTest.
-        This attribute is only valid if <code>xctest</code> is true.
+        .add(attr(IosTest.IS_XCTEST_ATTR, BOOLEAN).value(true))
+        /* <!-- #BLAZE_RULE(ios_test).ATTRIBUTE(xctest_app) -->
+        An <code>ios_application</code> target that contains the app bundle to test against with
+        XCTest. This attribute is only valid if <code>xctest</code> is true.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(
-            attr(IosTest.XCTEST_APP, LABEL)
+            attr(IosTest.XCTEST_APP_ATTR, LABEL)
                 .value(
-                    new ComputedDefault(IosTest.IS_XCTEST) {
+                    new ComputedDefault(IosTest.IS_XCTEST_ATTR) {
                       @Override
                       public Object getDefault(AttributeMap rule) {
-                        return rule.get(IosTest.IS_XCTEST, Type.BOOLEAN)
+                        return rule.get(IosTest.IS_XCTEST_ATTR, Type.BOOLEAN)
                             // No TOOLS_REPOSITORY prefix for the xctest_app tool; xcode projects
                             // referencing a dependency under a repository do not work. Thus,
                             // this target must be available in the target depot.
@@ -95,15 +96,14 @@ public class IosTestRule implements RuleDefinition {
                       }
                     })
                 .allowedFileTypes()
-                // TODO(bazel-team): Remove objc_binary once it stops exporting XcTestAppProvider.
-                .allowedRuleClasses("objc_binary", "ios_application"))
+                .allowedRuleClasses("ios_application"))
         .override(
-            attr("infoplist", LABEL)
+            attr(BundlingRule.INFOPLIST_ATTR, LABEL)
                 .value(
-                    new ComputedDefault(IosTest.IS_XCTEST) {
+                    new ComputedDefault(IosTest.IS_XCTEST_ATTR) {
                       @Override
                       public Object getDefault(AttributeMap rule) {
-                        return rule.get(IosTest.IS_XCTEST, Type.BOOLEAN)
+                        return rule.get(IosTest.IS_XCTEST_ATTR, Type.BOOLEAN)
                             // No TOOLS_REPOSITORY prefix for the xctest_app tool; xcode projects
                             // referencing a dependency under a repository do not work. Thus,
                             // this target must be available in the target depot.
@@ -117,7 +117,7 @@ public class IosTestRule implements RuleDefinition {
         the lab device. Otherwise, the test will run on simulator.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(
-            attr("ios_test_target_device", LABEL)
+            attr(IosTest.TEST_TARGET_DEVICE_ATTR, LABEL)
                 .allowedFileTypes()
                 .allowedRuleClasses("ios_lab_device"))
         /* <!-- #BLAZE_RULE(ios_test).ATTRIBUTE(ios_device_arg) -->
@@ -125,35 +125,50 @@ public class IosTestRule implements RuleDefinition {
         in the form KEY=VALUE or simply KEY (check your device's documentation for allowed
         parameters).
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .add(attr("ios_device_arg", STRING_LIST))
+        .add(attr(IosTest.DEVICE_ARG_ATTR, STRING_LIST))
         /* <!-- #BLAZE_RULE(ios_test).ATTRIBUTE(plugins) -->
         Plugins to pass to the test runner.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .add(attr("plugins", LABEL_LIST).allowedFileTypes(FileType.of("_deploy.jar")))
+        .add(attr(IosTest.PLUGINS_ATTR, LABEL_LIST).allowedFileTypes(FileType.of("_deploy.jar")))
         .add(
-            attr("$test_template", LABEL)
+            attr(IosTest.TEST_TEMPLATE_ATTR, LABEL)
                 .value(env.getToolsLabel("//tools/objc:ios_test.sh.bazel_template")))
         .add(
-            attr("$test_runner", LABEL)
+            attr(IosTest.TEST_RUNNER_ATTR, LABEL)
                 .value(env.getToolsLabel("//tools/objc:testrunner")))
         .add(
-            attr(IosTest.MEMLEAKS_DEP, LABEL)
+            attr(IosTest.MEMLEAKS_DEP_ATTR, LABEL)
                 .value(env.getToolsLabel("//tools/objc/memleaks:memleaks")))
         .add(
-            attr(IosTest.MEMLEAKS_PLUGIN, LABEL)
+            attr(IosTest.MEMLEAKS_PLUGIN_ATTR, LABEL)
                 .value(env.getToolsLabel("//tools/objc:memleaks_plugin")))
         .override(
-            attr(":gcov", LABEL_LIST)
+            attr(IosTest.GCOV_ATTR, LABEL_LIST)
                 .cfg(HOST)
                 .value(
                     new LateBoundLabelList<BuildConfiguration>(gcov) {
                       @Override
-                      public List<Label> getDefault(Rule rule, AttributeMap attributes,
-                          BuildConfiguration configuration) {
+                      public List<Label> getDefault(
+                          Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
                         if (!configuration.isCodeCoverageEnabled()) {
                           return ImmutableList.of();
                         }
                         return gcov;
+                      }
+                    }))
+        .add(
+            attr(IosTest.MCOV_TOOL_ATTR, LABEL)
+                .cfg(HOST)
+                .value(
+                    new LateBoundLabel<BuildConfiguration>(mcov) {
+                      @Override
+                      public Label getDefault(
+                          Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+                        if (!configuration.isCodeCoverageEnabled()) {
+                          return null;
+                        }
+
+                        return mcov;
                       }
                     }))
         .build();

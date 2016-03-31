@@ -5,30 +5,18 @@ filegroup(
     srcs = glob(["**"]) + [
         "//third_party/ijar:srcs",
         "//third_party/iossim:srcs",
+        "//third_party/java/apkbuilder:srcs",
         "//third_party/java/buck-ios-support:srcs",
         "//third_party/java/dd_plist:srcs",
         "//third_party/java/j2objc:srcs",
         "//third_party/java/jarjar:srcs",
         "//third_party/java/jdk/langtools:srcs",
+        "//third_party/protobuf:srcs",
         "//third_party/py/concurrent:srcs",
         "//third_party/py/gflags:srcs",
         "//third_party/py/mock:srcs",
+        "//third_party/py/six:srcs",
     ],
-)
-
-filegroup(
-    name = "protoc",
-    srcs = select({
-        ":windows_mingw": ["protobuf/protoc-mingw.exe"],
-        ":windows_msys64_mingw64": ["protobuf/protoc-mingw.exe"],
-        ":windows_msys64": ["protobuf/protoc-mingw.exe"],
-        ":windows_clang": ["protobuf/protoc-mingw.exe"],
-        ":darwin": ["protobuf/protoc-osx-x86_32.exe"],
-        ":k8": ["protobuf/protoc-linux-x86_64.exe"],
-        ":piii": ["protobuf/protoc-linux-x86_32.exe"],
-        ":arm": ["protobuf/protoc-linux-arm32.exe"],
-        ":freebsd": ["protobuf/protoc-linux-x86_32.exe"],
-    }),
 )
 
 filegroup(
@@ -76,7 +64,7 @@ java_import(
 
 java_import(
     name = "apache_commons_collections",
-    jars = ["apache_commons_collections/commons-collections-3.2.1.jar"],
+    jars = ["apache_commons_collections/commons-collections-3.2.2.jar"],
 )
 
 java_import(
@@ -361,17 +349,6 @@ java_import(
 java_import(
     name = "plexus_utils",
     jars = ["plexus_utils/plexus-utils-3.0.21.jar"],
-)
-
-java_import(
-    name = "protobuf",
-    jars = ["protobuf/protobuf-java-3.0.0-beta-1.jar"],
-)
-
-# For bootstrapping JavaBuilder
-filegroup(
-    name = "protobuf-jars",
-    srcs = ["protobuf/protobuf-java-3.0.0-beta-1.jar"],
 )
 
 java_import(

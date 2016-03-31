@@ -712,11 +712,12 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
     }
 
     postEvent(new ActionStartedEvent(action, actionStartTime));
-    ResourceSet estimate = action.estimateResourceConsumption(executorEngine);
+    ResourceSet estimate =
+        Preconditions.checkNotNull(action.estimateResourceConsumption(executorEngine));
     ActionExecutionStatusReporter statusReporter = statusReporterRef.get();
     ResourceHandle handle = null;
     try {
-      if (estimate == null || estimate == ResourceSet.ZERO) {
+      if (estimate == ResourceSet.ZERO) {
         statusReporter.setRunningFromBuildData(action);
       } else {
         // If estimated resource consumption is null, action will manually call
@@ -735,7 +736,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
     }
   }
 
-  private ActionExecutionException processAndThrow(
+  ActionExecutionException processAndThrow(
       ActionExecutionException e, Action action, FileOutErr outErrBuffer)
       throws ActionExecutionException {
     reportActionExecution(action, e, outErrBuffer);

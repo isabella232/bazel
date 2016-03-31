@@ -139,7 +139,7 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
   /**
    * This enumeration is used for the --strip option.
    */
-  public static enum StripMode {
+  public enum StripMode {
 
     ALWAYS("always"),       // Always strip.
     SOMETIMES("sometimes"), // Strip iff compilationMode == FASTBUILD.
@@ -1193,6 +1193,10 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
    * They may be absolute if they are also installed on the remote build nodes or
    * for local compilation.
    */
+  @SkylarkCallable(name = "built_in_include_directories", structField = true,
+      doc = "Built-in system include paths for the toolchain compiler. All paths in this list"
+      + " should be relative to the exec directory. They may be absolute if they are also installed"
+      + " on the remote build nodes or for local compilation.")
   public List<PathFragment> getBuiltInIncludeDirectories() {
     return builtInIncludeDirectories;
   }
@@ -1699,6 +1703,8 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
    * Returns the path to the GNU binutils 'cpp' binary that should be used
    * by this build. Relative paths are relative to the execution root.
    */
+  @SkylarkCallable(name = "preprocessor_executable", structField = true,
+      doc = "Path to C/C++ preprocessor binary")
   public PathFragment getCpreprocessorExecutable() {
     return getToolPathFragment(CppConfiguration.Tool.CPP);
   }
@@ -1923,10 +1929,10 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
       }
     }
     try {
-      getFdoSupport().prepareToBuild(execRoot, artifactFactory, resolver);
+      getFdoSupport().prepareToBuild(execRoot);
     } catch (ZipException e) {
       throw new ViewCreationFailedException("Error reading provided FDO zip file", e);
-    } catch (FdoException | IOException | PackageRootResolutionException e) {
+    } catch (FdoException | IOException e) {
       throw new ViewCreationFailedException("Error while initializing FDO support", e);
     }
   }

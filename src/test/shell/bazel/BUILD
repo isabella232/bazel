@@ -186,6 +186,14 @@ sh_test(
 )
 
 sh_test(
+    name = "local_repository_test_jdk8",
+    size = "small",
+    srcs = ["local_repository_test_jdk8.sh"],
+    data = [":test-deps"],
+    tags = ["jdk8"],
+)
+
+sh_test(
     name = "external_skylark_load_test",
     size = "large",
     srcs = ["external_skylark_load_test.sh"],
@@ -266,6 +274,7 @@ sh_test(
     size = "large",
     srcs = ["bazel_sandboxing_test.sh"],
     data = [":test-deps"],
+    tags = ["local"],
 )
 
 sh_test(
