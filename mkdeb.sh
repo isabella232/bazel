@@ -29,4 +29,8 @@ cp ./bazel-bin/scripts/bazel-complete.bash $pkg_dir/etc/bash_completion.d/bazel 
 
 # oracle-java8-jdk
 # oracle-java8-installer
-fpm -d oracle-java8-jdk --verbose --debug --prefix / -C $pkg_dir -s dir -t deb -n "bazel" -v 1.0.$(python -c "import time; print time.strftime('%Y%m%d%H%M%S', time.gmtime(time.time()))") usr etc
+timestamp=$(python -c "import time; print time.strftime('%Y%m%d%H%M%S', time.gmtime(time.time()))")
+fpm -d oracle-java8-jdk --verbose --debug --prefix / -C $pkg_dir -s dir -t deb -n "bazel" --provides bazel --conflicts bazel-beta --replaces bazel-beta -v 1.0.$timestamp usr etc
+
+# Beta package
+fpm -d oracle-java8-jdk --verbose --debug --prefix / -C $pkg_dir -s dir -t deb -n "bazel-beta" --provides bazel --conflicts bazel --replaces bazel -v 1.0.$timestamp usr etc
