@@ -735,7 +735,7 @@ bool AfUnixBlazeServer::Connect() {
   struct sockaddr_un addr;
   addr.sun_family = AF_UNIX;
 
-  string socket_file = globals->options.output_base + "/server/server.socket";
+  string socket_file = globals->options.output_base + "/_bazel_server/server.socket";
   char *resolved_path = realpath(socket_file.c_str(), NULL);
   if (resolved_path != NULL) {
     strncpy(addr.sun_path, resolved_path, sizeof addr.sun_path);
@@ -745,7 +745,7 @@ bool AfUnixBlazeServer::Connect() {
     int result = connect(server_socket_, paddr, sizeof addr);
     connected_ = result == 0;
     if (connected_) {
-      string server_dir = globals->options.output_base + "/server";
+      string server_dir = globals->options.output_base + "/_bazel_server";
       globals->server_pid = GetServerPid(server_dir);
       if (globals->server_pid <= 0) {
         pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
@@ -1909,7 +1909,7 @@ GrpcBlazeServer::~GrpcBlazeServer() {
 bool GrpcBlazeServer::Connect() {
   assert(!connected_);
 
-  std::string server_dir = globals->options.output_base + "/server";
+  std::string server_dir = globals->options.output_base + "/_bazel_server";
   std::string port;
   std::string ipv4_prefix = "127.0.0.1:";
   std::string ipv6_prefix_1 = "[0:0:0:0:0:0:0:1]:";
