@@ -23,12 +23,13 @@ import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
-import com.google.devtools.build.lib.packages.NativeAspectClass.NativeAspectFactory;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -125,13 +126,9 @@ public final class AspectDefinition {
   }
 
   /**
-   * Returns the set of configuration fragments required by this Aspect, or {@code null} if it has
-   * not set a configuration fragment policy, meaning it should inherit from the attached rule.
+   * Returns the set of configuration fragments required by this Aspect.
    */
-  @Nullable public ConfigurationFragmentPolicy getConfigurationFragmentPolicy() {
-    // TODO(mstaib): When all existing aspects properly set their configuration fragment policy,
-    // this method and the associated member should no longer be nullable.
-    // "inherit from the attached rule" should go away.
+  public ConfigurationFragmentPolicy getConfigurationFragmentPolicy() {
     return configurationFragmentPolicy;
   }
 
@@ -147,16 +144,17 @@ public final class AspectDefinition {
     }
     RuleClass ruleClass = ((Rule) to).getRuleClassObject();
     ImmutableSet<Class<?>> providers = ruleClass.getAdvertisedProviders();
-    return visitAspectsIfRequired((Rule) from, attribute, toStringSet(providers), dependencyFilter);
+    return visitAspectsIfRequired((Rule) from, attribute, ruleClass.canHaveAnyProvider(),
+        toStringSet(providers), dependencyFilter);
   }
 
   /**
    * Returns the attribute -&gt; set of labels that are provided by aspects of attribute.
    */
   public static ImmutableMultimap<Attribute, Label> visitAspectsIfRequired(
-      Rule from, Attribute attribute, Set<String> advertisedProviders,
+      Rule from, Attribute attribute, boolean canHaveAnyProvider, Set<String> advertisedProviders,
       DependencyFilter dependencyFilter) {
-    if (advertisedProviders.isEmpty()) {
+    if (advertisedProviders.isEmpty() && !canHaveAnyProvider) {
       return ImmutableMultimap.of();
     }
 
@@ -164,7 +162,7 @@ public final class AspectDefinition {
     for (Aspect candidateClass : attribute.getAspects(from)) {
       // Check if target satisfies condition for this aspect (has to provide all required
       // TransitiveInfoProviders)
-      if (!advertisedProviders.containsAll(
+      if (!canHaveAnyProvider && !advertisedProviders.containsAll(
           candidateClass.getDefinition().getRequiredProviderNames())) {
         continue;
       }
@@ -181,6 +179,11 @@ public final class AspectDefinition {
     return classStrings.build();
   }
 
+  @Nullable
+  private static Label maybeGetRepositoryRelativeLabel(Rule from, @Nullable Label label) {
+    return label == null ? null : from.getLabel().resolveRepositoryRelative(label);
+  }
+
   /**
    * Collects all attribute labels from the specified aspectDefinition.
    */
@@ -195,14 +198,21 @@ public final class AspectDefinition {
         continue;
       }
       if (aspectAttribute.getType() == BuildType.LABEL) {
-        Label label = from.getLabel().resolveRepositoryRelative(
-            BuildType.LABEL.cast(aspectAttribute.getDefaultValue(from)));
+        Label label = maybeGetRepositoryRelativeLabel(
+            from, BuildType.LABEL.cast(aspectAttribute.getDefaultValue(from)));
         if (label != null) {
           labelBuilder.put(aspectAttribute, label);
         }
       } else if (aspectAttribute.getType() == BuildType.LABEL_LIST) {
-        for (Label label : BuildType.LABEL_LIST.cast(aspectAttribute.getDefaultValue(from))) {
-          labelBuilder.put(aspectAttribute, from.getLabel().resolveRepositoryRelative(label));
+        List<Label> defaultLabels = BuildType.LABEL_LIST.cast(
+            aspectAttribute.getDefaultValue(from));
+        if (defaultLabels != null) {
+          for (Label defaultLabel : defaultLabels) {
+            Label label = maybeGetRepositoryRelativeLabel(from, defaultLabel);
+            if (label != null) {
+              labelBuilder.put(aspectAttribute, label);
+            }
+          }
         }
       }
     }
@@ -218,14 +228,6 @@ public final class AspectDefinition {
     private final Multimap<String, AspectClass> attributeAspects = LinkedHashMultimap.create();
     private final ConfigurationFragmentPolicy.Builder configurationFragmentPolicy =
         new ConfigurationFragmentPolicy.Builder();
-    // TODO(mstaib): When all existing aspects properly set their configuration fragment policy,
-    // remove this flag and the code that interacts with it.
-    /**
-     * True if the aspect definition has intentionally specified a configuration fragment policy by
-     * calling any of the methods which set up the policy, and thus needs the built AspectDefinition
-     * to retain the policy.
-     */
-    private boolean hasConfigurationFragmentPolicy = false;
 
     public Builder(String name) {
       this.name = name;
@@ -248,13 +250,10 @@ public final class AspectDefinition {
      * but we cannot reference that interface here.
      */
     @SafeVarargs
-    public final Builder attributeAspect(
-        String attribute, Class<? extends NativeAspectFactory>... aspectFactories) {
+    public final Builder attributeAspect(String attribute, NativeAspectClass... aspectClasses) {
       Preconditions.checkNotNull(attribute);
-      for (Class<? extends NativeAspectFactory> aspectFactory : aspectFactories) {
-        this
-            .attributeAspect(
-                attribute, new NativeAspectClass<>(Preconditions.checkNotNull(aspectFactory)));
+      for (NativeAspectClass aspectClass : aspectClasses) {
+        this.attributeAspect(attribute, Preconditions.checkNotNull(aspectClass));
       }
       return this;
     }
@@ -292,7 +291,9 @@ public final class AspectDefinition {
      * configuration is available, starting with ':')
      */
     public Builder add(Attribute attribute) {
-      Preconditions.checkArgument(attribute.isImplicit() || attribute.isLateBound());
+      Preconditions.checkArgument(attribute.isImplicit() || attribute.isLateBound()
+          || (attribute.getType() == Type.STRING && attribute.checkAllowedValues()),
+          "Invalid attribute '%s' (%s)", attribute.getName(), attribute.getType());
       Preconditions.checkArgument(!attributes.containsKey(attribute.getName()),
           "An attribute with the name '%s' already exists.", attribute.getName());
       attributes.put(attribute.getName(), attribute);
@@ -306,7 +307,6 @@ public final class AspectDefinition {
      * <p>The value is inherited by subclasses.
      */
     public Builder requiresConfigurationFragments(Class<?>... configurationFragments) {
-      hasConfigurationFragmentPolicy = true;
       configurationFragmentPolicy
           .requiresConfigurationFragments(ImmutableSet.copyOf(configurationFragments));
       return this;
@@ -319,7 +319,6 @@ public final class AspectDefinition {
      * <p>The value is inherited by subclasses.
      */
     public Builder requiresHostConfigurationFragments(Class<?>... configurationFragments) {
-      hasConfigurationFragmentPolicy = true;
       configurationFragmentPolicy
           .requiresHostConfigurationFragments(ImmutableSet.copyOf(configurationFragments));
       return this;
@@ -334,11 +333,6 @@ public final class AspectDefinition {
      */
     public Builder requiresConfigurationFragmentsBySkylarkModuleName(
         Collection<String> configurationFragmentNames) {
-      // This method is unconditionally called from Skylark code, so only consider the user to have
-      // specified a configuration policy if the collection actually has anything in it.
-      // TODO(mstaib): Stop caring about this as soon as all aspects have configuration policies.
-      hasConfigurationFragmentPolicy =
-          hasConfigurationFragmentPolicy || !configurationFragmentNames.isEmpty();
       configurationFragmentPolicy
           .requiresConfigurationFragmentsBySkylarkModuleName(configurationFragmentNames);
       return this;
@@ -353,11 +347,6 @@ public final class AspectDefinition {
      */
     public Builder requiresHostConfigurationFragmentsBySkylarkModuleName(
         Collection<String> configurationFragmentNames) {
-      // This method is unconditionally called from Skylark code, so only consider the user to have
-      // specified a configuration policy if the collection actually has anything in it.
-      // TODO(mstaib): Stop caring about this as soon as all aspects have configuration policies.
-      hasConfigurationFragmentPolicy =
-          hasConfigurationFragmentPolicy || !configurationFragmentNames.isEmpty();
       configurationFragmentPolicy
           .requiresHostConfigurationFragmentsBySkylarkModuleName(configurationFragmentNames);
       return this;
@@ -368,7 +357,6 @@ public final class AspectDefinition {
      * {@link #requiresConfigurationFragments}).
      */
     public Builder setMissingFragmentPolicy(MissingFragmentPolicy missingFragmentPolicy) {
-      hasConfigurationFragmentPolicy = true;
       configurationFragmentPolicy.setMissingFragmentPolicy(missingFragmentPolicy);
       return this;
     }
@@ -381,7 +369,7 @@ public final class AspectDefinition {
     public AspectDefinition build() {
       return new AspectDefinition(name, ImmutableSet.copyOf(requiredProviders),
           ImmutableMap.copyOf(attributes), ImmutableSetMultimap.copyOf(attributeAspects),
-          hasConfigurationFragmentPolicy ? configurationFragmentPolicy.build() : null);
+          configurationFragmentPolicy.build());
     }
   }
 }

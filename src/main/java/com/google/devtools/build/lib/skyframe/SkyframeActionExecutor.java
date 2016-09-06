@@ -21,6 +21,7 @@ import com.google.common.collect.Maps;
 import com.google.common.eventbus.EventBus;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionCacheChecker;
 import com.google.devtools.build.lib.actions.ActionCacheChecker.Token;
 import com.google.devtools.build.lib.actions.ActionCompletionEvent;
@@ -40,7 +41,6 @@ import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
-import com.google.devtools.build.lib.actions.ArtifactFile;
 import com.google.devtools.build.lib.actions.ArtifactPrefixConflictException;
 import com.google.devtools.build.lib.actions.CachedActionEvent;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
@@ -74,11 +74,9 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.protobuf.ByteString;
-
 import java.io.IOException;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -93,7 +91,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicReference;
-
 import javax.annotation.Nullable;
 
 /**
@@ -128,7 +125,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
   // Errors found when examining all actions in the graph are stored here, so that they can be
   // thrown when execution of the action is requested. This field is set during each call to
   // findAndStoreArtifactConflicts, and is preserved across builds otherwise.
-  private ImmutableMap<Action, ConflictException> badActionMap = ImmutableMap.of();
+  private ImmutableMap<ActionAnalysisMetadata, ConflictException> badActionMap = ImmutableMap.of();
   private boolean keepGoing;
   private boolean hadExecutionError;
   private ActionInputFileCache perBuildFileCache;
@@ -181,7 +178,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
    * Return the map of mostly recently executed bad actions to their corresponding exception.
    * See {#findAndStoreArtifactConflicts()}.
    */
-  public ImmutableMap<Action, ConflictException> badActions() {
+  public ImmutableMap<ActionAnalysisMetadata, ConflictException> badActions() {
     // TODO(bazel-team): Move badActions() and findAndStoreArtifactConflicts() to SkyframeBuildView
     // now that it's done in the analysis phase.
     return badActionMap;
@@ -217,50 +214,21 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
    */
   void findAndStoreArtifactConflicts(Iterable<ActionLookupValue> actionLookupValues)
       throws InterruptedException {
-    ConcurrentMap<Action, ConflictException> temporaryBadActionMap = new ConcurrentHashMap<>();
+    ConcurrentMap<ActionAnalysisMetadata, ConflictException> temporaryBadActionMap =
+        new ConcurrentHashMap<>();
     Pair<ActionGraph, SortedMap<PathFragment, Artifact>> result;
     result = constructActionGraphAndPathMap(actionLookupValues, temporaryBadActionMap);
     ActionGraph actionGraph = result.first;
     SortedMap<PathFragment, Artifact> artifactPathMap = result.second;
 
-    // Report an error for every derived artifact which is a prefix of another.
-    // If x << y << z (where x << y means "y starts with x"), then we only report (x,y), (x,z), but
-    // not (y,z).
-    Iterator<PathFragment> iter = artifactPathMap.keySet().iterator();
-    if (!iter.hasNext()) {
-      // No actions in graph -- currently happens only in tests. Special-cased because .next() call
-      // below is unconditional.
-      this.badActionMap = ImmutableMap.of();
-      return;
+    Map<ActionAnalysisMetadata, ArtifactPrefixConflictException> actionsWithArtifactPrefixConflict =
+        Actions.findArtifactPrefixConflicts(actionGraph, artifactPathMap);
+    for (Map.Entry<ActionAnalysisMetadata, ArtifactPrefixConflictException> actionExceptionPair :
+        actionsWithArtifactPrefixConflict.entrySet()) {
+      temporaryBadActionMap.put(
+          actionExceptionPair.getKey(), new ConflictException(actionExceptionPair.getValue()));
     }
-    for (PathFragment pathJ = iter.next(); iter.hasNext(); ) {
-      // For each comparison, we have a prefix candidate (pathI) and a suffix candidate (pathJ).
-      // At the beginning of the loop, we set pathI to the last suffix candidate, since it has not
-      // yet been tested as a prefix candidate, and then set pathJ to the paths coming after pathI,
-      // until we come to one that does not contain pathI as a prefix. pathI is then verified not to
-      // be the prefix of any path, so we start the next run of the loop.
-      PathFragment pathI = pathJ;
-      // Compare pathI to the paths coming after it.
-      while (iter.hasNext()) {
-        pathJ = iter.next();
-        if (pathJ.startsWith(pathI)) { // prefix conflict.
-          Artifact artifactI = Preconditions.checkNotNull(artifactPathMap.get(pathI), pathI);
-          Artifact artifactJ = Preconditions.checkNotNull(artifactPathMap.get(pathJ), pathJ);
-          Action actionI =
-              Preconditions.checkNotNull(actionGraph.getGeneratingAction(artifactI), artifactI);
-          Action actionJ =
-              Preconditions.checkNotNull(actionGraph.getGeneratingAction(artifactJ), artifactJ);
-          if (actionI.shouldReportPathPrefixConflict(actionJ)) {
-            ArtifactPrefixConflictException exception = new ArtifactPrefixConflictException(pathI,
-                pathJ, actionI.getOwner().getLabel(), actionJ.getOwner().getLabel());
-            temporaryBadActionMap.put(actionI, new ConflictException(exception));
-            temporaryBadActionMap.put(actionJ, new ConflictException(exception));
-          }
-        } else { // pathJ didn't have prefix pathI, so no conflict possible for pathI.
-          break;
-        }
-      }
-    }
+
     this.badActionMap = ImmutableMap.copyOf(temporaryBadActionMap);
   }
 
@@ -272,7 +240,8 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
   private static Pair<ActionGraph, SortedMap<PathFragment, Artifact>>
       constructActionGraphAndPathMap(
           Iterable<ActionLookupValue> values,
-          ConcurrentMap<Action, ConflictException> badActionMap) throws InterruptedException {
+          ConcurrentMap<ActionAnalysisMetadata, ConflictException> badActionMap)
+      throws InterruptedException {
     MutableActionGraph actionGraph = new MapBasedActionGraph();
     ConcurrentNavigableMap<PathFragment, Artifact> artifactPathMap = new ConcurrentSkipListMap<>();
     // Action graph construction is CPU-bound.
@@ -306,14 +275,15 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
       final List<ActionLookupValue> values,
       final MutableActionGraph actionGraph,
       final ConcurrentMap<PathFragment, Artifact> artifactPathMap,
-      final ConcurrentMap<Action, ConflictException> badActionMap) {
+      final ConcurrentMap<ActionAnalysisMetadata, ConflictException> badActionMap) {
     return new Runnable() {
       @Override
       public void run() {
         for (ActionLookupValue value : values) {
-          Set<Action> registeredActions = new HashSet<>();
-          for (Map.Entry<Artifact, Action> entry : value.getMapForConsistencyCheck().entrySet()) {
-            Action action = entry.getValue();
+          Set<ActionAnalysisMetadata> registeredActions = new HashSet<>();
+          for (Map.Entry<Artifact, ActionAnalysisMetadata> entry :
+              value.getMapForConsistencyCheck().entrySet()) {
+            ActionAnalysisMetadata action = entry.getValue();
             // We have an entry for each <action, artifact> pair. Only try to register each action
             // once.
             if (registeredActions.add(action)) {
@@ -432,18 +402,27 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
   }
 
   private static class ArtifactExpanderImpl implements ArtifactExpander {
-    private final Map<Artifact, Collection<ArtifactFile>> expandedInputs;
+    private final Map<Artifact, Collection<Artifact>> expandedInputs;
 
-    private ArtifactExpanderImpl(Map<Artifact, Collection<ArtifactFile>> expandedInputMiddlemen) {
+    private ArtifactExpanderImpl(Map<Artifact, Collection<Artifact>> expandedInputMiddlemen) {
       this.expandedInputs = expandedInputMiddlemen;
     }
 
     @Override
-    public void expand(Artifact artifact, Collection<? super ArtifactFile> output) {
+    public void expand(Artifact artifact, Collection<? super Artifact> output) {
       Preconditions.checkState(artifact.isMiddlemanArtifact() || artifact.isTreeArtifact(),
           artifact);
-      Collection<ArtifactFile> result = expandedInputs.get(artifact);
-      // Note that result may be null for non-aggregating middlemen.
+      Collection<Artifact> result = expandedInputs.get(artifact);
+
+      // Note that the result can be empty but not null for TreeArtifacts. And it may be null for
+      // non-aggregating middlemen.
+      if (artifact.isTreeArtifact()) {
+        Preconditions.checkNotNull(
+            result,
+            "TreeArtifact %s cannot be expanded because it is not an input for the action",
+            artifact);
+      }
+
       if (result != null) {
         output.addAll(result);
       }
@@ -458,7 +437,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
   @Override
   public ActionExecutionContext getContext(
       ActionInputFileCache graphFileCache, MetadataHandler metadataHandler,
-      Map<Artifact, Collection<ArtifactFile>> expandedInputs) {
+      Map<Artifact, Collection<Artifact>> expandedInputs) {
     FileOutErr fileOutErr = actionLogBufferPathGenerator.generate();
     return new ActionExecutionContext(
         executorEngine,
@@ -522,7 +501,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
 
   @Nullable
   Iterable<Artifact> getActionCachedInputs(Action action, PackageRootResolver resolver)
-      throws PackageRootResolutionException {
+      throws PackageRootResolutionException, InterruptedException {
     return actionCacheChecker.getCachedInputs(action, resolver);
   }
 
@@ -616,7 +595,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
             "%s %s", actionExecutionContext.getMetadataHandler(), metadataHandler);
         prepareScheduleExecuteAndCompleteAction(action, actionExecutionContext, actionStartTime);
         return new ActionExecutionValue(
-            metadataHandler.getOutputArtifactFileData(),
+            metadataHandler.getOutputArtifactData(),
             metadataHandler.getOutputTreeArtifactData(),
             metadataHandler.getAdditionalOutputData());
       } finally {
@@ -851,14 +830,14 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
   }
 
   private static void setPathReadOnlyAndExecutable(MetadataHandler metadataHandler,
-      ArtifactFile file)
+      Artifact artifact)
       throws IOException {
     // If the metadata was injected, we assume the mode is set correct and bail out early to avoid
     // the additional overhead of resetting it.
-    if (metadataHandler.isInjected(file)) {
+    if (metadataHandler.isInjected(artifact)) {
       return;
     }
-    Path path = file.getPath();
+    Path path = artifact.getPath();
     if (path.isFile(Symlinks.NOFOLLOW)) { // i.e. regular files only.
       // We trust the files created by the execution-engine to be non symlinks with expected
       // chmod() settings already applied.
@@ -877,7 +856,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
       }
     } else {
       setPathReadOnlyAndExecutable(
-          metadataHandler, ActionInputHelper.artifactFile(parent, subpath));
+          metadataHandler, ActionInputHelper.treeFileArtifact(parent, subpath));
     }
   }
 
@@ -1061,10 +1040,10 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
     String stderr = null;
 
     if (outErr.hasRecordedStdout()) {
-      stdout = outErr.getOutputFile().toString();
+      stdout = outErr.getOutputPath().toString();
     }
     if (outErr.hasRecordedStderr()) {
-      stderr = outErr.getErrorFile().toString();
+      stderr = outErr.getErrorPath().toString();
     }
     postEvent(new ActionExecutedEvent(action, exception, stdout, stderr));
   }
@@ -1080,11 +1059,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
    */
   private boolean reportErrorIfNotAbortingMode(ActionExecutionException ex,
       FileOutErr outErrBuffer) {
-    // For some actions (e.g. many local actions) the pollInterruptedStatus()
-    // won't notice that we had an interrupted job. It will continue.
-    // For that reason we must take care to NOT report errors if we're
-    // in the 'aborting' mode: Any cancelled action would show up here.
-    // For some actions (e.g. many local actions) the pollInterruptedStatus()
+    // For some actions (e.g., many local actions) the pollInterruptedStatus()
     // won't notice that we had an interrupted job. It will continue.
     // For that reason we must take care to NOT report errors if we're
     // in the 'aborting' mode: Any cancelled action would show up here.
@@ -1128,8 +1103,8 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
     }
 
     @Override
-    public ByteString getDigest(ActionInput actionInput) throws IOException {
-      ByteString digest = perActionCache.getDigest(actionInput);
+    public byte[] getDigest(ActionInput actionInput) throws IOException {
+      byte[] digest = perActionCache.getDigest(actionInput);
       return digest != null ? digest : perBuildFileCache.getDigest(actionInput);
     }
 
@@ -1153,7 +1128,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
 
     @Nullable
     @Override
-    public ActionInput getInputFromDigest(ByteString digest) throws IOException {
+    public ActionInput getInputFromDigest(ByteString digest) {
       ActionInput file = perActionCache.getInputFromDigest(digest);
       return file != null ? file : perBuildFileCache.getInputFromDigest(digest);
     }

@@ -61,8 +61,19 @@ public class BazelConfiguration extends Fragment {
       String path = System.getenv("BAZEL_SH");
       if (path != null) {
         builder.put("sh", new PathFragment(path));
-        return;
+      } else {
+        builder.put("sh", new PathFragment("c:/tools/msys64/usr/bin/bash.exe"));
       }
+      return;
+    }
+    if (OS.getCurrent() == OS.FREEBSD) {
+      String path = System.getenv("BAZEL_SH");
+      if (path != null) {
+        builder.put("sh", new PathFragment(path));
+      } else {
+        builder.put("sh", new PathFragment("/usr/local/bin/bash"));
+      }
+      return;
     }
     builder.put("sh", new PathFragment("/bin/bash"));
   }
@@ -71,6 +82,12 @@ public class BazelConfiguration extends Fragment {
   public void setupShellEnvironment(ImmutableMap.Builder<String, String> builder) {
     String path = System.getenv("PATH");
     builder.put("PATH", path == null ? "/bin:/usr/bin" : path);
+
+    String ldLibraryPath = System.getenv("LD_LIBRARY_PATH");
+    if (ldLibraryPath != null) {
+      builder.put("LD_LIBRARY_PATH", ldLibraryPath);
+    }
+
     String tmpdir = System.getenv("TMPDIR");
     if (tmpdir != null) {
       builder.put("TMPDIR", tmpdir);

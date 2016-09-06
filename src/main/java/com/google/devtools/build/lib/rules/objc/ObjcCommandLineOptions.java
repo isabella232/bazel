@@ -16,14 +16,14 @@ package com.google.devtools.build.lib.rules.objc;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
 import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.apple.DottedVersionConverter;
-import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.SplitArchTransition.ConfigurationDistinguisher;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
-import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 
 import java.util.List;
@@ -52,11 +52,11 @@ public class ObjcCommandLineOptions extends FragmentOptions {
           + "on the machine the simulator will be run on.")
   public String iosSimulatorDevice;
 
-  @Option(name = "objc_generate_debug_symbols",
+  @Option(name = "objc_generate_linkmap",
       defaultValue = "false",
       category = "flags",
-      help = "Specifies whether to generate debug symbol(.dSYM) file.")
-  public boolean generateDebugSymbols;
+      help = "Specifies whether to generate a linkmap file.")
+  public boolean generateLinkmap;
 
   @Option(name = "objccopt",
       allowMultiple = true,
@@ -79,13 +79,6 @@ public class ObjcCommandLineOptions extends FragmentOptions {
       category = "misc",
       help = "Enable checking for memory leaks in ios_test targets.")
   public boolean runMemleaks;
-
-  @Option(name = "ios_split_cpu",
-      defaultValue = "",
-      category = "undocumented",
-      help =
-          "Don't set this value from the command line - it is derived from  ios_multi_cpus only.")
-  public String iosSplitCpu;
 
   @Option(name = "experimental_enable_objc_cc_deps",
       defaultValue = "false",
@@ -120,18 +113,13 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   )
   public boolean enableBinaryStripping;
 
-  // This option exists because two configurations are not allowed to have the same cache key
-  // (partially derived from options). Since we have multiple transitions (see
-  // getPotentialSplitTransitions below) that may result in the same configuration values at runtime
-  // we need an artificial way to distinguish between them. This option must only be set by those
-  // transitions for this purpose.
-  // TODO(bazel-team): Remove this once we have dynamic configurations but make sure that different
-  // configurations (e.g. by min os version) always use different output paths.
-  @Option(name = "iOS configuration distinguisher",
-      defaultValue = "UNKNOWN",
-      converter = ConfigurationDistinguisherConverter.class,
-      category = "undocumented")
-  public ConfigurationDistinguisher configurationDistinguisher;
+  @Option(
+    name = "apple_generate_dsym",
+    defaultValue = "false",
+    category = "flags",
+    help = "Whether to generate debug symbol(.dSYM) file(s)."
+  )
+  public boolean appleGenerateDsym;
 
   @Option(
     name = "ios_signing_cert_name",
@@ -171,7 +159,7 @@ public class ObjcCommandLineOptions extends FragmentOptions {
             + " and system libraries."
   )
   public boolean prioritizeStaticLibs;
- 
+
   @Option(
     name = "objc_debug_with_GLIBCXX",
     defaultValue = "true",
@@ -181,20 +169,46 @@ public class ObjcCommandLineOptions extends FragmentOptions {
         + " GLIBCXX_DEBUG_PEDANTIC and GLIBCPP_CONCEPT_CHECKS."
   )
   public boolean debugWithGlibcxx;
-  
+
+  @Option(
+    name = "extra_entitlements",
+    defaultValue = "null",
+    category = "flags",
+    converter = LabelConverter.class,
+    help =
+        "Location of a .entitlements file that is merged into any iOS signing action in this "
+            + "build."
+  )
+  public Label extraEntitlements;
+
+  // TODO(b/28451644): Make this option the default behavior.
+  @Option(
+    name = "experimental_auto_top_level_union_objc_protos",
+    defaultValue = "true",
+    category = "flags",
+    help = "This flag is a noop and scheduled for removal."
+  )
+  public boolean experimentalAutoTopLevelUnionObjCProtos;
+
+  @Option(
+    name = "device_debug_entitlements",
+    defaultValue = "true",
+    category = "flags",
+    help =
+        "If set, and compilation mode is not 'opt', objc apps will include debug entitlements "
+            + "when signing."
+  )
+  public boolean deviceDebugEntitlements;
+
   @VisibleForTesting static final String DEFAULT_MINIMUM_IOS = "7.0";
 
+  @SuppressWarnings("unchecked")
   @Override
   public List<SplitTransition<BuildOptions>> getPotentialSplitTransitions() {
-    return ImmutableList.of(
-        IosApplication.SPLIT_ARCH_TRANSITION, IosExtension.MINIMUM_OS_AND_SPLIT_ARCH_TRANSITION);
-  }
-
-  /** Converter for the iOS configuration distinguisher. */
-  public static final class ConfigurationDistinguisherConverter
-      extends EnumConverter<ConfigurationDistinguisher> {
-    public ConfigurationDistinguisherConverter() {
-      super(ConfigurationDistinguisher.class, "Objective C configuration distinguisher");
-    }
+    return ImmutableList.<SplitTransition<BuildOptions>>builder().add(
+            IosApplication.SPLIT_ARCH_TRANSITION, IosExtension.MINIMUM_OS_AND_SPLIT_ARCH_TRANSITION,
+            AppleWatch1Extension.MINIMUM_OS_AND_SPLIT_ARCH_TRANSITION)
+        .addAll(AppleBinary.SPLIT_TRANSITION_PROVIDER.getPotentialSplitTransitions())
+        .build();
   }
 }

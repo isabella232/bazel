@@ -14,24 +14,25 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.actions.ActionInputHelper.asArtifactFiles;
+import static com.google.devtools.build.lib.actions.ActionInputHelper.asTreeFileArtifacts;
 import static org.junit.Assert.fail;
 
+import com.google.common.base.Predicate;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
-import com.google.devtools.build.lib.actions.ArtifactFile;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.MissingInputFileException;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.actions.cache.Digest;
-import com.google.devtools.build.lib.actions.cache.DigestUtils;
 import com.google.devtools.build.lib.actions.cache.Metadata;
 import com.google.devtools.build.lib.actions.util.TestAction.DummyAction;
 import com.google.devtools.build.lib.events.NullEventHandler;
@@ -40,22 +41,21 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.EvaluationResult;
+import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Test the behavior of ActionMetadataHandler and ArtifactFunction
@@ -92,8 +92,8 @@ public class TreeArtifactMetadataTest extends ArtifactFunctionTestCase {
       throws Exception {
     TreeArtifactValue value = evaluateTreeArtifact(tree, children);
     assertThat(value.getChildPaths()).containsExactlyElementsIn(ImmutableSet.copyOf(children));
-    assertThat(value.getChildren(tree)).containsExactlyElementsIn(
-        asArtifactFiles(tree, children));
+    assertThat(value.getChildren()).containsExactlyElementsIn(
+        asTreeFileArtifacts(tree, children));
 
     // Assertions about digest. As of this writing this logic is essentially the same
     // as that in TreeArtifact, but it's good practice to unit test anyway to guard against
@@ -115,6 +115,25 @@ public class TreeArtifactMetadataTest extends ArtifactFunctionTestCase {
     assertThat(value.getMetadata().digest).isEqualTo(value.getDigest());
     // Java zero-fills arrays.
     assertThat(value.getDigest()).isEqualTo(new byte[16]);
+  }
+
+  @Test
+  public void testEqualTreeArtifacts() throws Exception {
+    Artifact treeArtifact = createTreeArtifact("out");
+    ImmutableList<PathFragment> children =
+        ImmutableList.of(new PathFragment("one"), new PathFragment("two"));
+    TreeArtifactValue valueOne = evaluateTreeArtifact(treeArtifact, children);
+    MemoizingEvaluator evaluator = driver.getGraphForTesting();
+    evaluator.delete(new Predicate<SkyKey>() {
+      @Override
+      public boolean apply(SkyKey key) {
+        // Delete action execution node to force our artifacts to be re-evaluated.
+        return actions.contains(key.argument());
+      }
+    });
+    TreeArtifactValue valueTwo = evaluateTreeArtifact(treeArtifact, children);
+    assertThat(valueOne.getDigest()).isNotSameAs(valueTwo.getDigest());
+    assertThat(valueOne).isEqualTo(valueTwo);
   }
 
   @Test
@@ -190,10 +209,9 @@ public class TreeArtifactMetadataTest extends ArtifactFunctionTestCase {
     return output;
   }
 
-  private ArtifactValue evaluateArtifactValue(Artifact artifact, boolean mandatory)
-      throws Exception {
-    SkyKey key = ArtifactValue.key(artifact, mandatory);
-    EvaluationResult<ArtifactValue> result = evaluate(key);
+  private SkyValue evaluateArtifactValue(Artifact artifact, boolean mandatory) throws Exception {
+    SkyKey key = ArtifactSkyKey.key(artifact, mandatory);
+    EvaluationResult<SkyValue> result = evaluate(key);
     if (result.hasError()) {
       throw result.getError().getException();
     }
@@ -202,7 +220,9 @@ public class TreeArtifactMetadataTest extends ArtifactFunctionTestCase {
 
   private void setGeneratingActions() {
     if (evaluator.getExistingValueForTesting(OWNER_KEY) == null) {
-      differencer.inject(ImmutableMap.of(OWNER_KEY, new ActionLookupValue(actions)));
+      differencer.inject(ImmutableMap.of(
+          OWNER_KEY,
+          new ActionLookupValue(ImmutableList.<ActionAnalysisMetadata>copyOf(actions))));
     }
   }
 
@@ -219,20 +239,17 @@ public class TreeArtifactMetadataTest extends ArtifactFunctionTestCase {
   private class TreeArtifactExecutionFunction implements SkyFunction {
     @Override
     public SkyValue compute(SkyKey skyKey, Environment env) throws SkyFunctionException {
-      Map<ArtifactFile, FileValue> fileData = new HashMap<>();
-      Map<PathFragment, FileArtifactValue> treeArtifactData = new HashMap<>();
+      Map<Artifact, FileValue> fileData = new HashMap<>();
+      Map<TreeFileArtifact, FileArtifactValue> treeArtifactData = new HashMap<>();
       Action action = (Action) skyKey.argument();
       Artifact output = Iterables.getOnlyElement(action.getOutputs());
       for (PathFragment subpath : testTreeArtifactContents) {
         try {
-          ArtifactFile suboutput = ActionInputHelper.artifactFile(output, subpath);
-          FileValue fileValue = ActionMetadataHandler.fileValueFromArtifactFile(
-              suboutput, null, tsgm);
+          TreeFileArtifact suboutput = ActionInputHelper.treeFileArtifact(output, subpath);
+          FileValue fileValue = ActionMetadataHandler.fileValueFromArtifact(
+              suboutput, null, null);
           fileData.put(suboutput, fileValue);
-          // Ignore FileValue digests--correctness of these digests is not part of this tests.
-          byte[] digest = DigestUtils.getDigestOrFail(suboutput.getPath(), 1);
-          treeArtifactData.put(suboutput.getParentRelativePath(),
-              FileArtifactValue.createWithDigest(suboutput.getPath(), digest, fileValue.getSize()));
+          treeArtifactData.put(suboutput, FileArtifactValue.create(suboutput, fileValue));
         } catch (IOException e) {
           throw new SkyFunctionException(e, Transience.TRANSIENT) {};
         }

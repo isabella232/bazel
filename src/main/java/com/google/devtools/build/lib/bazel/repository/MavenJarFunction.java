@@ -14,21 +14,19 @@
 
 package com.google.devtools.build.lib.bazel.repository;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.bazel.repository.downloader.HttpDownloader;
 import com.google.devtools.build.lib.bazel.rules.workspace.MavenJarRule;
-import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
-import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Fingerprint;
@@ -36,7 +34,9 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyValue;
-
+import java.io.IOException;
+import java.util.Map;
+import javax.annotation.Nullable;
 import org.apache.maven.settings.Server;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
@@ -49,11 +49,6 @@ import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.ArtifactResolutionException;
 import org.eclipse.aether.resolution.ArtifactResult;
-
-import java.io.IOException;
-import java.util.Map;
-
-import javax.annotation.Nullable;
 
 /**
  * Implementation of maven_jar.
@@ -68,7 +63,7 @@ public class MavenJarFunction extends HttpArchiveFunction {
 
   @Override
   protected byte[] getRuleSpecificMarkerData(Rule rule, Environment env)
-      throws RepositoryFunctionException {
+      throws RepositoryFunctionException, InterruptedException {
     MavenServerValue serverValue = getServer(rule, env);
     if (env.valuesMissing()) {
       return null;
@@ -80,11 +75,11 @@ public class MavenJarFunction extends HttpArchiveFunction {
         .digestAndReset();
   }
 
-  private MavenServerValue getServer(Rule rule, Environment env)
-      throws RepositoryFunctionException {
+  private static MavenServerValue getServer(Rule rule, Environment env)
+      throws RepositoryFunctionException, InterruptedException {
     AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
-    boolean hasRepository = mapper.has("repository", Type.STRING)
-        && !mapper.get("repository", Type.STRING).isEmpty();
+    boolean hasRepository =
+        mapper.has("repository", Type.STRING) && !mapper.get("repository", Type.STRING).isEmpty();
     boolean hasServer = mapper.has("server", Type.STRING)
         && !mapper.get("server", Type.STRING).isEmpty();
 
@@ -106,25 +101,32 @@ public class MavenJarFunction extends HttpArchiveFunction {
   }
 
   @Override
-  public SkyValue fetch(Rule rule, Path outputDirectory, Environment env)
-      throws RepositoryFunctionException, InterruptedException {
+  public SkyValue fetch(
+      Rule rule, Path outputDirectory, BlazeDirectories directories, Environment env)
+          throws RepositoryFunctionException, InterruptedException {
     AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
     MavenServerValue serverValue = getServer(rule, env);
     if (env.valuesMissing()) {
       return null;
     }
-    MavenDownloader downloader = createMavenDownloader(mapper, serverValue);
-    return createOutputTree(downloader, env);
+    MavenDownloader downloader;
+    try {
+      downloader = createMavenDownloader(directories, mapper, serverValue);
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(e, Transience.PERSISTENT);
+    }
+    return createOutputTree(downloader);
   }
 
-  @VisibleForTesting
-  MavenDownloader createMavenDownloader(AttributeMap mapper, MavenServerValue serverValue) {
+  private MavenDownloader createMavenDownloader(
+      BlazeDirectories directories, AttributeMap mapper, MavenServerValue serverValue)
+      throws IOException {
     String name = mapper.getName();
-    Path outputDirectory = getExternalRepositoryDirectory().getRelative(name);
+    Path outputDirectory = getExternalRepositoryDirectory(directories).getRelative(name);
     return new MavenDownloader(name, mapper, outputDirectory, serverValue);
   }
 
-  SkyValue createOutputTree(MavenDownloader downloader, Environment env)
+  private SkyValue createOutputTree(MavenDownloader downloader)
       throws RepositoryFunctionException, InterruptedException {
     Path outputDirectory = downloader.getOutputDirectory();
     createDirectory(outputDirectory);
@@ -138,7 +140,7 @@ public class MavenJarFunction extends HttpArchiveFunction {
 
     // Add a WORKSPACE file & BUILD file to the Maven jar.
     Path result = DecompressorValue.decompress(DecompressorDescriptor.builder()
-        .setDecompressor(JarFunction.INSTANCE)
+        .setDecompressor(JarDecompressor.INSTANCE)
         .setTargetKind(MavenJarRule.NAME)
         .setTargetName(downloader.getName())
         .setArchivePath(repositoryJar)
@@ -167,12 +169,17 @@ public class MavenJarFunction extends HttpArchiveFunction {
     private final Server server;
 
     public MavenDownloader(
-        String name, AttributeMap mapper, Path outputDirectory, MavenServerValue serverValue) {
+        String name, AttributeMap mapper, Path outputDirectory, MavenServerValue serverValue)
+        throws IOException {
       this.name = name;
       this.outputDirectory = outputDirectory;
 
       this.artifact = mapper.get("artifact", Type.STRING);
-      this.sha1 = (mapper.has("sha1", Type.STRING)) ? mapper.get("sha1", Type.STRING) : null;
+      this.sha1 = mapper.isAttributeValueExplicitlySpecified("sha1")
+          ? mapper.get("sha1", Type.STRING) : null;
+      if (sha1 != null && !sha1.matches("\\p{XDigit}{40}")) {
+        throw new IOException("Invalid SHA-1 for maven_jar " + name + ": '" + sha1 + "'");
+      }
       this.url = serverValue.getUrl();
       this.server = serverValue.getServer();
     }

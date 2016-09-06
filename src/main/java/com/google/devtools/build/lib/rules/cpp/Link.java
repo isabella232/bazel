@@ -21,7 +21,6 @@ import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
 import com.google.devtools.build.lib.util.FileTypeSet;
-
 import java.util.Iterator;
 
 /**
@@ -36,15 +35,20 @@ import java.util.Iterator;
  */
 public abstract class Link {
 
-  private Link() {} // uninstantiable
+  /**
+   * Categories of link action that must be defined with action_configs in any toolchain. 
+   */
+  static final Iterable<LinkTargetType> MANDATORY_LINK_TARGET_TYPES =
+      ImmutableList.of(
+          LinkTargetType.STATIC_LIBRARY,
+          LinkTargetType.PIC_STATIC_LIBRARY,
+          LinkTargetType.ALWAYS_LINK_STATIC_LIBRARY,
+          LinkTargetType.ALWAYS_LINK_PIC_STATIC_LIBRARY,
+          LinkTargetType.DYNAMIC_LIBRARY,
+          LinkTargetType.EXECUTABLE,
+          LinkTargetType.INTERFACE_DYNAMIC_LIBRARY);
 
-  /** The set of valid linker input files.  */
-  public static final FileTypeSet VALID_LINKER_INPUTS = FileTypeSet.of(
-      CppFileTypes.ARCHIVE, CppFileTypes.PIC_ARCHIVE,
-      CppFileTypes.ALWAYS_LINK_LIBRARY, CppFileTypes.ALWAYS_LINK_PIC_LIBRARY,
-      CppFileTypes.OBJECT_FILE, CppFileTypes.PIC_OBJECT_FILE,
-      CppFileTypes.SHARED_LIBRARY, CppFileTypes.VERSIONED_SHARED_LIBRARY,
-      CppFileTypes.INTERFACE_SHARED_LIBRARY);
+  private Link() {} // uninstantiable
 
   /**
    * These file are supposed to be added using {@code addLibrary()} calls to {@link CppLinkAction}
@@ -89,45 +93,139 @@ public abstract class Link {
   public static final String FAKE_OBJECT_PREFIX = "fake:";
 
   /**
+   * Whether a particular link target requires PIC code.
+   */
+  public enum Picness {
+    PIC,
+    NOPIC
+  }
+
+  /**
+   * Whether a particular link target linked in statically or dynamically.
+   */
+  public enum Staticness {
+    STATIC,
+    DYNAMIC
+  }
+
+  /**
    * Types of ELF files that can be created by the linker (.a, .so, .lo,
    * executable).
    */
   public enum LinkTargetType {
     /** A normal static archive. */
-    STATIC_LIBRARY(".a", true),
+    STATIC_LIBRARY(
+        ".a",
+        Staticness.STATIC,
+        "c++-link-static-library",
+        Picness.NOPIC,
+        ArtifactCategory.STATIC_LIBRARY),
+    
+    /** An objc static archive. */
+    OBJC_ARCHIVE(
+        ".a", 
+        Staticness.STATIC, 
+        "objc-archive", 
+        Picness.NOPIC,
+        ArtifactCategory.STATIC_LIBRARY),
+    
+    /** An objc fully linked static archive. */
+    OBJC_FULLY_LINKED_ARCHIVE(
+        ".a", Staticness.STATIC, "objc-fully-link", Picness.NOPIC, ArtifactCategory.STATIC_LIBRARY),
 
     /** A static archive with .pic.o object files (compiled with -fPIC). */
-    PIC_STATIC_LIBRARY(".pic.a", true),
+    PIC_STATIC_LIBRARY(
+        ".pic.a",
+        Staticness.STATIC,
+        "c++-link-pic-static-library",
+        Picness.PIC,
+        ArtifactCategory.STATIC_LIBRARY),
 
     /** An interface dynamic library. */
-    INTERFACE_DYNAMIC_LIBRARY(".ifso", false),
+    INTERFACE_DYNAMIC_LIBRARY(
+        ".ifso",
+        Staticness.DYNAMIC,
+        "c++-link-interface-dynamic-library",
+        Picness.NOPIC,  // Actually PIC but it's not indicated in the file name
+        ArtifactCategory.INTERFACE_LIBRARY),
 
     /** A dynamic library. */
-    DYNAMIC_LIBRARY(".so", false),
+    DYNAMIC_LIBRARY(
+        ".so",
+        Staticness.DYNAMIC,
+        "c++-link-dynamic-library",
+        Picness.NOPIC,  // Actually PIC but it's not indicated in the file name
+        ArtifactCategory.DYNAMIC_LIBRARY),
 
     /** A static archive without removal of unused object files. */
-    ALWAYS_LINK_STATIC_LIBRARY(".lo", true),
+    ALWAYS_LINK_STATIC_LIBRARY(
+        ".lo",
+        Staticness.STATIC,
+        "c++-link-alwayslink-static-library",
+        Picness.NOPIC,
+        ArtifactCategory.ALWAYSLINK_STATIC_LIBRARY),
 
     /** A PIC static archive without removal of unused object files. */
-    ALWAYS_LINK_PIC_STATIC_LIBRARY(".pic.lo", true),
+    ALWAYS_LINK_PIC_STATIC_LIBRARY(
+        ".pic.lo",
+        Staticness.STATIC,
+        "c++-link-alwayslink-pic-static-library",
+        Picness.PIC,
+        ArtifactCategory.ALWAYSLINK_STATIC_LIBRARY),
 
     /** An executable binary. */
-    EXECUTABLE("", false);
+    EXECUTABLE(
+        "",
+        Staticness.DYNAMIC,
+        "c++-link-executable",
+        Picness.NOPIC,  // Picness is not indicate in the file name
+        ArtifactCategory.EXECUTABLE);
 
     private final String extension;
-    private final boolean staticLibraryLink;
+    private final Staticness staticness;
+    private final String actionName;
+    private final ArtifactCategory linkerOutput;
+    private final Picness picness;
 
-    private LinkTargetType(String extension, boolean staticLibraryLink) {
+    LinkTargetType(
+        String extension,
+        Staticness staticness,
+        String actionName,
+        Picness picness,
+        ArtifactCategory linkerOutput) {
       this.extension = extension;
-      this.staticLibraryLink = staticLibraryLink;
+      this.staticness = staticness;
+      this.actionName = actionName;
+      this.linkerOutput = linkerOutput;
+      this.picness = picness;
+    }
+
+    /**
+     * Returns whether the name of the output file should denote that the code in the file is PIC.
+     */
+    public Picness picness() {
+      return picness;
     }
 
     public String getExtension() {
       return extension;
     }
 
-    public boolean isStaticLibraryLink() {
-      return staticLibraryLink;
+    public Staticness staticness() {
+      return staticness;
+    }
+    
+    /** Returns an {@code ArtifactCategory} identifying the artifact type this link action emits. */
+    public ArtifactCategory getLinkerOutput() {
+      return linkerOutput;
+    }
+
+    /**
+     * The name of a link action with this LinkTargetType, for the purpose of crosstool feature
+     * selection.
+     */
+    public String getActionName() {
+      return actionName;
     }
   }
 
@@ -153,7 +251,8 @@ public abstract class Link {
     // TODO(bazel-team): Figure out if PicArchives are actually used. For it to be used, both
     // linkingStatically and linkShared must me true, we must be in opt mode and cpu has to be k8.
     return archiveType == ArchiveType.START_END_LIB
-        && ARCHIVE_FILETYPES.matches(linkerInput.getArtifact().getFilename())
+        && (linkerInput.getArtifactCategory() == ArtifactCategory.STATIC_LIBRARY
+            || linkerInput.getArtifactCategory() == ArtifactCategory.ALWAYSLINK_STATIC_LIBRARY)
         && linkerInput.containsObjectFiles();
   }
 
@@ -233,11 +332,13 @@ public abstract class Link {
         // files - otherwise getObjectFiles returns null, which would lead to an NPE in
         // simpleLinkerInputs.
         boolean needMembersForLink = archiveType != ArchiveType.FAT
-            && ARCHIVE_LIBRARY_FILETYPES.matches(name) && inputLibrary.containsObjectFiles();
+            && (inputLibrary.getArtifactCategory() == ArtifactCategory.STATIC_LIBRARY
+                || inputLibrary.getArtifactCategory() == ArtifactCategory.ALWAYSLINK_STATIC_LIBRARY)
+            && inputLibrary.containsObjectFiles();
 
         // True if we will pass the members instead of the original archive.
-        boolean passMembersToLinkCmd = needMembersForLink
-            && (globalNeedWholeArchive || LINK_LIBRARY_FILETYPES.matches(name));
+        boolean passMembersToLinkCmd = needMembersForLink && (globalNeedWholeArchive
+            || inputLibrary.getArtifactCategory() == ArtifactCategory.ALWAYSLINK_STATIC_LIBRARY);
 
         // If deps is false (when computing the inputs to be passed on the command line), then it's
         // an if-then-else, i.e., the passMembersToLinkCmd flag decides whether to pass the object
@@ -257,7 +358,9 @@ public abstract class Link {
         // deps is true, in which case this code only computes the list of inputs for the link
         // action (so the order isn't critical).
         if (passMembersToLinkCmd || (deps && needMembersForLink)) {
-          delayList = LinkerInputs.simpleLinkerInputs(inputLibrary.getObjectFiles()).iterator();
+          delayList = LinkerInputs
+              .simpleLinkerInputs(inputLibrary.getObjectFiles(), ArtifactCategory.OBJECT_FILE)
+              .iterator();
         }
 
         if (!(passMembersToLinkCmd || (deps && useStartEndLib(inputLibrary, archiveType)))) {

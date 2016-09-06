@@ -14,14 +14,16 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Predicate;
+import com.google.common.base.Supplier;
+import com.google.common.base.Suppliers;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactFile;
 import com.google.devtools.build.lib.concurrent.ExecutorUtil;
 import com.google.devtools.build.lib.concurrent.Sharder;
 import com.google.devtools.build.lib.concurrent.ThrowableRecordingRunnableWrapper;
@@ -43,7 +45,6 @@ import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.WalkableGraph;
-
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
@@ -51,6 +52,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -59,7 +61,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
 import javax.annotation.Nullable;
 
 /**
@@ -120,9 +121,9 @@ public class FilesystemValueChecker {
         dirtinessChecker, /*checkMissingValues=*/true);
   }
 
-  private static interface ValueFetcher {
+  private interface ValueFetcher {
     @Nullable
-    SkyValue get(SkyKey key);
+    SkyValue get(SkyKey key) throws InterruptedException;
   }
 
   private static class WalkableGraphBackedValueFetcher implements ValueFetcher {
@@ -134,7 +135,7 @@ public class FilesystemValueChecker {
 
     @Override
     @Nullable
-    public SkyValue get(SkyKey key) {
+    public SkyValue get(SkyKey key) throws InterruptedException {
       return walkableGraph.exists(key) ? walkableGraph.getValue(key) : null;
     }
   }
@@ -190,14 +191,31 @@ public class FilesystemValueChecker {
 
     modifiedOutputFilesCounter.set(0);
     modifiedOutputFilesIntraBuildCounter.set(0);
-    ImmutableSet<PathFragment> knownModifiedOutputFiles =
+    final ImmutableSet<PathFragment> knownModifiedOutputFiles =
             modifiedOutputFiles == ModifiedFileSet.EVERYTHING_MODIFIED
                     ? null
                     : modifiedOutputFiles.modifiedSourceFiles();
+
+    // Initialized lazily through a supplier because it is only used to check modified
+    // TreeArtifacts, which are not frequently used in builds.
+    Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles =
+      Suppliers.memoize(new Supplier<NavigableSet<PathFragment>>() {
+        @Override
+        public NavigableSet<PathFragment> get() {
+          if (knownModifiedOutputFiles == null) {
+            return null;
+          } else {
+            return ImmutableSortedSet.copyOf(knownModifiedOutputFiles);
+          }
+        }
+      });
+
     for (List<Pair<SkyKey, ActionExecutionValue>> shard : outputShards) {
       Runnable job = (batchStatter == null)
-          ? outputStatJob(dirtyKeys, shard, knownModifiedOutputFiles)
-          : batchStatJob(dirtyKeys, shard, batchStatter, knownModifiedOutputFiles);
+          ? outputStatJob(dirtyKeys, shard, knownModifiedOutputFiles,
+              sortedKnownModifiedOutputFiles)
+          : batchStatJob(dirtyKeys, shard, batchStatter, knownModifiedOutputFiles,
+              sortedKnownModifiedOutputFiles);
       executor.submit(wrapper.wrap(job));
     }
 
@@ -212,11 +230,12 @@ public class FilesystemValueChecker {
 
   private Runnable batchStatJob(final Collection<SkyKey> dirtyKeys,
           final List<Pair<SkyKey, ActionExecutionValue>> shard,
-          final BatchStat batchStatter, final ImmutableSet<PathFragment> knownModifiedOutputFiles) {
+          final BatchStat batchStatter, final ImmutableSet<PathFragment> knownModifiedOutputFiles,
+          final Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles) {
     return new Runnable() {
       @Override
       public void run() {
-        Map<ArtifactFile, Pair<SkyKey, ActionExecutionValue>> fileToKeyAndValue = new HashMap<>();
+        Map<Artifact, Pair<SkyKey, ActionExecutionValue>> fileToKeyAndValue = new HashMap<>();
         Map<Artifact, Pair<SkyKey, ActionExecutionValue>> treeArtifactsToKeyAndValue =
             new HashMap<>();
         for (Pair<SkyKey, ActionExecutionValue> keyAndValue : shard) {
@@ -224,50 +243,47 @@ public class FilesystemValueChecker {
           if (actionValue == null) {
             dirtyKeys.add(keyAndValue.getFirst());
           } else {
-            for (ArtifactFile file : actionValue.getAllFileValues().keySet()) {
-              if (shouldCheckFile(knownModifiedOutputFiles, file)) {
-                fileToKeyAndValue.put(file, keyAndValue);
+            for (Artifact artifact : actionValue.getAllFileValues().keySet()) {
+              if (shouldCheckFile(knownModifiedOutputFiles, artifact)) {
+                fileToKeyAndValue.put(artifact, keyAndValue);
               }
             }
 
-            // TreeArtifacts are always checked because we can't match modified files to modified
-            // TreeArtifacts. We could construct a sorted map to do this, but it's unclear
-            // whether this is a performance savings, since we expect the ratio of ordinary
-            // files to TreeArtifacts directories and subdirectories to be rather high.
-            // TODO(bazel-team): Investigate whether we can use modified output file awareness
-            // to speed this up.
             for (Artifact artifact : actionValue.getAllTreeArtifactValues().keySet()) {
-              treeArtifactsToKeyAndValue.put(artifact, keyAndValue);
+              if (shouldCheckTreeArtifact(sortedKnownModifiedOutputFiles.get(), artifact)) {
+                treeArtifactsToKeyAndValue.put(artifact, keyAndValue);
+              }
             }
           }
         }
 
-        List<ArtifactFile> files = ImmutableList.copyOf(fileToKeyAndValue.keySet());
+        List<Artifact> artifacts = ImmutableList.copyOf(fileToKeyAndValue.keySet());
         List<FileStatusWithDigest> stats;
         try {
           stats = batchStatter.batchStat(/*includeDigest=*/true, /*includeLinks=*/true,
-              Artifact.asPathFragments(files));
+              Artifact.asPathFragments(artifacts));
         } catch (IOException e) {
           // Batch stat did not work. Log an exception and fall back on system calls.
           LoggingUtil.logToRemote(Level.WARNING, "Unable to process batch stat", e);
-          outputStatJob(dirtyKeys, shard, knownModifiedOutputFiles).run();
+          outputStatJob(dirtyKeys, shard, knownModifiedOutputFiles, sortedKnownModifiedOutputFiles)
+              .run();
           return;
         } catch (InterruptedException e) {
           // We handle interrupt in the main thread.
           return;
         }
 
-        Preconditions.checkState(files.size() == stats.size(),
-            "artifacts.size() == %s stats.size() == %s", files.size(), stats.size());
-        for (int i = 0; i < files.size(); i++) {
-          ArtifactFile file = files.get(i);
+        Preconditions.checkState(artifacts.size() == stats.size(),
+            "artifacts.size() == %s stats.size() == %s", artifacts.size(), stats.size());
+        for (int i = 0; i < artifacts.size(); i++) {
+          Artifact artifact = artifacts.get(i);
           FileStatusWithDigest stat = stats.get(i);
-          Pair<SkyKey, ActionExecutionValue> keyAndValue = fileToKeyAndValue.get(file);
+          Pair<SkyKey, ActionExecutionValue> keyAndValue = fileToKeyAndValue.get(artifact);
           ActionExecutionValue actionValue = keyAndValue.getSecond();
           SkyKey key = keyAndValue.getFirst();
-          FileValue lastKnownData = actionValue.getAllFileValues().get(file);
+          FileValue lastKnownData = actionValue.getAllFileValues().get(artifact);
           try {
-            FileValue newData = ActionMetadataHandler.fileValueFromArtifactFile(file, stat,
+            FileValue newData = ActionMetadataHandler.fileValueFromArtifact(artifact, stat,
                 tsgm);
             if (!newData.equals(lastKnownData)) {
               updateIntraBuildModifiedCounter(stat != null ? stat.getLastChangeTime() : -1,
@@ -319,14 +335,16 @@ public class FilesystemValueChecker {
 
   private Runnable outputStatJob(final Collection<SkyKey> dirtyKeys,
       final List<Pair<SkyKey, ActionExecutionValue>> shard,
-      final ImmutableSet<PathFragment> knownModifiedOutputFiles) {
+      final ImmutableSet<PathFragment> knownModifiedOutputFiles,
+      final Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles) {
     return new Runnable() {
       @Override
       public void run() {
         for (Pair<SkyKey, ActionExecutionValue> keyAndValue : shard) {
           ActionExecutionValue value = keyAndValue.getSecond();
           if (value == null
-              || actionValueIsDirtyWithDirectSystemCalls(value, knownModifiedOutputFiles)) {
+              || actionValueIsDirtyWithDirectSystemCalls(
+                  value, knownModifiedOutputFiles, sortedKnownModifiedOutputFiles)) {
             dirtyKeys.add(keyAndValue.getFirst());
           }
         }
@@ -364,14 +382,15 @@ public class FilesystemValueChecker {
   }
 
   private boolean actionValueIsDirtyWithDirectSystemCalls(ActionExecutionValue actionValue,
-      ImmutableSet<PathFragment> knownModifiedOutputFiles) {
+      ImmutableSet<PathFragment> knownModifiedOutputFiles,
+      Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles) {
     boolean isDirty = false;
-    for (Map.Entry<ArtifactFile, FileValue> entry : actionValue.getAllFileValues().entrySet()) {
-      ArtifactFile file = entry.getKey();
+    for (Map.Entry<Artifact, FileValue> entry : actionValue.getAllFileValues().entrySet()) {
+      Artifact file = entry.getKey();
       FileValue lastKnownData = entry.getValue();
       if (shouldCheckFile(knownModifiedOutputFiles, file)) {
         try {
-          FileValue fileValue = ActionMetadataHandler.fileValueFromArtifactFile(file, null,
+          FileValue fileValue = ActionMetadataHandler.fileValueFromArtifact(file, null,
               tsgm);
           if (!fileValue.equals(lastKnownData)) {
             updateIntraBuildModifiedCounter(fileValue.exists()
@@ -391,7 +410,9 @@ public class FilesystemValueChecker {
     for (Map.Entry<Artifact, TreeArtifactValue> entry :
         actionValue.getAllTreeArtifactValues().entrySet()) {
       Artifact artifact = entry.getKey();
-      if (treeArtifactIsDirty(artifact, entry.getValue())) {
+
+      if (shouldCheckTreeArtifact(sortedKnownModifiedOutputFiles.get(), artifact)
+          && treeArtifactIsDirty(artifact, entry.getValue())) {
         Path path = artifact.getPath();
         // Count the changed directory as one "file".
         try {
@@ -411,9 +432,28 @@ public class FilesystemValueChecker {
   }
 
   private static boolean shouldCheckFile(ImmutableSet<PathFragment> knownModifiedOutputFiles,
-      ArtifactFile file) {
+      Artifact artifact) {
     return knownModifiedOutputFiles == null
-        || knownModifiedOutputFiles.contains(file.getExecPath());
+        || knownModifiedOutputFiles.contains(artifact.getExecPath());
+  }
+
+  private static boolean shouldCheckTreeArtifact(
+      @Nullable NavigableSet<PathFragment> knownModifiedOutputFiles, Artifact treeArtifact) {
+    // If null, everything needs to be checked.
+    if (knownModifiedOutputFiles == null) {
+      return true;
+    }
+
+    // Here we do the following to see whether a TreeArtifact is modified:
+    // 1. Sort the set of modified file paths in lexicographical order using TreeSet.
+    // 2. Get the first modified output file path that is greater than or equal to the exec path of
+    //    the TreeArtifact to check.
+    // 3. Check whether the returned file path contains the exec path of the TreeArtifact as a
+    //    prefix path.
+    PathFragment artifactExecPath = treeArtifact.getExecPath();
+    PathFragment headPath = knownModifiedOutputFiles.ceiling(artifactExecPath);
+
+    return headPath != null && headPath.startsWith(artifactExecPath);
   }
 
   private BatchDirtyResult getDirtyValues(ValueFetcher fetcher,

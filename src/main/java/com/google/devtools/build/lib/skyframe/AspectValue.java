@@ -15,7 +15,7 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Objects;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -51,7 +51,8 @@ public final class AspectValue extends ActionLookupValue {
     private final Label label;
     private final BuildConfiguration aspectConfiguration;
     private final BuildConfiguration baseConfiguration;
-    private final Aspect aspect;
+    private final AspectClass aspectClass;
+    private final AspectParameters parameters;
 
     protected AspectKey(
         Label label,
@@ -62,7 +63,8 @@ public final class AspectValue extends ActionLookupValue {
       this.label = label;
       this.aspectConfiguration = aspectConfiguration;
       this.baseConfiguration = baseConfiguration;
-      this.aspect = new Aspect(aspectClass, parameters);
+      this.aspectClass = aspectClass;
+      this.parameters = parameters;
     }
 
     @Override
@@ -77,21 +79,17 @@ public final class AspectValue extends ActionLookupValue {
     }
 
     public AspectClass getAspectClass() {
-      return aspect.getAspectClass();
+      return aspectClass;
     }
 
     @Nullable
     public AspectParameters getParameters() {
-      return aspect.getParameters();
-    }
-
-    public Aspect getAspect() {
-      return aspect;
+      return parameters;
     }
 
     @Override
     public String getDescription() {
-      return String.format("%s of %s", aspect.getAspectClass().getName(), getLabel());
+      return String.format("%s of %s", aspectClass.getName(), getLabel());
     }
 
     /**
@@ -132,7 +130,12 @@ public final class AspectValue extends ActionLookupValue {
 
     @Override
     public int hashCode() {
-      return Objects.hashCode(label, aspectConfiguration, baseConfiguration, aspect);
+      return Objects.hashCode(
+          label,
+          aspectConfiguration,
+          baseConfiguration,
+          aspectClass,
+          parameters);
     }
 
     @Override
@@ -149,20 +152,32 @@ public final class AspectValue extends ActionLookupValue {
       return Objects.equal(label, that.label)
           && Objects.equal(aspectConfiguration, that.aspectConfiguration)
           && Objects.equal(baseConfiguration, that.baseConfiguration)
-          && Objects.equal(aspect, that.aspect);
+          && Objects.equal(aspectClass, that.aspectClass)
+          && Objects.equal(parameters, that.parameters);
+    }
+
+    public String prettyPrint() {
+      if (label == null) {
+        return "null";
+      }
+      return String.format("%s with aspect %s%s",
+          label.toString(),
+          aspectClass.getName(),
+          (aspectConfiguration != null && aspectConfiguration.isHostConfiguration())
+              ? "(host) " : "");
     }
 
     @Override
     public String toString() {
       return label
           + "#"
-          + aspect.getAspectClass().getName()
+          + aspectClass.getName()
           + " "
           + (aspectConfiguration == null ? "null" : aspectConfiguration.checksum())
           + " "
           + (baseConfiguration == null ? "null" : baseConfiguration.checksum())
           + " "
-          + aspect.getParameters();
+          + parameters;
     }
   }
 
@@ -231,6 +246,7 @@ public final class AspectValue extends ActionLookupValue {
 
 
   private final Label label;
+  private final Aspect aspect;
   private final Location location;
   private final AspectKey key;
   private final ConfiguredAspect configuredAspect;
@@ -238,12 +254,14 @@ public final class AspectValue extends ActionLookupValue {
 
   public AspectValue(
       AspectKey key,
+      Aspect aspect,
       Label label,
       Location location,
       ConfiguredAspect configuredAspect,
-      Iterable<Action> actions,
+      Iterable<ActionAnalysisMetadata> actions,
       NestedSet<Package> transitivePackages) {
     super(actions);
+    this.aspect = aspect;
     this.location = location;
     this.label = label;
     this.key = key;
@@ -265,6 +283,10 @@ public final class AspectValue extends ActionLookupValue {
 
   public AspectKey getKey() {
     return key;
+  }
+
+  public Aspect getAspect() {
+    return aspect;
   }
 
   public NestedSet<Package> getTransitivePackages() {

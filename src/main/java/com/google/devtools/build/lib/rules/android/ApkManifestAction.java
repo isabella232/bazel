@@ -16,12 +16,14 @@ package com.google.devtools.build.lib.rules.android;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+import com.google.common.primitives.Ints;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
+import com.google.devtools.build.lib.collect.CollectionUtils;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.android.apkmanifest.ApkManifestOuterClass;
 import com.google.devtools.build.lib.rules.android.apkmanifest.ApkManifestOuterClass.ApkManifest;
 import com.google.devtools.build.lib.util.Fingerprint;
@@ -33,13 +35,15 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.Map;
 
-public class ApkManifestAction extends AbstractFileWriteAction {
+@Immutable
+public final class ApkManifestAction extends AbstractFileWriteAction {
 
   private static Iterable<Artifact> makeInputs(
       AndroidSdkProvider sdk,
       Iterable<Artifact> jars,
-      Artifact resourceApk,
-      NativeLibs nativeLibs) {
+      ResourceApk resourceApk,
+      NativeLibs nativeLibs,
+      Artifact debugKeystore) {
 
     return ImmutableList.<Artifact>builder()
         .add(sdk.getAapt().getExecutable())
@@ -60,8 +64,10 @@ public class ApkManifestAction extends AbstractFileWriteAction {
         .add(sdk.getZipalign().getExecutable())
         
         .addAll(jars)
-        .add(resourceApk)
+        .add(resourceApk.getArtifact())
+        .add(resourceApk.getManifest())
         .addAll(nativeLibs.getAllNativeLibs())
+        .add(debugKeystore)
         .build();
   }
 
@@ -70,31 +76,50 @@ public class ApkManifestAction extends AbstractFileWriteAction {
   private final boolean textOutput;
   private final AndroidSdkProvider sdk;
   private final Iterable<Artifact> jars;
-  private final Artifact resourceApk;
+  private final ResourceApk resourceApk;
   private final NativeLibs nativeLibs;
+  private final Artifact debugKeystore;
 
+  /**
+   * @param owner The action owner.
+   * @param outputFile The artifact to write the proto to.
+   * @param textOutput Whether to make the 
+   * @param sdk The Android SDK.
+   * @param jars All the jars that would be merged and dexed and put into an APK.
+   * @param resourceApk The ResourceApk for the .ap_ that contains the resources that would go into
+   *     an APK.
+   * @param debugKeystore The debug keystore.
+   * @param nativeLibs The natives libs that would go into an APK.
+   */
   public ApkManifestAction(
       ActionOwner owner,
       Artifact outputFile,
       boolean textOutput,
       AndroidSdkProvider sdk,
       Iterable<Artifact> jars,
-      Artifact resourceApk,
-      NativeLibs nativeLibs) {
-
-    super(owner, makeInputs(sdk, jars, resourceApk, nativeLibs), outputFile, false);
+      ResourceApk resourceApk,
+      NativeLibs nativeLibs,
+      Artifact debugKeystore) {
+    super(owner, makeInputs(sdk, jars, resourceApk, nativeLibs, debugKeystore), outputFile, false);
+    CollectionUtils.checkImmutable(jars);
     this.textOutput = textOutput;
     this.sdk = sdk;
     this.jars = jars;
     this.resourceApk = resourceApk;
     this.nativeLibs = nativeLibs;
+    this.debugKeystore = debugKeystore;
   }
 
   @Override
-  public DeterministicWriter newDeterministicWriter(ActionExecutionContext ctx) throws IOException {
+  public DeterministicWriter newDeterministicWriter(final ActionExecutionContext ctx)
+      throws IOException {
 
-    ApkManifestCreator manifestCreator = new ApkManifestCreator(
-        ctx.getMetadataHandler());
+    ApkManifestCreator manifestCreator = new ApkManifestCreator(new ArtifactDigester() {
+        @Override
+        public byte[] getDigest(Artifact artifact) throws IOException {
+          return ctx.getMetadataHandler().getMetadata(artifact).digest;
+        }
+    });
 
     final ApkManifest manifest = manifestCreator.createManifest();
 
@@ -112,19 +137,47 @@ public class ApkManifestAction extends AbstractFileWriteAction {
 
   @Override
   protected String computeKey() {
+
+    // Use fake hashes for the purposes of the action's key, because the hashes are retrieved from
+    // the MetadataHandler, which is available at only action-execution time. This should be ok
+    // because if an input artifact changes (and hence its hash changes), the action should be rerun
+    // anyway. This is more for the purpose of putting the structure of the output data into the
+    // key.
+    ApkManifestCreator manifestCreator = new ApkManifestCreator(new ArtifactDigester() {
+        @Override
+        public byte[] getDigest(Artifact artifact) {
+          return Ints.toByteArray(artifact.getExecPathString().hashCode());
+        }
+    });
+
+    ApkManifest manifest;
+    try {
+      manifest = manifestCreator.createManifest();
+    } catch (IOException e) {
+      // The ArtifactDigester shouldn't actually throw IOException, that's just for the
+      // ArtifactDigester that uses the MetadataHandler.
+      throw new IllegalStateException(e);
+    }
+
     return new Fingerprint()
         .addString(GUID)
+        .addBoolean(textOutput)
+        .addBytes(manifest.toByteArray())
         .hexDigestAndReset();
+  }
+
+  private interface ArtifactDigester {
+    byte[] getDigest(Artifact artifact) throws IOException;
   }
 
   private class ApkManifestCreator {
 
-    private final MetadataHandler metadataHandler;
+    private final ArtifactDigester artifactDigester;
 
-    private ApkManifestCreator(MetadataHandler metadataHandler) {
-      this.metadataHandler = metadataHandler;
+    private ApkManifestCreator(ArtifactDigester artifactDigester) {
+      this.artifactDigester = artifactDigester;
     }
- 
+
     private ApkManifest createManifest() throws IOException {
       ApkManifest.Builder manifestBuilder = ApkManifest.newBuilder();
 
@@ -132,7 +185,8 @@ public class ApkManifestAction extends AbstractFileWriteAction {
         manifestBuilder.addJars(makeArtifactProto(jar));
       }
 
-      manifestBuilder.setResourceApk(makeArtifactProto(resourceApk));
+      manifestBuilder.setResourceApk(makeArtifactProto(resourceApk.getArtifact()));
+      manifestBuilder.setAndroidManifest(makeArtifactProto(resourceApk.getManifest()));
 
       for (Map.Entry<String, Iterable<Artifact>> nativeLib : nativeLibs.getMap().entrySet()) {
         if (!Iterables.isEmpty(nativeLib.getValue())) {
@@ -143,6 +197,7 @@ public class ApkManifestAction extends AbstractFileWriteAction {
       }
 
       manifestBuilder.setAndroidSdk(createAndroidSdk(sdk));
+      manifestBuilder.setDebugKeystore(makeArtifactProto(debugKeystore));
       return manifestBuilder.build();
     }
 
@@ -156,12 +211,13 @@ public class ApkManifestAction extends AbstractFileWriteAction {
       }
       return protoArtifacts.build();
     }
-  
+
     private ApkManifestOuterClass.Artifact makeArtifactProto(Artifact artifact) throws IOException {
-      byte[] digest = metadataHandler.getMetadata(artifact).digest;
+      byte[] digest = artifactDigester.getDigest(artifact);
       return ApkManifestOuterClass.Artifact.newBuilder()
           .setExecRootPath(artifact.getExecPathString())
           .setHash(ByteString.copyFrom(digest))
+          .setLabel(artifact.getOwnerLabel().toString())
           .build();
     }
 

@@ -22,7 +22,7 @@
 
 set -eu
 
-MY_LOCATION=${MY_LOCATION:-"$0.runfiles/external/bazel_tools/tools/objc"}
+MY_LOCATION=${MY_LOCATION:-"$0.runfiles/bazel_tools/tools/objc"}
 REALPATH="${MY_LOCATION}/realpath"
 WRAPPER="${MY_LOCATION}/xcrunwrapper.sh"
 
@@ -39,7 +39,7 @@ $WRAPPER momc "$@" "$TEMPDIR/$NAME"
 pushd "$TEMPDIR" > /dev/null
 # Reset all dates to Zip Epoch so that two identical zips created at different
 # times appear the exact same for comparison purposes.
-find . -exec touch -h -t 198001010000 {} \;
+find . -exec touch -h -t 198001010000 {} \+
 
 # Added include "*" to fix case where we may want an empty zip file because
 # there is no data.

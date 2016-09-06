@@ -20,6 +20,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.util.Fingerprint;
 
 import java.io.IOException;
@@ -31,7 +32,8 @@ import java.util.Collection;
  * <p>TODO(bazel-team): Choose a better name to distinguish this class from
  * {@link BinaryFileWriteAction}.
  */
-public class FileWriteAction extends AbstractFileWriteAction {
+@Immutable // if fileContents is immutable
+public final class FileWriteAction extends AbstractFileWriteAction {
 
   private static final String GUID = "332877c7-ca9f-4731-b387-54f620408522";
 
@@ -134,7 +136,8 @@ public class FileWriteAction extends AbstractFileWriteAction {
   public static Artifact createFile(RuleContext ruleContext,
       String fileName, CharSequence contents, boolean executable) {
     Artifact scriptFileArtifact = ruleContext.getPackageRelativeArtifact(
-        fileName, ruleContext.getConfiguration().getGenfilesDirectory());
+        fileName, ruleContext.getConfiguration().getGenfilesDirectory(
+            ruleContext.getRule().getRepository()));
     ruleContext.registerAction(new FileWriteAction(
         ruleContext.getActionOwner(), scriptFileArtifact, contents, executable));
     return scriptFileArtifact;

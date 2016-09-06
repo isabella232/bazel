@@ -154,4 +154,19 @@ string GetDefaultHostJavabase() {
   return "/usr/local/openjdk8";
 }
 
+void WriteSystemSpecificProcessIdentifier(const string& server_dir) {
+}
+
+bool KillServerProcess(
+    int pid, const string& output_base, const string& install_base) {
+  // TODO(lberki): This might accidentally kill an unrelated process if the
+  // server died and the PID got reused.
+  killpg(pid, SIGKILL);
+  return true;
+}
+
+// Not supported.
+void ExcludePathFromBackup(const string &path) {
+}
+
 }  // namespace blaze

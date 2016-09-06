@@ -19,10 +19,7 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-
 import java.util.List;
-
-import javax.annotation.Nullable;
 
 /**
  * Information about the JDK used by the <code>java_*</code> rules.
@@ -33,32 +30,38 @@ import javax.annotation.Nullable;
 @Immutable
 public class JavaToolchainData {
 
+  public enum SupportsWorkers {
+    NO,
+    YES
+  }
+
   private final String sourceVersion;
   private final String targetVersion;
-  // TODO(cushon): remove @Nullable once migration from --javac_bootclasspath and --javac_extdir
-  // is complete, and java_toolchain.{bootclasspath,extclasspath} are mandatory
-  @Nullable private final Iterable<String> bootclasspath;
-  @Nullable private final Iterable<String> extclasspath;
+  private final Iterable<String> bootclasspath;
+  private final Iterable<String> extclasspath;
   private final String encoding;
   private final ImmutableList<String> options;
   private final ImmutableList<String> jvmOpts;
+  private boolean javacSupportsWorkers;
 
   public JavaToolchainData(
       String sourceVersion,
       String targetVersion,
-      @Nullable Iterable<String> bootclasspath,
-      @Nullable Iterable<String> extclasspath,
+      Iterable<String> bootclasspath,
+      Iterable<String> extclasspath,
       String encoding,
       List<String> xlint,
       List<String> misc,
-      List<String> jvmOpts) {
+      List<String> jvmOpts,
+      SupportsWorkers javacSupportsWorkers) {
     this.sourceVersion = checkNotNull(sourceVersion, "sourceVersion must not be null");
     this.targetVersion = checkNotNull(targetVersion, "targetVersion must not be null");
-    this.bootclasspath = bootclasspath;
-    this.extclasspath = extclasspath;
+    this.bootclasspath = checkNotNull(bootclasspath, "bootclasspath must not be null");
+    this.extclasspath = checkNotNull(extclasspath, "extclasspath must not be null");
     this.encoding = checkNotNull(encoding, "encoding must not be null");
 
     this.jvmOpts = ImmutableList.copyOf(jvmOpts);
+    this.javacSupportsWorkers = javacSupportsWorkers.equals(SupportsWorkers.YES);
     Builder<String> builder = ImmutableList.<String>builder();
     if (!sourceVersion.isEmpty()) {
       builder.add("-source", sourceVersion);
@@ -83,9 +86,10 @@ public class JavaToolchainData {
   }
 
   /**
-   * @return the list of options to be given to the JVM when invoking the java compiler.
+   * @return the list of options to be given to the JVM when invoking the java compiler and
+   *     associated tools.
    */
-  public ImmutableList<String> getJavacJvmOptions() {
+  public ImmutableList<String> getJvmOptions() {
     return jvmOpts;
   }
 
@@ -97,17 +101,19 @@ public class JavaToolchainData {
     return targetVersion;
   }
 
-  @Nullable
   public Iterable<String> getBootclasspath() {
     return bootclasspath;
   }
 
-  @Nullable
   public Iterable<String> getExtclasspath() {
     return extclasspath;
   }
 
   public String getEncoding() {
     return encoding;
+  }
+
+  public boolean getJavacSupportsWorkers() {
+    return javacSupportsWorkers;
   }
 }

@@ -31,12 +31,11 @@ import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.flags.InvocationPolicyEnforcer;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
-import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.Preprocessor;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
@@ -49,13 +48,13 @@ import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
-import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsParser;
+import com.google.devtools.common.options.OptionsParsingException;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -74,17 +73,21 @@ import java.util.UUID;
 @RunWith(JUnit4.class)
 public class PackageCacheTest extends FoundationTestCase {
 
+  private AnalysisMock analysisMock;
   private ConfiguredRuleClassProvider ruleClassProvider;
   private SkyframeExecutor skyframeExecutor;
 
   @Before
-  public final void initializeSkyframExecutor() throws Exception {
-    ruleClassProvider = TestRuleClassProvider.getRuleClassProvider();
-    BlazeDirectories directories = new BlazeDirectories(outputBase, outputBase, rootDirectory);
+  public final void initializeSkyframeExecutor() throws Exception {
+    analysisMock = AnalysisMock.get();
+    ruleClassProvider = analysisMock.createRuleClassProvider();
+    BlazeDirectories directories =
+        new BlazeDirectories(outputBase, outputBase, rootDirectory, analysisMock.getProductName());
     skyframeExecutor =
         SequencedSkyframeExecutor.create(
-            new PackageFactory(ruleClassProvider),
-            new TimestampGranularityMonitor(BlazeClock.instance()),
+            analysisMock
+                .getPackageFactoryForTesting()
+                .create(ruleClassProvider, scratch.getFileSystem()),
             directories,
             null, /* BinTools */
             null, /* workspaceStatusActionFactory */
@@ -92,23 +95,24 @@ public class PackageCacheTest extends FoundationTestCase {
             ImmutableList.<DiffAwareness.Factory>of(),
             Predicates.<PathFragment>alwaysFalse(),
             Preprocessor.Factory.Supplier.NullSupplier.INSTANCE,
-            AnalysisMock.get().getSkyFunctions(directories),
+            AnalysisMock.get().getSkyFunctions(),
             ImmutableList.<PrecomputedValue.Injected>of(),
-            ImmutableList.<SkyValueDirtinessChecker>of());
-    skyframeExecutor.preparePackageLoading(
-        new PathPackageLocator(outputBase, ImmutableList.of(rootDirectory)),
-        ConstantRuleVisibility.PUBLIC, true, 7, "",
-        UUID.randomUUID());
+            ImmutableList.<SkyValueDirtinessChecker>of(),
+            analysisMock.getProductName());
     setUpSkyframe(parsePackageCacheOptions());
   }
 
   private void setUpSkyframe(PackageCacheOptions packageCacheOptions) {
     PathPackageLocator pkgLocator = PathPackageLocator.create(
         null, packageCacheOptions.packagePath, reporter, rootDirectory, rootDirectory);
-    skyframeExecutor.preparePackageLoading(pkgLocator,
-        packageCacheOptions.defaultVisibility, true,
-        7, ruleClassProvider.getDefaultsPackageContent(),
-        UUID.randomUUID());
+    skyframeExecutor.preparePackageLoading(
+        pkgLocator,
+        packageCacheOptions.defaultVisibility,
+        true,
+        7,
+        analysisMock.getDefaultsPackageContent(),
+        UUID.randomUUID(),
+        new TimestampGranularityMonitor(BlazeClock.instance()));
     skyframeExecutor.setDeletedPackages(ImmutableSet.copyOf(packageCacheOptions.getDeletedPackages()));
   }
 
@@ -116,6 +120,14 @@ public class PackageCacheTest extends FoundationTestCase {
     OptionsParser parser = OptionsParser.newOptionsParser(PackageCacheOptions.class);
     parser.parse(new String[] { "--default_visibility=public" });
     parser.parse(options);
+
+    InvocationPolicyEnforcer optionsPolicyEnforcer = analysisMock.getInvocationPolicyEnforcer();
+    try {
+      optionsPolicyEnforcer.enforce(parser);
+    } catch (OptionsParsingException e) {
+      throw new IllegalStateException(e);
+    }
+
     return parser.getOptions(PackageCacheOptions.class);
   }
 

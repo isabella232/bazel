@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/bin/bash
 
 # Copyright 2015 The Bazel Authors. All rights reserved.
 #
@@ -14,38 +14,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set -e
+
 # Bazel self-extractable installer
 
 # Installation and etc prefix can be overriden from command line
 install_prefix=${1:-"/usr/local"}
-# TODO(kchodorow): delete by April 2016.
-bazelrc=${2:-"/etc/bazel.bazelrc"}
 
 progname="$0"
 
 echo "Bazel installer"
 echo "---------------"
 echo
+echo "Bazel is bundled with software licensed under the GPLv2 with Classpath exception."
+echo "You can find the sources next to the installer on our release page:"
+echo "   https://github.com/bazelbuild/bazel/releases"
+echo
+
 cat <<'EOF'
 %release_info%
 EOF
 
-function usage() {
+usage() {
   echo "Usage: $progname [options]" >&2
   echo "Options are:" >&2
   echo "  --prefix=/some/path set the prefix path (default=/usr/local)." >&2
   echo "  --bin= set the binary folder path (default=%prefix%/bin)." >&2
   echo "  --base= set the base install path (default=%prefix%/lib/bazel)." >&2
-  echo "  --bazelrc= set the path to bazelrc (default=/etc/bazelrc)." >&2
   echo "  --user configure for user install, expands to:" >&2
-  echo '      --bin=$HOME/bin --base=$HOME/.bazel --bazelrc=$HOME/.bazelrc' >&2
+  echo '      --bin=$HOME/bin --base=$HOME/.bazel' >&2
   exit 1
 }
 
 prefix="/usr/local"
 bin="%prefix%/bin"
 base="%prefix%/lib/bazel"
-bazelrc="/etc/bazel.bazelrc"
 
 for opt in "${@}"; do
   case $opt in
@@ -53,7 +56,8 @@ for opt in "${@}"; do
       prefix="$(echo "$opt" | cut -d '=' -f 2-)"
       ;;
     --bazelrc=*)
-      bazelrc="$(echo "$opt" | cut -d '=' -f 2-)"
+      # TODO(kchodorow): remove once everything we're testing on CI contains
+      # this comment.
       ;;
     --bin=*)
       bin="$(echo "$opt" | cut -d '=' -f 2-)"
@@ -64,7 +68,6 @@ for opt in "${@}"; do
     --user)
       bin="$HOME/bin"
       base="$HOME/.bazel"
-      bazelrc="$HOME/.bazelrc"
       ;;
     *)
       usage
@@ -74,9 +77,8 @@ done
 
 bin="${bin//%prefix%/${prefix}}"
 base="${base//%prefix%/${prefix}}"
-bazelrc="${bazelrc//%prefix%/${prefix}}"
 
-function test_write() {
+test_write() {
   local file="$1"
   while [ "$file" != "/" ] && [ -n "${file}" ] && [ ! -e "$file" ]; do
     file="$(dirname "${file}")"
@@ -84,6 +86,7 @@ function test_write() {
   [ -w "${file}" ] || {
     echo >&2
     echo "The Bazel installer must have write access to $1!" >&2
+    echo "Consider using the --user flag to install Bazel under $HOME/bin instead." >&2
     echo >&2
     usage
   }
@@ -127,15 +130,12 @@ fi
 # Test for write access
 test_write "${bin}"
 test_write "${base}"
-test_write "${bazelrc}"
 
 # Do the actual installation
 echo -n "Uncompressing."
 
 # Cleaning-up, with some guards.
-if [ -f "${bin}/bazel" ]; then
-  rm -f "${bin}/bazel"
-fi
+rm -f "${bin}/bazel"
 if [ -d "${base}" -a -x "${base}/bin/bazel" ]; then
   rm -fr "${base}"
 fi
@@ -155,17 +155,7 @@ echo -n .
 ln -s "${base}/bin/bazel" "${bin}/bazel"
 echo -n .
 
-if [ -f "${bazelrc}" ]; then
-  echo
-  echo "${bazelrc} already exists, moving it to ${bazelrc}.bak."
-  mv "${bazelrc}" "${bazelrc}.bak"
-fi
-
-# Not necessary, but this way it matches the Debian package.
-touch "${bazelrc}"
-if [ "${UID}" -eq 0 ]; then
-  chmod 0644 "${bazelrc}"
-else
+if [ "${UID}" -ne 0 ]; then
   # Uncompress the bazel base install for faster startup time
   "${bin}/bazel" help >/dev/null
 fi

@@ -19,12 +19,13 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.packages.AttributeContainer;
 import com.google.devtools.build.lib.packages.CachingPackageLocator;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.packages.GlobCache;
 import com.google.devtools.build.lib.packages.MakeEnvironment;
 import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.packages.Package.LegacyBuilder;
+import com.google.devtools.build.lib.packages.Package.Builder;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.LegacyGlobber;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
@@ -35,7 +36,6 @@ import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
-
 import java.io.IOException;
 
 /**
@@ -50,8 +50,14 @@ public class PackageFactoryApparatus {
       EventHandler eventHandler, PackageFactory.EnvironmentExtension... environmentExtensions) {
     this.eventHandler = eventHandler;
     RuleClassProvider ruleClassProvider = TestRuleClassProvider.getRuleClassProvider();
-    factory = new PackageFactory(ruleClassProvider, null,
-        ImmutableList.copyOf(environmentExtensions), "test");
+    factory =
+        new PackageFactory(
+            ruleClassProvider,
+            null,
+            AttributeContainer.ATTRIBUTE_CONTAINER_FACTORY,
+            ImmutableList.copyOf(environmentExtensions),
+            "test",
+            Package.Builder.DefaultHelper.INSTANCE);
   }
 
   /**
@@ -99,7 +105,7 @@ public class PackageFactoryApparatus {
    */
   public BuildFileAST ast(Path buildFile) throws IOException {
     ParserInputSource inputSource = ParserInputSource.create(buildFile);
-    return BuildFileAST.parseBuildFile(inputSource, eventHandler, /*parsePython=*/ false);
+    return BuildFileAST.parseBuildFile(inputSource, eventHandler);
   }
 
   /**
@@ -115,12 +121,12 @@ public class PackageFactoryApparatus {
             getPackageLocator(),
             null,
             TestUtils.getPool());
-    LegacyGlobber globber = new LegacyGlobber(globCache);
+    LegacyGlobber globber = PackageFactory.createLegacyGlobber(globCache);
     Package externalPkg =
-        Package.newExternalPackageBuilder(
+        factory.newExternalPackageBuilder(
                 buildFile.getParentDirectory().getRelative("WORKSPACE"), "TESTING")
             .build();
-    LegacyBuilder resultBuilder =
+    Builder resultBuilder =
         factory.evaluateBuildFile(
             externalPkg,
             packageId,

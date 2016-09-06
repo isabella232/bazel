@@ -1,21 +1,24 @@
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//src:__pkg__"],
+)
+
 TESTUTIL_FILES = [
-    "DeterministicInMemoryGraph.java",
-    "EvaluationResultSubject.java",
-    "EvaluationResultSubjectFactory.java",
-    "NotifyingInMemoryGraph.java",
     "TrackingAwaiter.java",
     "GraphTester.java",
     "GenericFunctionException.java",
     "SomeErrorException.java",
     "TrackingInvalidationReceiver.java",
     "WalkableGraphUtils.java",
-]
+    # Truth Subject, SubjectFactory, and Graph files.
+] + glob(["*Subject.java"]) + glob(["*SubjectFactory.java"]) + glob(["*Graph.java"]) + glob(["*Helper.java"])
 
 java_library(
     name = "testutil",
     srcs = TESTUTIL_FILES,
     visibility = [
-        "//src/test/java/com/google/devtools/build/lib:__pkg__",
+        "//src/test/java/com/google/devtools/build/lib:__subpackages__",
     ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib:collect",

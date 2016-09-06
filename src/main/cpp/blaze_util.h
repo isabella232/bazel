@@ -29,6 +29,10 @@ namespace blaze {
 
 using std::string;
 
+string ServerPidFile();
+
+string ServerPidSymlink();
+
 string GetUserName();
 
 // Returns the given path in absolute form.  Does not change paths that are
@@ -37,6 +41,7 @@ string GetUserName();
 // If called from working directory "/bar":
 //   MakeAbsolute("foo") --> "/bar/foo"
 //   MakeAbsolute("/foo") ---> "/foo"
+//   MakeAbsolute("C:/foo") ---> "C:/foo"
 string MakeAbsolute(const string &path);
 
 // mkdir -p path. All newly created directories use the given mode.
@@ -44,11 +49,11 @@ string MakeAbsolute(const string &path);
 int MakeDirectories(const string &path, mode_t mode);
 
 // Replaces 'content' with contents of file 'filename'.
-// Returns false on error.
+// Returns false on error. Can be called from a signal handler.
 bool ReadFile(const string &filename, string *content);
 
 // Replaces 'content' with contents of file descriptor 'fd'.
-// Returns false on error.
+// Returns false on error. Can be called from a signal handler.
 bool ReadFileDescriptor(int fd, string *content);
 
 // Writes 'content' into file 'filename', and makes it executable.
@@ -75,18 +80,17 @@ const char* GetUnaryOption(const char *arg,
 
 // Returns true iff 'arg' equals 'key'.
 // Dies with a syntax error if arg starts with 'key='.
-// Returns NULL otherwise.
+// Returns false otherwise.
 bool GetNullaryOption(const char *arg, const char *key);
 
 // Enable messages mostly of interest to developers.
 bool VerboseLogging();
 
-// Read the JVM version from a file descriptor. The fd should point
-// to the output of a "java -version" execution and is supposed to contains
-// a string of the form 'version "version-number"' in the first 255 bytes.
-// If the string is found, version-number is returned, else the empty string
-// is returned.
-string ReadJvmVersion(int fd);
+// Read the JVM version from a string. The string should contain the output of a
+// "java -version" execution and is supposed to contain a string of the form
+// 'version "version-number"' in the first 255 bytes. If the string is found,
+// version-number is returned, else the empty string is returned.
+string ReadJvmVersion(const string& version_string);
 
 // Get the version string from the given java executable. The java executable
 // is supposed to output a string in the form '.*version ".*".*'. This method

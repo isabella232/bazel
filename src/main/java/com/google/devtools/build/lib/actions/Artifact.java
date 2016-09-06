@@ -22,12 +22,13 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
-import com.google.devtools.build.lib.actions.Action.MiddlemanType;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Printer;
@@ -35,12 +36,10 @@ import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
-
 import javax.annotation.Nullable;
 
 /**
@@ -70,7 +69,7 @@ import javax.annotation.Nullable;
  * In the usual case, an Artifact represents a single file. However, an Artifact may
  * also represent the following:
  * <ul>
- * <li>A TreeArtifact, which is a directory containing a tree of unknown {@link ArtifactFile}s.
+ * <li>A TreeArtifact, which is a directory containing a tree of unknown {@link Artifact}s.
  * In the future, Actions will be able to examine these files as inputs and declare them as outputs
  * at execution time, but this is not yet implemented. This is used for Actions where
  * the inputs and/or outputs might not be discoverable except during Action execution.
@@ -86,19 +85,22 @@ import javax.annotation.Nullable;
  * <li>A 'Fileset' special Artifact. This is a legacy type of Artifact and should not be used
  * by new rule implementations.
  * </ul>
- * <p/>
- * This class implements {@link ArtifactFile}, and is modeled as an Artifact "containing" itself
- * as an ArtifactFile.
- * <p/>
  * <p>This class is "theoretically" final; it should not be subclassed except by
  * {@link SpecialArtifact}.
  */
 @Immutable
 @SkylarkModule(name = "File",
-    doc = "This type represents a file used by the build system. It can be "
-        + "either a source file or a derived file produced by a rule.")
+    category = SkylarkModuleCategory.BUILTIN,
+    doc = "<p>This type represents a file used by the build system. It can be "
+        + "either a source file or a derived file produced by a rule.</p>"
+        + "<p>The File constructor is private, so you cannot call it directly to create new "
+        + "Files. If you have a Skylark rule that needs to create a new File, you might need to "
+        + "add the label to the attrs (if it's an input) or the outputs (if it's an output). Then "
+        + "you can access the File through the rule's <a href='ctx.html'>context</a>. You can "
+        + "also use <a href='ctx.html#new_file'>ctx.new_file</a> to create a new file in the rule "
+        + "implementation.</p>")
 public class Artifact
-    implements FileType.HasFilename, ArtifactFile, SkylarkValue , Comparable<Object> {
+    implements FileType.HasFilename, ActionInput, SkylarkValue, Comparable<Object> {
 
   /**
    * Compares artifact according to their exec paths. Sorts null values first.
@@ -136,7 +138,7 @@ public class Artifact
      * <p>{@code artifact.isMiddlemanArtifact() || artifact.isTreeArtifact()} must be true.
      * Only aggregating middlemen and tree artifacts are expanded.
      */
-    void expand(Artifact artifact, Collection<? super ArtifactFile> output);
+    void expand(Artifact artifact, Collection<? super Artifact> output);
   }
 
   public static final ImmutableList<Artifact> NO_ARTIFACTS = ImmutableList.of();
@@ -151,6 +153,17 @@ public class Artifact
     }
   };
 
+  /**
+   * A Predicate that evaluates to true if the Artifact <b>is</b> a tree artifact.
+   */
+  public static final Predicate<Artifact> IS_TREE_ARTIFACT = new Predicate<Artifact>() {
+    @Override
+    public boolean apply(Artifact input) {
+      return input.isTreeArtifact();
+    }
+  };
+
+  private final int hashCode;
   private final Path path;
   private final Root root;
   private final PathFragment execPath;
@@ -184,6 +197,7 @@ public class Artifact
       throw new IllegalArgumentException(execPath + ": illegal execPath for " + path
           + " (root: " + root + ")");
     }
+    this.hashCode = path.hashCode();
     this.path = path;
     this.root = root;
     this.execPath = execPath;
@@ -239,20 +253,20 @@ public class Artifact
         root.getExecPath().getRelative(rootRelativePath), ArtifactOwner.NULL_OWNER);
   }
 
-  @Override
   public final Path getPath() {
     return path;
   }
 
+  public boolean hasParent() {
+    return getParent() != null;
+  }
+
   /**
-   * Returns the Artifact containing this ArtifactFile. Since normal Artifacts correspond
-   * to only one ArtifactFile -- itself -- for normal Artifacts, this method returns {@code this}.
-   * For special artifacts, throws {@link UnsupportedOperationException}.
-   * See also {@link ArtifactFile#getParent()}.
+   * Returns the parent Artifact containing this Artifact. Artifacts without parents shall
+   * return null.
    */
-  @Override
-  public Artifact getParent() throws UnsupportedOperationException {
-    return this;
+  @Nullable public Artifact getParent() {
+    return null;
   }
 
   /**
@@ -307,7 +321,6 @@ public class Artifact
    * package-path entries (for source Artifacts), or one of the bin, genfiles or includes dirs
    * (for derived Artifacts). It will always be an ancestor of getPath().
    */
-  @Override
   @SkylarkCallable(name = "root", structField = true,
       doc = "The root beneath which this file resides."
   )
@@ -315,18 +328,16 @@ public class Artifact
     return root;
   }
 
-  @Override
   public final PathFragment getExecPath() {
     return execPath;
   }
 
   /**
-   * Returns the path of this ArtifactFile relative to this containing Artifact. Since
-   * ordinary Artifacts correspond to only one ArtifactFile -- itself -- for ordinary Artifacts,
+   * Returns the path of this Artifact relative to this containing Artifact. Since
+   * ordinary Artifacts correspond to only one Artifact -- itself -- for ordinary Artifacts,
    * this just returns the empty path. For special Artifacts, throws
-   * {@link UnsupportedOperationException}. See also {@link ArtifactFile#getParentRelativePath()}.
+   * {@link UnsupportedOperationException}. See also {@link Artifact#getParentRelativePath()}.
    */
-  @Override
   public PathFragment getParentRelativePath() {
     return PathFragment.EMPTY_FRAGMENT;
   }
@@ -350,7 +361,7 @@ public class Artifact
   }
 
   /**
-   * Returns true iff this is a TreeArtifact representing a directory tree containing ArtifactFiles.
+   * Returns true iff this is a TreeArtifact representing a directory tree containing Artifacts.
    */
   public boolean isTreeArtifact() {
     return false;
@@ -418,13 +429,77 @@ public class Artifact
     }
 
     @Override
+    public boolean hasParent() {
+      return false;
+    }
+
+    @Override
+    @Nullable
     public Artifact getParent() {
-      throw new UnsupportedOperationException();
+      return null;
+    }
+
+    @Override
+    @Nullable
+    public PathFragment getParentRelativePath() {
+      return null;
+    }
+  }
+
+  /**
+   * A special kind of artifact that represents a concrete file created at execution time under
+   * its associated TreeArtifact.
+   *
+   * <p> TreeFileArtifacts should be only created during execution time inside some special actions
+   * to support action inputs and outputs that are unpredictable at analysis time.
+   * TreeFileArtifacts should not be created directly by any rules at analysis time.
+   *
+   * <p>We subclass {@link Artifact} instead of storing the extra fields directly inside in order
+   * to save memory. The proportion of TreeFileArtifacts is very small, and by not having to keep
+   * around the extra fields for the rest we save some memory.
+   */
+  @Immutable
+  public static final class TreeFileArtifact extends Artifact {
+    private final Artifact parentTreeArtifact;
+    private final PathFragment parentRelativePath;
+
+    /**
+     * Constructs a TreeFileArtifact with the given parent-relative path under the given parent
+     * TreeArtifact. The {@link ArtifactOwner} of the TreeFileArtifact is the {@link ArtifactOwner}
+     * of the parent TreeArtifact.
+     */
+    TreeFileArtifact(Artifact parent, PathFragment parentRelativePath) {
+      this(parent, parentRelativePath, parent.getArtifactOwner());
+    }
+
+    /**
+     * Constructs a TreeFileArtifact with the given parent-relative path under the given parent
+     * TreeArtifact, owned by the given {@code artifactOwner}.
+     */
+    TreeFileArtifact(Artifact parent, PathFragment parentRelativePath,
+        ArtifactOwner artifactOwner) {
+      super(
+          parent.getPath().getRelative(parentRelativePath),
+          parent.getRoot(),
+          parent.getExecPath().getRelative(parentRelativePath),
+          artifactOwner);
+      Preconditions.checkState(
+          parent.isTreeArtifact(),
+          "The parent of TreeFileArtifact (parent-relative path: %s) is not a TreeArtifact: %s",
+          parentRelativePath,
+          parent);
+      this.parentTreeArtifact = parent;
+      this.parentRelativePath = parentRelativePath;
+    }
+
+    @Override
+    public Artifact getParent() {
+      return parentTreeArtifact;
     }
 
     @Override
     public PathFragment getParentRelativePath() {
-      throw new UnsupportedOperationException();
+      return parentRelativePath;
     }
   }
 
@@ -432,9 +507,35 @@ public class Artifact
    * Returns the relative path to this artifact relative to its root.  (Useful
    * when deriving output filenames from input files, etc.)
    */
-  @Override
   public final PathFragment getRootRelativePath() {
     return rootRelativePath;
+  }
+
+  /**
+   * For targets in external repositories, this returns the path the artifact live at in the
+   * runfiles tree. For local targets, it returns the rootRelativePath.
+   */
+  public final PathFragment getRunfilesPath() {
+    PathFragment relativePath = rootRelativePath;
+    if (relativePath.segmentCount() > 1
+        && relativePath.getSegment(0).equals(Label.EXTERNAL_PATH_PREFIX)) {
+      // Turn external/repo/foo into ../repo/foo.
+      relativePath = relativePath.relativeTo(Label.EXTERNAL_PATH_PREFIX);
+      relativePath = new PathFragment("..").getRelative(relativePath);
+    }
+    return relativePath;
+  }
+
+  @SkylarkCallable(
+      name = "short_path",
+      structField = true,
+      doc =
+          "The path of this file relative to its root. This excludes the aforementioned "
+              + "<i>root</i>, i.e. configuration-specific fragments of the path. This is also the "
+              + "path under which the file is mapped if it's in the runfiles of a binary."
+  )
+  public final String getRunfilesPathString() {
+    return getRunfilesPath().getPathString();
   }
 
   /**
@@ -466,19 +567,10 @@ public class Artifact
     return ShellUtils.shellEscape(getExecPathString());
   }
 
-  @SkylarkCallable(
-    name = "short_path",
-    structField = true,
-    doc =
-        "The path of this file relative to its root. This excludes the aforementioned "
-            + "<i>root</i>, i.e. configuration-specific fragments of the path. This is also the "
-            + "path under which the file is mapped if it's in the runfiles of a binary."
-  )
   public final String getRootRelativePathString() {
     return getRootRelativePath().getPathString();
   }
 
-  @Override
   public final String prettyPrint() {
     // toDetailString would probably be more useful to users, but lots of tests rely on the
     // current values.
@@ -498,7 +590,10 @@ public class Artifact
 
   @Override
   public final int hashCode() {
-    return path.hashCode();
+    // This is just path.hashCode().  We cache a copy in the Artifact object to reduce LLC misses
+    // during operations which build a HashSet out of many Artifacts.  This is a slight loss for
+    // memory but saves ~1% overall CPU in some real builds.
+    return hashCode;
   }
 
   @Override
@@ -550,26 +645,26 @@ public class Artifact
   /**
    * Formatter for execPath PathFragment output.
    */
-  private static final Function<ArtifactFile, PathFragment> EXEC_PATH_FORMATTER =
-      new Function<ArtifactFile, PathFragment>() {
+  private static final Function<Artifact, PathFragment> EXEC_PATH_FORMATTER =
+      new Function<Artifact, PathFragment>() {
         @Override
-        public PathFragment apply(ArtifactFile input) {
+        public PathFragment apply(Artifact input) {
           return input.getExecPath();
         }
       };
 
-  public static final Function<ArtifactFile, String> ROOT_RELATIVE_PATH_STRING =
-      new Function<ArtifactFile, String>() {
+  public static final Function<Artifact, String> ROOT_RELATIVE_PATH_STRING =
+      new Function<Artifact, String>() {
         @Override
-        public String apply(ArtifactFile artifact) {
+        public String apply(Artifact artifact) {
           return artifact.getRootRelativePath().getPathString();
         }
       };
 
-  public static final Function<ArtifactFile, String> ABSOLUTE_PATH_STRING =
-      new Function<ArtifactFile, String>() {
+  public static final Function<Artifact, String> ABSOLUTE_PATH_STRING =
+      new Function<Artifact, String>() {
         @Override
-        public String apply(ArtifactFile artifact) {
+        public String apply(Artifact artifact) {
           return artifact.getPath().getPathString();
         }
       };
@@ -654,8 +749,8 @@ public class Artifact
    * {@link MiddlemanType#AGGREGATING_MIDDLEMAN} middleman actions expanded once.
    */
   public static void addExpandedArtifacts(Iterable<Artifact> artifacts,
-      Collection<? super ArtifactFile> output, ArtifactExpander artifactExpander) {
-    addExpandedArtifacts(artifacts, output, Functions.<ArtifactFile>identity(), artifactExpander);
+      Collection<? super Artifact> output, ArtifactExpander artifactExpander) {
+    addExpandedArtifacts(artifacts, output, Functions.<Artifact>identity(), artifactExpander);
   }
 
   /**
@@ -690,7 +785,7 @@ public class Artifact
    */
   private static <E> void addExpandedArtifacts(Iterable<? extends Artifact> artifacts,
                                                Collection<? super E> output,
-                                               Function<? super ArtifactFile, E> outputFormatter,
+                                               Function<? super Artifact, E> outputFormatter,
                                                ArtifactExpander artifactExpander) {
     for (Artifact artifact : artifacts) {
       if (artifact.isMiddlemanArtifact() || artifact.isTreeArtifact()) {
@@ -703,12 +798,12 @@ public class Artifact
 
   private static <E> void expandArtifact(Artifact middleman,
       Collection<? super E> output,
-      Function<? super ArtifactFile, E> outputFormatter,
+      Function<? super Artifact, E> outputFormatter,
       ArtifactExpander artifactExpander) {
     Preconditions.checkArgument(middleman.isMiddlemanArtifact() || middleman.isTreeArtifact());
-    List<ArtifactFile> artifacts = new ArrayList<>();
+    List<Artifact> artifacts = new ArrayList<>();
     artifactExpander.expand(middleman, artifacts);
-    for (ArtifactFile artifact : artifacts) {
+    for (Artifact artifact : artifacts) {
       output.add(outputFormatter.apply(artifact));
     }
   }
@@ -785,7 +880,7 @@ public class Artifact
   /**
    * Converts artifacts into their exec paths. Returns an immutable list.
    */
-  public static List<PathFragment> asPathFragments(Iterable<? extends ArtifactFile> artifacts) {
+  public static List<PathFragment> asPathFragments(Iterable<? extends Artifact> artifacts) {
     return ImmutableList.copyOf(Iterables.transform(artifacts, EXEC_PATH_FORMATTER));
   }
 

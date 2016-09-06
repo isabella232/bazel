@@ -26,29 +26,48 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.packages.AspectDefinition;
 import com.google.devtools.build.lib.packages.AspectParameters;
-import com.google.devtools.build.lib.packages.NativeAspectClass.NativeAspectFactory;
+import com.google.devtools.build.lib.packages.NativeAspectClass;
+import com.google.devtools.build.lib.rules.android.AndroidRuleClasses.AndroidSdkLabel;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
 import com.google.devtools.build.lib.rules.java.JavaSourceInfoProvider;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.List;
 
 /** Aspect to provide Jack support to rules which have java sources. */
-public final class JackAspect implements NativeAspectFactory, ConfiguredAspectFactory {
+public final class JackAspect extends NativeAspectClass implements ConfiguredAspectFactory {
   public static final String NAME = "JackAspect";
+  private final String toolsRepository;
+
+  /**
+   * Creates a JackAspect using the provided tools repository path.
+   *
+   * @param toolsRepository the path to the tools repository
+   */
+  public JackAspect(String toolsRepository) {
+    this.toolsRepository = toolsRepository;
+  }
 
   @Override
   public AspectDefinition getDefinition(AspectParameters params) {
+    Label androidSdk;
+    try {
+      androidSdk = Label.parseAbsolute(toolsRepository + AndroidRuleClasses.DEFAULT_SDK);
+    } catch (LabelSyntaxException e) {
+      throw new IllegalStateException(e);
+    }
+
     return new AspectDefinition.Builder("JackAspect")
         .requireProvider(JavaSourceInfoProvider.class)
         .add(attr(":android_sdk", LABEL)
               .allowedRuleClasses("android_sdk")
-              .value(AndroidRuleClasses.ANDROID_SDK))
-        .attributeAspect("deps", JackAspect.class)
-        .attributeAspect("exports", JackAspect.class)
-        .attributeAspect("runtime_deps", JackAspect.class)
+              .value(new AndroidSdkLabel(androidSdk)))
+        .attributeAspect("deps", this)
+        .attributeAspect("exports", this)
+        .attributeAspect("runtime_deps", this)
         .requiresConfigurationFragments(AndroidConfiguration.class)
         .build();
   }
@@ -56,6 +75,9 @@ public final class JackAspect implements NativeAspectFactory, ConfiguredAspectFa
   @Override
   public ConfiguredAspect create(
       ConfiguredTarget base, RuleContext ruleContext, AspectParameters params) {
+    if (base.getProvider(JackLibraryProvider.class) != null) {
+      return new ConfiguredAspect.Builder(NAME, ruleContext).build();
+    }
     JavaSourceInfoProvider sourceProvider = base.getProvider(JavaSourceInfoProvider.class);
     PathFragment rulePath = ruleContext.getLabel().toPathFragment();
     PathFragment jackLibraryPath = rulePath.replaceName("lib" + rulePath.getBaseName() + ".jack");
@@ -63,6 +85,9 @@ public final class JackAspect implements NativeAspectFactory, ConfiguredAspectFa
         ruleContext
             .getAnalysisEnvironment()
             .getDerivedArtifact(jackLibraryPath, ruleContext.getBinOrGenfilesDirectory());
+    if (!AndroidSdkProvider.verifyPresence(ruleContext)) {
+      return null;
+    }
     AndroidSdkProvider androidSdk = AndroidSdkProvider.fromRuleContext(ruleContext);
     JackCompilationHelper jackHelper =
         new JackCompilationHelper.Builder()

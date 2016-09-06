@@ -14,10 +14,8 @@
 
 package com.google.testing.junit.runner.junit4;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Maps;
-
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -44,8 +42,8 @@ class JUnit4Options {
    * object representing the parsed arguments.
    */
   static JUnit4Options parse(Map<String, String> envVars, List<String> args) {
-    ImmutableList.Builder<String> unparsedArgsBuilder = ImmutableList.builder();
-    Map<String, String> optionsMap = Maps.newHashMap();
+    List<String> unparsedArgs = new ArrayList<>();
+    Map<String, String> optionsMap = new HashMap<>();
 
     optionsMap.put(TEST_INCLUDE_FILTER_OPTION, null);
     optionsMap.put(TEST_EXCLUDE_FILTER_OPTION, null);
@@ -68,7 +66,7 @@ class JUnit4Options {
         optionsMap.put(arg, it.next());
         continue;
       }
-      unparsedArgsBuilder.add(arg);
+      unparsedArgs.add(arg);
     }
     // If TESTBRIDGE_TEST_ONLY is set in the environment, forward it to the
     // --test_filter flag.
@@ -77,17 +75,16 @@ class JUnit4Options {
       optionsMap.put(TEST_INCLUDE_FILTER_OPTION, testFilter);
     }
 
-    ImmutableList<String> unparsedArgs = unparsedArgsBuilder.build();
     return new JUnit4Options(optionsMap.get(TEST_INCLUDE_FILTER_OPTION),
                              optionsMap.get(TEST_EXCLUDE_FILTER_OPTION),
-                             unparsedArgs.toArray(new String[unparsedArgs.size()]));
+                             unparsedArgs.toArray(new String[0]));
   }
 
   private final String testIncludeFilter;
   private final String testExcludeFilter;
   private final String[] unparsedArgs;
 
-  @VisibleForTesting
+  // VisibleForTesting
   JUnit4Options(@Nullable String testIncludeFilter, @Nullable String testExcludeFilter,
                 String[] unparsedArgs) {
     this.testIncludeFilter = testIncludeFilter;

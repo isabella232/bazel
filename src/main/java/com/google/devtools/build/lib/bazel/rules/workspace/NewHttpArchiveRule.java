@@ -36,7 +36,7 @@ public class NewHttpArchiveRule implements RuleDefinition {
          A URL referencing an archive file containing a Bazel repository.
 
          <p>Archives of type .zip, .jar, .war, .tar.gz or .tgz are supported. There is no support
-         for authentication. Redirections are followed.</p>
+         for authentication. Redirections are followed, but not from HTTP to HTTPS.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("url", STRING).mandatory())
         /* <!-- #BLAZE_RULE(new_http_archive).ATTRIBUTE(sha256) -->
@@ -53,9 +53,9 @@ public class NewHttpArchiveRule implements RuleDefinition {
 
          <p>Either build_file or build_file_content must be specified.</p>
 
-         <p>This path is relative to the build's workspace. The file does not need to be named
-         BUILD, but can be something like BUILD.new-repo-name to distinguish it
-         from the workspace's actual BUILD files.</p>
+         <p>This attribute is a label relative to the main workspace. The file does not need to be
+        named BUILD, but can be (something like BUILD.new-repo-name may work well for
+        distinguishing it from the repository's actual BUILD files.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("build_file", STRING))
         /* <!-- #BLAZE_RULE(new_http_archive).ATTRIBUTE(build_file_content) -->

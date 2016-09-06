@@ -15,7 +15,7 @@
 package com.google.devtools.build.lib.analysis;
 
 import com.google.common.base.Joiner;
-import com.google.common.collect.ListMultimap;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
@@ -44,19 +44,19 @@ import com.google.devtools.build.lib.packages.PackageGroupsRuleVisibility;
 import com.google.devtools.build.lib.packages.PackageSpecification;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.RuleVisibility;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.rules.SkylarkRuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.rules.fileset.FilesetProvider;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
+import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -79,13 +79,13 @@ public final class ConfiguredTargetFactory {
    * to the {@code AnalysisEnvironment}.
    */
   private NestedSet<PackageSpecification> convertVisibility(
-      ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap, EventHandler reporter,
+      OrderedSetMultimap<Attribute, ConfiguredTarget> prerequisiteMap, EventHandler reporter,
       Target target, BuildConfiguration packageGroupConfiguration) {
     RuleVisibility ruleVisibility = target.getVisibility();
     if (ruleVisibility instanceof ConstantRuleVisibility) {
       return ((ConstantRuleVisibility) ruleVisibility).isPubliclyVisible()
           ? NestedSetBuilder.<PackageSpecification>create(
-              Order.STABLE_ORDER, PackageSpecification.EVERYTHING)
+              Order.STABLE_ORDER, PackageSpecification.everything())
           : NestedSetBuilder.<PackageSpecification>emptySet(Order.STABLE_ORDER);
     } else if (ruleVisibility instanceof PackageGroupsRuleVisibility) {
       PackageGroupsRuleVisibility packageGroupsVisibility =
@@ -125,7 +125,7 @@ public final class ConfiguredTargetFactory {
   }
 
   private ConfiguredTarget findPrerequisite(
-      ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap, Label label,
+      OrderedSetMultimap<Attribute, ConfiguredTarget> prerequisiteMap, Label label,
       BuildConfiguration config) {
     for (ConfiguredTarget prerequisite : prerequisiteMap.get(null)) {
       if (prerequisite.getLabel().equals(label) && (prerequisite.getConfiguration() == config)) {
@@ -139,12 +139,12 @@ public final class ConfiguredTargetFactory {
       boolean isFileset, ArtifactFactory artifactFactory) {
     Rule rule = outputFile.getAssociatedRule();
     Root root = rule.hasBinaryOutput()
-        ? configuration.getBinDirectory()
-        : configuration.getGenfilesDirectory();
+        ? configuration.getBinDirectory(rule.getRepository())
+        : configuration.getGenfilesDirectory(rule.getRepository());
     ArtifactOwner owner =
         new ConfiguredTargetKey(rule.getLabel(), configuration.getArtifactOwnerConfiguration());
     PathFragment rootRelativePath =
-        outputFile.getLabel().getPackageIdentifier().getPathFragment().getRelative(
+        outputFile.getLabel().getPackageIdentifier().getSourceRoot().getRelative(
             outputFile.getLabel().getName());
     Artifact result = isFileset
         ? artifactFactory.getFilesetArtifact(rootRelativePath, root, owner)
@@ -163,8 +163,9 @@ public final class ConfiguredTargetFactory {
   @Nullable
   public final ConfiguredTarget createConfiguredTarget(AnalysisEnvironment analysisEnvironment,
       ArtifactFactory artifactFactory, Target target, BuildConfiguration config,
-      BuildConfiguration hostConfig, ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
-      Set<ConfigMatchingProvider> configConditions)
+      BuildConfiguration hostConfig,
+      OrderedSetMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
+      ImmutableMap<Label, ConfigMatchingProvider> configConditions)
       throws InterruptedException {
     if (target instanceof Rule) {
       return createRule(analysisEnvironment, (Rule) target, config, hostConfig,
@@ -218,18 +219,24 @@ public final class ConfiguredTargetFactory {
   private ConfiguredTarget createRule(
       AnalysisEnvironment env, Rule rule, BuildConfiguration configuration,
       BuildConfiguration hostConfiguration,
-      ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
-      Set<ConfigMatchingProvider> configConditions) throws InterruptedException {
+      OrderedSetMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
+      ImmutableMap<Label, ConfigMatchingProvider> configConditions) throws InterruptedException {
     // Visibility computation and checking is done for every rule.
-    RuleContext ruleContext = new RuleContext.Builder(env, rule, null,
-        configuration, hostConfiguration,
-        ruleClassProvider.getPrerequisiteValidator(),
-        rule.getRuleClassObject().getConfigurationFragmentPolicy())
-        .setVisibility(convertVisibility(prerequisiteMap, env.getEventHandler(), rule, null))
-        .setPrerequisites(prerequisiteMap)
-        .setConfigConditions(configConditions)
-        .setUniversalFragment(ruleClassProvider.getUniversalFragment())
-        .build();
+    RuleContext ruleContext =
+        new RuleContext.Builder(
+                env,
+                rule,
+                null,
+                configuration,
+                hostConfiguration,
+                ruleClassProvider.getPrerequisiteValidator(),
+                rule.getRuleClassObject().getConfigurationFragmentPolicy())
+            .setVisibility(convertVisibility(prerequisiteMap, env.getEventHandler(), rule, null))
+            .setPrerequisites(prerequisiteMap)
+            .setConfigConditions(configConditions)
+            .setUniversalFragment(ruleClassProvider.getUniversalFragment())
+            .setSkylarkProvidersRegistry(ruleClassProvider.getRegisteredSkylarkProviders())
+            .build();
     if (ruleContext.hasErrors()) {
       return null;
     }
@@ -249,15 +256,25 @@ public final class ConfiguredTargetFactory {
       return createFailConfiguredTarget(ruleContext);
     }
 
-    if (rule.getRuleClassObject().isSkylarkExecutable()) {
+    if (rule.getRuleClassObject().isSkylark()) {
       // TODO(bazel-team): maybe merge with RuleConfiguredTargetBuilder?
       return SkylarkRuleConfiguredTargetBuilder.buildRule(
-          ruleContext, rule.getRuleClassObject().getConfiguredTargetFunction());
+          ruleContext,
+          rule.getRuleClassObject().getConfiguredTargetFunction(),
+          ruleClassProvider.getRegisteredSkylarkProviders());
     } else {
       RuleClass.ConfiguredTargetFactory<ConfiguredTarget, RuleContext> factory =
           rule.getRuleClassObject().<ConfiguredTarget, RuleContext>getConfiguredTargetFactory();
       Preconditions.checkNotNull(factory, rule.getRuleClassObject());
-      return factory.create(ruleContext);
+      try {
+        return factory.create(ruleContext);
+      } catch (RuleErrorException ruleErrorException) {
+        // Returning null in this method is an indication an error occurred. Exceptions are not
+        // propagated, as this would show a nasty stack trace to users, and only provide info
+        // on one specific failure with poor messaging. By returning null, the caller can
+        // inspect ruleContext for multiple errors and output thorough messaging on each.
+        return null;
+      }
     }
   }
 
@@ -294,24 +311,18 @@ public final class ConfiguredTargetFactory {
       RuleConfiguredTarget associatedTarget,
       ConfiguredAspectFactory aspectFactory,
       Aspect aspect,
-      ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
-      Set<ConfigMatchingProvider> configConditions,
+      OrderedSetMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
+      ImmutableMap<Label, ConfigMatchingProvider> configConditions,
       BuildConfiguration aspectConfiguration,
       BuildConfiguration hostConfiguration)
       throws InterruptedException {
-    ConfigurationFragmentPolicy aspectPolicy =
-        aspect.getDefinition().getConfigurationFragmentPolicy();
-    ConfigurationFragmentPolicy rulePolicy =
-        ((Rule) associatedTarget.getTarget()).getRuleClassObject().getConfigurationFragmentPolicy();
     RuleContext.Builder builder = new RuleContext.Builder(env,
         associatedTarget.getTarget(),
         aspect.getAspectClass().getName(),
         aspectConfiguration,
         hostConfiguration,
         ruleClassProvider.getPrerequisiteValidator(),
-        // TODO(mstaib): When AspectDefinition can no longer have null ConfigurationFragmentPolicy,
-        // remove this conditional.
-        aspectPolicy != null ? aspectPolicy : rulePolicy);
+        aspect.getDefinition().getConfigurationFragmentPolicy());
     RuleContext ruleContext =
         builder
             .setVisibility(

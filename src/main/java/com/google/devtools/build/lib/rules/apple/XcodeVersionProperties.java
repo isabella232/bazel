@@ -17,17 +17,24 @@ package com.google.devtools.build.lib.rules.apple;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.base.Strings;
+import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 
 import javax.annotation.Nullable;
 
 /**
  * A tuple containing information about a version of xcode and its properties. 
  */
-public class XcodeVersionProperties {
+public class XcodeVersionProperties implements TransitiveInfoProvider {
   @VisibleForTesting public static final String DEFAULT_IOS_SDK_VERSION = "8.4";
+  @VisibleForTesting public static final String DEFAULT_WATCHOS_SDK_VERSION = "2.0";
+  @VisibleForTesting public static final String DEFAULT_MACOSX_SDK_VERSION = "10.10";
+  @VisibleForTesting public static final String DEFAULT_TVOS_SDK_VERSION = "1.0";
 
   private final Optional<DottedVersion> xcodeVersion;
   private final DottedVersion defaultIosSdkVersion;
+  private final DottedVersion defaultWatchosSdkVersion;
+  private final DottedVersion defaultTvosSdkVersion;
+  private final DottedVersion defaultMacosxSdkVersion;
 
   /**
    * Creates and returns a tuple representing no known xcode property information (defaults are
@@ -46,7 +53,7 @@ public class XcodeVersionProperties {
    * is specified.
    */
   XcodeVersionProperties(DottedVersion xcodeVersion) {
-    this(xcodeVersion, null);
+    this(xcodeVersion, null, null, null, null);
   }
 
   /**
@@ -54,11 +61,23 @@ public class XcodeVersionProperties {
    * a semi-sensible default will be assigned to the property value. 
    */
   XcodeVersionProperties(DottedVersion xcodeVersion,
-      @Nullable String defaultIosSdkVersion) {
+      @Nullable String defaultIosSdkVersion,
+      @Nullable String defaultWatchosSdkVersion,
+      @Nullable String defaultTvosSdkVersion,
+      @Nullable String defaultMacosxSdkVersion) {
     this.xcodeVersion = Optional.fromNullable(xcodeVersion);
     this.defaultIosSdkVersion = (Strings.isNullOrEmpty(defaultIosSdkVersion))
         ? DottedVersion.fromString(DEFAULT_IOS_SDK_VERSION)
         : DottedVersion.fromString(defaultIosSdkVersion);
+    this.defaultWatchosSdkVersion = (Strings.isNullOrEmpty(defaultWatchosSdkVersion))
+        ? DottedVersion.fromString(DEFAULT_WATCHOS_SDK_VERSION)
+        : DottedVersion.fromString(defaultWatchosSdkVersion);
+    this.defaultTvosSdkVersion = (Strings.isNullOrEmpty(defaultTvosSdkVersion))
+        ? DottedVersion.fromString(DEFAULT_TVOS_SDK_VERSION)
+        : DottedVersion.fromString(defaultTvosSdkVersion);
+    this.defaultMacosxSdkVersion = (Strings.isNullOrEmpty(defaultMacosxSdkVersion))
+        ? DottedVersion.fromString(DEFAULT_MACOSX_SDK_VERSION)
+        : DottedVersion.fromString(defaultMacosxSdkVersion);
   }
 
   /**
@@ -73,5 +92,26 @@ public class XcodeVersionProperties {
    */
   public DottedVersion getDefaultIosSdkVersion() {
     return defaultIosSdkVersion;
+  }
+
+  /**
+   * Returns the default watchos sdk version to use if this xcode version is in use.
+   */
+  public DottedVersion getDefaultWatchosSdkVersion() {
+    return defaultWatchosSdkVersion;
+  }
+
+  /**
+   * Returns the default tvos sdk version to use if this xcode version is in use.
+   */
+  public DottedVersion getDefaultTvosSdkVersion() {
+    return defaultTvosSdkVersion;
+  }
+  
+  /**
+   * Returns the default macosx sdk version to use if this xcode version is in use.
+   */
+  public DottedVersion getDefaultMacosxSdkVersion() {
+    return defaultMacosxSdkVersion;
   }
 }

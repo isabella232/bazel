@@ -38,7 +38,7 @@ public final class BazelFilegroupRule implements RuleDefinition {
         /*<!-- #BLAZE_RULE(filegroup).ATTRIBUTE(srcs) -->
         The list of targets that are members of the file group.
         <p>
-          It is common to use the result of a <a href="functions.html#glob">glob</a> expression for
+          It is common to use the result of a <a href="${link glob}">glob</a> expression for
           the value
           of the <code>srcs</code> attribute. If a rule and a source file with the same name both
           exist in the package, the glob will return the outputs of the rule instead of the source
@@ -46,6 +46,15 @@ public final class BazelFilegroupRule implements RuleDefinition {
         </p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr("srcs", LABEL_LIST).allowedFileTypes(FileTypeSet.ANY_FILE))
+        /*<!-- #BLAZE_RULE(filegroup).ATTRIBUTE(output_group) -->
+        The output group from which to gather artifacts from sources.  If this attribute is
+        specified, artifacts from the specified output group of the dependencies will be exported
+        instead of the default output group.
+        <p>An "output group" is a category of output artifacts of a target, specified in that
+          rule's implementation.
+        </p>
+        <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
+        .add(attr("output_group", STRING))
         /*<!-- #BLAZE_RULE(filegroup).ATTRIBUTE(data) -->
         The list of files needed by this rule at runtime.
         <p>
@@ -54,7 +63,7 @@ public final class BazelFilegroupRule implements RuleDefinition {
           <code>filegroup</code> is referenced in the <code>data</code> attribute of
           another rule its <code>runfiles</code> will be added to the <code>runfiles</code>
           of the depending rule. See the <a href="../build-ref.html#data">data dependencies</a>
-          section and <a href="common-definitions.html#common.data">general documentation of
+          section and <a href="${link common-definitions#common.data}">general documentation of
           <code>data</code></a> for more information about how to depend on and use data files.
         </p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
@@ -67,8 +76,10 @@ public final class BazelFilegroupRule implements RuleDefinition {
           <code>filegroup</code> to find the name of the directory holding the files.
         </p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .add(attr("path", STRING)
-            .undocumented("only used to expose FilegroupPathProvider, which is not currently used"))
+        .add(
+            attr("path", STRING)
+                .undocumented(
+                    "only used to expose FilegroupPathProvider, which is not currently used"))
         .build();
   }
 
@@ -93,7 +104,7 @@ public final class BazelFilegroupRule implements RuleDefinition {
   Using <code>filegroup</code> is encouraged instead of referencing directories directly.
   The latter is unsound since the build system does not have full knowledge of all files
   below the directory, so it may not rebuild when these files change. When combined with
-  <a href="functions.html#glob">glob</a>, <code>filegroup</code> can ensure that all files are
+  <a href="${link glob}">glob</a>, <code>filegroup</code> can ensure that all files are
   explicitly known to the build system.
 </p>
 

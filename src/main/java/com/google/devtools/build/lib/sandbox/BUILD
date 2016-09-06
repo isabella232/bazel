@@ -6,11 +6,10 @@ java_library(
     name = "sandbox",
     srcs = glob(["*.java"]),
     data = [
-        "//src/main/tools:namespace-sandbox",
+        "//src/main/tools:linux-sandbox",
     ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib:build-base",
-        "//src/main/java/com/google/devtools/build/lib:common",
         "//src/main/java/com/google/devtools/build/lib:concurrent",
         "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:io",

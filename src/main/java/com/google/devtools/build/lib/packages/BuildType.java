@@ -18,11 +18,11 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.packages.License.LicenseParsingException;
+import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SelectorValue;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.syntax.Type.ConversionException;
@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.syntax.Type.ListType;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -59,11 +60,6 @@ public final class BuildType {
    *  The type of a list of {@linkplain #LABEL labels}.
    */
   public static final ListType<Label> LABEL_LIST = ListType.create(LABEL);
-  /**
-   * The type of a dictionary of {@linkplain #LABEL_LIST label lists}.
-   */
-  public static final DictType<String, List<Label>> LABEL_LIST_DICT =
-      DictType.create(Type.STRING, LABEL_LIST);
   /**
    * This is a label type that does not cause dependencies. It is needed because
    * certain rules want to verify the type of a target referenced by one of their attributes, but
@@ -145,8 +141,7 @@ public final class BuildType {
    */
   public static boolean isLabelType(Type<?> type) {
     return type == LABEL || type == LABEL_LIST || type == LABEL_DICT_UNARY
-        || type == NODEP_LABEL || type == NODEP_LABEL_LIST
-        || type == LABEL_LIST_DICT || type == FILESET_ENTRY_LIST;
+        || type == NODEP_LABEL || type == NODEP_LABEL_LIST || type == FILESET_ENTRY_LIST;
   }
 
   /**
@@ -387,10 +382,10 @@ public final class BuildType {
       for (Object elem : x) {
         if (elem instanceof SelectorValue) {
           builder.add(new Selector<T>(((SelectorValue) elem).getDictionary(), what,
-              context, originalType));
+              context, originalType, ((SelectorValue) elem).getNoMatchError()));
         } else {
           T directValue = originalType.convert(elem, what, context);
-          builder.add(new Selector<T>(ImmutableMap.of(Selector.DEFAULT_CONDITION_KEY, directValue),
+          builder.add(new Selector<>(ImmutableMap.of(Selector.DEFAULT_CONDITION_KEY, directValue),
               what, context, originalType));
         }
       }
@@ -444,28 +439,67 @@ public final class BuildType {
     @VisibleForTesting
     public static final String DEFAULT_CONDITION_KEY = "//conditions:default";
 
-    private static final Label DEFAULT_CONDITION_LABEL =
+    public static final Label DEFAULT_CONDITION_LABEL =
         Label.parseAbsoluteUnchecked(DEFAULT_CONDITION_KEY);
 
     private final Type<T> originalType;
-    private final ImmutableMap<Label, T> map;
+    // Can hold null values, underlying implementation should be ordered.
+    private final Map<Label, T> map;
+    private final Set<Label> conditionsWithDefaultValues;
+    private final String noMatchError;
     private final boolean hasDefaultCondition;
 
-    @VisibleForTesting
+    /**
+     * Creates a new Selector using the default error message when no conditions match.
+     */
     Selector(ImmutableMap<?, ?> x, String what, @Nullable Label context, Type<T> originalType)
         throws ConversionException {
+      this(x, what, context, originalType, "");
+    }
+
+    /**
+     * Creates a new Selector with a custom error message for when no conditions match.
+     */
+    Selector(ImmutableMap<?, ?> x, String what, @Nullable Label context, Type<T> originalType,
+        String noMatchError) throws ConversionException {
       this.originalType = originalType;
-      Map<Label, T> result = Maps.newLinkedHashMap();
+      LinkedHashMap<Label, T> result = new LinkedHashMap<>();
+      ImmutableSet.Builder<Label> defaultValuesBuilder = ImmutableSet.builder();
       boolean foundDefaultCondition = false;
       for (Entry<?, ?> entry : x.entrySet()) {
         Label key = LABEL.convert(entry.getKey(), what, context);
         if (key.equals(DEFAULT_CONDITION_LABEL)) {
           foundDefaultCondition = true;
         }
-        result.put(key, originalType.convert(entry.getValue(), what, context));
+        if (entry.getValue() == Runtime.NONE) {
+          // { "//condition": None } is the same as not setting the value.
+          result.put(key, originalType.getDefaultValue());
+          defaultValuesBuilder.add(key);
+        } else {
+          result.put(key, originalType.convert(entry.getValue(), what, context));
+        }
       }
-      map = ImmutableMap.copyOf(result);
-      hasDefaultCondition = foundDefaultCondition;
+      this.map = Collections.unmodifiableMap(result);
+      this.noMatchError = noMatchError;
+      this.conditionsWithDefaultValues = defaultValuesBuilder.build();
+      this.hasDefaultCondition = foundDefaultCondition;
+    }
+
+    /**
+     * Create a new Selector from raw values. A defensive copy of the supplied map is <i>not</i>
+     * made, so it imperative that it is not modified following construction.
+     */
+    Selector(
+        LinkedHashMap<Label, T> map,
+        Type<T> originalType,
+        String noMatchError,
+        ImmutableSet<Label> conditionsWithDefaultValues,
+        boolean hasDefaultCondition) {
+      this.originalType = originalType;
+      this.map = Collections.unmodifiableMap(map);
+      this.noMatchError = noMatchError;
+      this.conditionsWithDefaultValues = conditionsWithDefaultValues;
+      this.hasDefaultCondition = hasDefaultCondition;
     }
 
     /**
@@ -474,7 +508,7 @@ public final class BuildType {
      * <p>Entries in this map retain the order of the entries in the map provided to the {@link
      * #Selector} constructor.
      */
-    public ImmutableMap<Label, T> getEntries() {
+    public Map<Label, T> getEntries() {
       return map;
     }
 
@@ -498,6 +532,30 @@ public final class BuildType {
      */
     public Type<T> getOriginalType() {
       return originalType;
+    }
+
+    /**
+     * Returns true if this selector has the structure: {"//conditions:default": ...}. That means
+     * all values are always chosen.
+     */
+    public boolean isUnconditional() {
+      return map.size() == 1 && hasDefaultCondition;
+    }
+
+    /**
+     * Returns true if an explicit value is set for the given condition, vs. { "//condition": None }
+     * which means revert to the default.
+     */
+    public boolean isValueSet(Label condition) {
+      return !conditionsWithDefaultValues.contains(condition);
+    }
+
+    /**
+     * Returns a custom error message for this select when no condition matches, or an empty
+     * string if no such message is declared.
+     */
+    public String getNoMatchError() {
+      return noMatchError;
     }
 
     /**

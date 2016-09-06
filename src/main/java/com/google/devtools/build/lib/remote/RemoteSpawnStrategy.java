@@ -19,10 +19,10 @@ import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
-import com.google.devtools.build.lib.actions.ActionMetadata;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
@@ -31,11 +31,11 @@ import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.remote.RemoteProtocol.RemoteWorkResponse;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
-
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.Collection;
@@ -65,28 +65,35 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       RemoteOptions options,
       boolean verboseFailures,
       RemoteActionCache actionCache,
-      RemoteWorkExecutor workExecutor) {
+      RemoteWorkExecutor workExecutor,
+      String productName) {
     this.execRoot = execRoot;
-    this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures);
+    this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
     this.remoteActionCache = actionCache;
     this.remoteWorkExecutor = workExecutor;
   }
 
-  /**
-   * Executes the given {@code spawn}.
-   */
+  /** Executes the given {@code spawn}. */
   @Override
   public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
-      throws ExecException {
+      throws ExecException, InterruptedException {
     if (!spawn.isRemotable()) {
       standaloneStrategy.exec(spawn, actionExecutionContext);
       return;
     }
 
     Executor executor = actionExecutionContext.getExecutor();
-    ActionMetadata actionMetadata = spawn.getResourceOwner();
+    ActionExecutionMetadata actionMetadata = spawn.getResourceOwner();
     ActionInputFileCache inputFileCache = actionExecutionContext.getActionInputFileCache();
     EventHandler eventHandler = executor.getEventHandler();
+
+    if (remoteActionCache == null) {
+      eventHandler.handle(
+          Event.warn(
+              spawn.getMnemonic() + " Cannot instantiate remote action cache. Running locally."));
+      standaloneStrategy.exec(spawn, actionExecutionContext);
+      return;
+    }
 
     // Compute a hash code to uniquely identify the action plus the action inputs.
     Hasher hasher = Hashing.sha256().newHasher();
@@ -108,7 +115,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         // changes. It might not be sufficient to identify the input file globally in the
         // remote action cache. Consider upgrading this to a better hash algorithm with
         // less collision.
-        hasher.putBytes(inputFileCache.getDigest(input).toByteArray());
+        hasher.putBytes(inputFileCache.getDigest(input));
       } catch (IOException e) {
         throw new UserExecException("Failed to get digest for input.", e);
       }
@@ -178,13 +185,13 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       int timeout,
       EventHandler eventHandler,
       FileOutErr outErr)
-      throws IOException {
+      throws IOException, InterruptedException {
     if (remoteWorkExecutor == null) {
       return false;
     }
     try {
-      ListenableFuture<RemoteWorkExecutor.Response> future =
-          remoteWorkExecutor.submit(
+      ListenableFuture<RemoteWorkResponse> future =
+          remoteWorkExecutor.executeRemotely(
               execRoot,
               actionCache,
               actionOutputKey,
@@ -193,8 +200,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
               environment,
               outputs,
               timeout);
-      RemoteWorkExecutor.Response response = future.get(timeout, TimeUnit.SECONDS);
-      if (!response.success()) {
+      RemoteWorkResponse response = future.get(timeout, TimeUnit.SECONDS);
+      if (!response.getSuccess()) {
         String exception = "";
         if (!response.getException().isEmpty()) {
           exception = " (" + response.getException() + ")";
@@ -204,12 +211,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
                 mnemonic + " failed to execute work remotely" + exception + ", running locally"));
         return false;
       }
-      if (response.getOut() != null) {
-        outErr.printOut(response.getOut());
-      }
-      if (response.getErr() != null) {
-        outErr.printErr(response.getErr());
-      }
+      outErr.printOut(response.getOut());
+      outErr.printErr(response.getErr());
     } catch (ExecutionException e) {
       eventHandler.handle(
           Event.warn(mnemonic + " failed to execute work remotely (" + e + "), running locally"));
@@ -219,9 +222,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
           Event.warn(mnemonic + " timed out executing work remotely (" + e + "), running locally"));
       return false;
     } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
       eventHandler.handle(Event.warn(mnemonic + " remote work interrupted (" + e + ")"));
-      return false;
+      throw e;
     } catch (WorkTooLargeException e) {
       eventHandler.handle(Event.warn(mnemonic + " cannot be run remotely (" + e + ")"));
       return false;
@@ -258,5 +260,10 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   public boolean willExecuteRemotely(boolean remotable) {
     // Returning true here just helps to estimate the cost of this computation is zero.
     return remotable;
+  }
+
+  @Override
+  public boolean shouldPropagateExecException() {
+    return false;
   }
 }

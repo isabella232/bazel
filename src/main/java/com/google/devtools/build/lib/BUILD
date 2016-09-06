@@ -5,21 +5,10 @@ package(
 )
 
 java_library(
-    name = "common",
-    srcs = [
-        "Constants.java",
-    ],
-    exports = ["//third_party:guava"],
-    deps = [
-        "//third_party:guava",
-    ],
-)
-
-java_library(
     name = "shell",
     srcs = glob(["shell/*.java"]),
     deps = [
-        ":common",
+        "//third_party:guava",
     ],
 )
 
@@ -30,6 +19,7 @@ filegroup(
         "//src/main/java/com/google/devtools/build/lib/actions:srcs",
         "//src/main/java/com/google/devtools/build/lib/bazel/dash:srcs",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader:srcs",
+        "//src/main/java/com/google/devtools/build/lib/cmdline:srcs",
         "//src/main/java/com/google/devtools/build/lib/query2:srcs",
         "//src/main/java/com/google/devtools/build/lib/remote:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/apple:srcs",
@@ -38,6 +28,7 @@ filegroup(
         "//src/main/java/com/google/devtools/build/lib/rules/genquery:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/objc:srcs",
         "//src/main/java/com/google/devtools/build/lib/sandbox:srcs",
+        "//src/main/java/com/google/devtools/build/lib/ssd:srcs",
         "//src/main/java/com/google/devtools/build/lib/standalone:srcs",
         "//src/main/java/com/google/devtools/build/lib/worker:srcs",
         "//src/main/java/com/google/devtools/build/skyframe:srcs",
@@ -57,7 +48,7 @@ java_library(
     name = "graph",
     srcs = glob(["graph/*.java"]),
     deps = [
-        ":common",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -74,8 +65,18 @@ java_library(
         "//conditions:default": ["//src/main/native:libunix.so"],
     }),
     deps = [
-        ":common",
+        ":os_util",
         ":shell",
+        "//third_party:guava",
+    ],
+)
+
+java_library(
+    name = "windows",
+    srcs = glob(["windows/*.java"]),
+    deps = [
+        ":shell",
+        "//third_party:guava",
     ],
 )
 
@@ -84,8 +85,8 @@ java_library(
     name = "concurrent",
     srcs = glob(["concurrent/*.java"]),
     deps = [
-        ":common",
         ":preconditions",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -98,9 +99,25 @@ java_library(
         "collect/nestedset/*.java",
     ]),
     deps = [
-        ":common",
         ":preconditions",
+        "//third_party:guava",
         "//third_party:jsr305",
+    ],
+)
+
+java_library(
+    name = "flags",
+    srcs = glob([
+        "flags/*.java",
+    ]),
+    deps = [
+        ":io",
+        ":preconditions",
+        "//src/main/java/com/google/devtools/common/options",
+        "//src/main/protobuf:invocation_policy_java_proto",
+        "//third_party:guava",
+        "//third_party:jsr305",
+        "//third_party/protobuf",
     ],
 )
 
@@ -114,11 +131,11 @@ java_library(
     deps = [
         ":base-util",
         ":clock",
-        ":common",
         ":concurrent",
         ":os_util",
         ":preconditions",
         ":unix",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -132,10 +149,10 @@ java_library(
         "profiler/statistics/*.java",
     ]),
     deps = [
-        ":common",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -146,11 +163,11 @@ java_library(
     srcs = glob(["vfs/inmemoryfs/*.java"]),
     deps = [
         ":clock",
-        ":common",
         ":concurrent",
         ":preconditions",
         ":unix",
         ":vfs",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -177,8 +194,8 @@ java_library(
         "util/VarInt.java",
     ],
     deps = [
-        ":common",
         ":preconditions",
+        "//third_party:guava",
     ],
 )
 
@@ -187,7 +204,7 @@ java_library(
     name = "preconditions",
     srcs = ["util/Preconditions.java"],
     deps = [
-        ":common",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -198,9 +215,9 @@ java_library(
     srcs = glob(["util/io/*.java"]),
     deps = [
         ":clock",
-        ":common",
         ":concurrent",
         ":vfs",
+        "//third_party:guava",
     ],
 )
 
@@ -237,7 +254,6 @@ java_library(
     deps = [
         ":base-util",
         ":collect",
-        ":common",
         ":concurrent",
         ":exitcode-external",
         ":os_util",
@@ -245,7 +261,9 @@ java_library(
         ":shell",
         ":unix",
         ":vfs",
+        ":windows",
         "//src/main/java/com/google/devtools/common/options",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -265,11 +283,11 @@ java_library(
     name = "events",
     srcs = glob(["events/*.java"]),
     deps = [
-        ":common",
         ":concurrent",
         ":io",
         ":preconditions",
         ":vfs",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -295,6 +313,22 @@ java_library(
     ],
 )
 
+# Skylark language for configuration files.
+#
+# IMPORTANT:  NOT A PUBLIC INTERFACE. TARGETS SHOULDN'T DEPEND ON THIS.
+#
+java_library(
+    name = "skylark-lang",
+    visibility = ["//visibility:public"],
+    exports = [
+        ":events",
+        ":inmemoryfs",
+        ":skylarkinterface",
+        ":syntax",
+        ":vfs",
+    ],
+)
+
 java_library(
     name = "skylarkinterface",
     srcs = glob([
@@ -305,49 +339,25 @@ java_library(
     ],
 )
 
-########################################################################
-#
-# The "cmdline" library: Label validation and target pattern
-# parsing. Both the label syntax and the target pattern syntax are a
-# public interface, and all changes have to be made in a
-# backwards-compatible manner. This library is intentionally
-# standalone so it can be used outside without pulling in any internal
-# code.
-#
-
-java_library(
-    name = "cmdline",
-    srcs = glob(["cmdline/*.java"]),
-    deps = [
-        ":base-util",
-        ":common",
-        ":concurrent",
-        ":skylarkinterface",
-        ":util",
-        ":vfs",
-        "//third_party:jsr305",
-    ],
-)
-
 java_library(
     name = "syntax",
     srcs = glob([
         "syntax/**/*.java",
     ]),
     deps = [
-        ":cmdline",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
         ":skylarkinterface",
         ":util",
         ":vfs",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//third_party:asm",
         "//third_party:asm-commons",
         "//third_party:asm-util",
         "//third_party:auto_value",
         "//third_party:bytebuddy",
+        "//third_party:guava",
         "//third_party:jsr305",
     ],
 )
@@ -378,19 +388,19 @@ java_library(
         "pkgcache/*.java",
     ]),
     exports = [
-        ":cmdline",
         ":syntax",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
     ],
     deps = [
-        ":cmdline",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
         ":skylarkinterface",
         ":syntax",
+        ":transitive-info-provider",
         ":util",
         ":vfs",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:build_java_proto",
         "//third_party:guava",
@@ -416,6 +426,7 @@ java_library(
     deps = [
         ":concurrent",
         ":preconditions",
+        ":shell",
         "//src/main/protobuf:build_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",
@@ -429,6 +440,16 @@ java_library(
     visibility = [
         "//src/main/java/com/google/devtools/build/lib/rules:__subpackages__",
     ],
+)
+
+java_library(
+    name = "execution-info-specifier",
+    srcs = ["analysis/actions/ExecutionInfoSpecifier.java"],
+)
+
+java_library(
+    name = "transitive-info-provider",
+    srcs = ["analysis/TransitiveInfoProvider.java"],
 )
 
 java_library(
@@ -449,31 +470,42 @@ java_library(
             "rules/repository/*.java",
             "skyframe/*.java",
         ],
-        exclude = ["analysis/BuildInfo.java"],
+        exclude = [
+            "analysis/BuildInfo.java",
+            "analysis/TransitiveInfoProvider.java",
+        ],
     ) + [
         "runtime/BlazeServerStartupOptions.java",
     ],
+    exports = [
+        ":transitive-info-provider",
+    ],
     deps = [
         ":base-util",
-        ":cmdline",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
+        ":execution-info-specifier",
         ":exitcode-external",
+        ":flags",
         ":graph",
         ":io",
         ":os_util",
         ":packages-internal",
         ":shell",
         ":skylarkinterface",
+        ":transitive-info-provider",
+        ":unix",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:extra_actions_base_java_proto",
+        "//src/main/protobuf:invocation_policy_java_proto",
         "//src/main/protobuf:test_status_java_proto",
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf",
@@ -497,21 +529,21 @@ java_library(
         ],
     ),
     deps = [
+        ":RpcSupport",
         ":android-rules",
         ":bazel",
         ":bazel-repository",
         ":build-base",
         ":build-info",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
         ":ideinfo",
+        ":java-compilation",
         ":java-rules",
         ":packages-internal",
         ":proto-rules",
         ":python-rules",
-        ":skylarkinterface",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -555,6 +587,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/bazel/dash",
         "//src/main/java/com/google/devtools/build/lib/remote",
         "//src/main/java/com/google/devtools/build/lib/sandbox",
+        "//src/main/java/com/google/devtools/build/lib/ssd",
         "//src/main/java/com/google/devtools/build/lib/standalone",
         "//src/main/java/com/google/devtools/build/lib/worker",
         "//src/main/java/com/google/devtools/build/skyframe",
@@ -569,9 +602,9 @@ java_library(
     srcs = glob(["bazel/commands/*.java"]),
     resources = ["bazel/commands/fetch.txt"],
     deps = [
-        ":common",
         ":events",
         ":exitcode-external",
+        ":java-compilation",
         ":java-rules",
         ":packages-internal",
         ":runtime",
@@ -649,13 +682,13 @@ java_library(
     deps = [
         ":build-base",
         ":collect",
-        ":common",
         ":concurrent",
         ":packages-internal",
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
+        "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf",
     ],
@@ -669,7 +702,6 @@ java_library(
     deps = [
         ":build-base",
         ":collect",
-        ":common",
         ":concurrent",
         ":packages-internal",
         ":skylarkinterface",
@@ -686,17 +718,119 @@ java_library(
 
 java_library(
     name = "java-rules",
-    srcs = glob(
-        ["rules/java/*.java"],
-        exclude = [
-            "rules/java/JavaImplicitAttributes.java",
-            "rules/java/JavaToolchainDataParser.java",
-        ],
-    ),
+    srcs = [
+        "rules/java/GenericBuildInfoPropertiesTranslator.java",
+        "rules/java/JavaBinary.java",
+        "rules/java/JavaCcLinkParamsProvider.java",
+        "rules/java/JavaConfigurationLoader.java",
+        "rules/java/JavaCpuSupplier.java",
+        "rules/java/JavaImport.java",
+        "rules/java/JavaImportBaseRule.java",
+        "rules/java/JavaLibrary.java",
+        "rules/java/JavaPlugin.java",
+        "rules/java/JavaPrimaryClassProvider.java",
+        "rules/java/JavaRuntimeClasspathProvider.java",
+        "rules/java/JavaRuntimeJarProvider.java",
+        "rules/java/JavaSourceInfoProvider.java",
+        "rules/java/JavaToolchain.java",
+        "rules/java/JavaToolchainRule.java",
+        "rules/java/JavaToolchainSkylarkApiProvider.java",
+        "rules/java/JvmConfigurationLoader.java",
+        "rules/java/ProguardHelper.java",
+        "rules/java/ProguardLibrary.java",
+        "rules/java/ProguardLibraryRule.java",
+        "rules/java/ProguardSpecProvider.java",
+        "rules/java/proto/JavaCompilationArgsAspectProvider.java",
+        "rules/java/proto/JavaLiteProtoAspect.java",
+        "rules/java/proto/JavaLiteProtoLibrary.java",
+        "rules/java/proto/JavaProtoAspect.java",
+        "rules/java/proto/JavaProtoLibrary.java",
+        "rules/java/proto/JavaProtoLibraryTransitiveFilesToBuildProvider.java",
+        "rules/java/proto/JavaRuntimeJarAspectProvider.java",
+        "rules/java/proto/JavaSourceJarsAspectProvider.java",
+        "rules/java/proto/StrictDepsUtils.java",
+    ],
+    deps = [
+        ":RpcSupport",
+        ":build-base",
+        ":collect",
+        ":concurrent",
+        ":events",
+        ":java-compilation",
+        ":java-implicit-attributes",
+        ":packages-internal",
+        ":proto-rules",
+        ":shell",
+        ":skylarkinterface",
+        ":util",
+        ":vfs",
+        "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/rules/cpp",
+        "//src/main/java/com/google/devtools/common/options",
+        "//src/main/protobuf:extra_actions_base_java_proto",
+        "//third_party:guava",
+        "//third_party:joda_time",
+        "//third_party:jsr305",
+        "//third_party/protobuf",
+    ],
+)
+
+java_library(
+    name = "RpcSupport",
+    srcs = ["rules/java/proto/RpcSupport.java"],
+    deps = [
+        ":build-base",
+        ":java-compilation",
+        ":packages-internal",
+        ":proto-rules",
+        "//src/main/java/com/google/devtools/build/lib/actions",
+    ],
+)
+
+java_library(
+    name = "java-compilation",
+    srcs = [
+        "rules/java/BaseJavaCompilationHelper.java",
+        "rules/java/BuildInfoPropertiesTranslator.java",
+        "rules/java/ClasspathConfiguredFragment.java",
+        "rules/java/DeployArchiveBuilder.java",
+        "rules/java/JavaBuildInfoFactory.java",
+        "rules/java/JavaCommon.java",
+        "rules/java/JavaCompilationArgs.java",
+        "rules/java/JavaCompilationArgsProvider.java",
+        "rules/java/JavaCompilationArtifacts.java",
+        "rules/java/JavaCompilationHelper.java",
+        "rules/java/JavaCompilationInfoProvider.java",
+        "rules/java/JavaCompileAction.java",
+        "rules/java/JavaConfiguration.java",
+        "rules/java/JavaConstraintProvider.java",
+        "rules/java/JavaExportsProvider.java",
+        "rules/java/JavaGenJarsProvider.java",
+        "rules/java/JavaHeaderCompileActionBuilder.java",
+        "rules/java/JavaHelper.java",
+        "rules/java/JavaLibraryHelper.java",
+        "rules/java/JavaNativeLibraryProvider.java",
+        "rules/java/JavaNeverlinkInfoProvider.java",
+        "rules/java/JavaOptions.java",
+        "rules/java/JavaPluginInfoProvider.java",
+        "rules/java/JavaRuleOutputJarsProvider.java",
+        "rules/java/JavaRunfilesProvider.java",
+        "rules/java/JavaSemantics.java",
+        "rules/java/JavaSkylarkApiProvider.java",
+        "rules/java/JavaSourceJarsProvider.java",
+        "rules/java/JavaTargetAttributes.java",
+        "rules/java/JavaToolchainData.java",
+        "rules/java/JavaToolchainProvider.java",
+        "rules/java/JavaUtil.java",
+        "rules/java/Jvm.java",
+        "rules/java/MessageBundleProvider.java",
+        "rules/java/NativeLibraryNestedSetBuilder.java",
+        "rules/java/SingleJarActionBuilder.java",
+        "rules/java/WriteBuildInfoPropertiesAction.java",
+    ],
     deps = [
         ":build-base",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
         ":java-implicit-attributes",
@@ -706,12 +840,13 @@ java_library(
         ":util",
         ":vfs",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:extra_actions_base_java_proto",
+        "//third_party:guava",
         "//third_party:joda_time",
         "//third_party:jsr305",
-        "//third_party/protobuf",
     ],
 )
 
@@ -728,9 +863,9 @@ java_library(
     deps = [
         ":build-base",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
+        ":java-compilation",
         ":java-rules",
         ":nativedeps-rules",
         ":packages-internal",
@@ -740,7 +875,10 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//src/main/java/com/google/devtools/common/options",
+        "//src/main/protobuf:android_deploy_info_java_proto",
         "//src/main/protobuf:apk_manifest_java_proto",
+        "//third_party:android_sdklib",
+        "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf",
     ],
@@ -754,7 +892,6 @@ java_library(
     deps = [
         ":build-base",
         ":collect",
-        ":common",
         ":concurrent",
         ":packages-internal",
         ":skylarkinterface",
@@ -765,6 +902,7 @@ java_library(
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:crosstool_config_java_proto",
         "//src/main/protobuf:extra_actions_base_java_proto",
+        "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf",
     ],
@@ -779,8 +917,8 @@ java_library(
         ":android-rules",
         ":build-base",
         ":collect",
-        ":common",
         ":concurrent",
+        ":java-compilation",
         ":java-rules",
         ":packages-internal",
         ":util",
@@ -798,6 +936,7 @@ java_library(
     name = "shared-base-rules",
     exports = [
         ":android-rules",
+        ":java-compilation",
         ":java-rules",
         ":nativedeps-rules",
         ":proto-rules",
@@ -819,12 +958,11 @@ java_library(
     deps = [
         ":build-base",
         ":clock",
-        ":cmdline",
         ":collect",
-        ":common",
         ":concurrent",
         ":events",
         ":exitcode-external",
+        ":flags",
         ":io",
         ":packages-internal",
         ":profiler-output",
@@ -833,18 +971,23 @@ java_library(
         ":unix",
         ":util",
         ":vfs",
+        ":windows",
         "//src/main/java/com/google/devtools/build/docgen:docgen_javalib",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/query2",
         "//src/main/java/com/google/devtools/build/lib/query2:query-engine",
         "//src/main/java/com/google/devtools/build/lib/query2:query-output",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:build_java_proto",
+        "//src/main/protobuf:command_server_java_proto",
         "//src/main/protobuf:invocation_policy_java_proto",
         "//src/main/protobuf:test_status_java_proto",
+        "//third_party:guava",
         "//third_party:joda_time",
         "//third_party:jsr305",
+        "//third_party/grpc:grpc-jar",
         "//third_party/protobuf",
     ],
 )
@@ -859,7 +1002,6 @@ java_library(
     name = "all-build-rules",
     exports = [
         ":build-base",
-        ":common",
         ":concurrent",
         ":graph",
         ":packages-internal",
@@ -868,6 +1010,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/rules/objc",
         "//src/main/java/com/google/devtools/common/options",
+        "//third_party:guava",
     ],
 )
 
@@ -891,7 +1034,6 @@ java_library(
 java_library(
     name = "query2",
     exports = [
-        ":common",
         ":concurrent",
         ":events",
         ":foundation",
@@ -902,6 +1044,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/query2",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:build_java_proto",
+        "//third_party:guava",
     ],
 )
 
@@ -929,24 +1072,64 @@ genrule(
     cmd = (
         "mkdir -p $(@D)/be && " +
         "$(location //src/main/java/com/google/devtools/build/docgen:docgen_bin)" +
-        " $$PWD/src/main/java/com/google/devtools/build/lib " +
-        "com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider" +
-        " $(@D)/be &&" +
+        " --provider=com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider" +
+        " --input_dir=$$PWD/src/main/java/com/google/devtools/build/lib" +
+        " --output_dir=$(@D)/be &&" +
         "zip -qj $@ $(@D)/be/*"
     ),
     tools = [
         "//src/main/java/com/google/devtools/build/docgen:docgen_bin",
         "//src/main/java/com/google/devtools/build/docgen:docgen_javalib",
     ],
+    visibility = [
+        "//site:__pkg__",
+        "//src/test/shell/bazel:__pkg__",
+    ],
 )
+
+genrule(
+    name = "gen_command-line-reference",
+    srcs = [
+        "//site:command-line-reference-prefix.html",
+        "//site:command-line-reference-suffix.html",
+    ],
+    outs = ["command-line-reference.html"],
+    cmd = (
+        "cat $(location //site:command-line-reference-prefix.html) > $@ && " +
+        "TMP=`mktemp -d /tmp/tmp.XXXXXXXXXX` && " +
+        "mkdir $${TMP}/_embedded_binaries/ && " +
+        "$(location :bazel/BazelServer) " +
+        "--jvm_flag=-Dio.bazel.EnableJni=0 --batch " +
+        "--install_base=$${TMP} --output_base=$${TMP}/output/ " +
+        "help everything-as-html >> $@ 2>/dev/null && " +
+        "cat $(location //site:command-line-reference-suffix.html) >> $@"
+    ),
+    tools = [
+        ":bazel/BazelServer",
+    ],
+    visibility = [
+        "//site:__pkg__",
+    ],
+)
+
+# The skylark repository classes are passed as parameter of the Skylark documentation generator.
+SKYLARK_REPOSITORY_CLASSES = [
+    "com.google.devtools.build.lib.bazel.repository.skylark.SkylarkExecutionResult",
+    "com.google.devtools.build.lib.bazel.repository.skylark.SkylarkOS",
+    "com.google.devtools.build.lib.bazel.repository.skylark.SkylarkPath",
+    "com.google.devtools.build.lib.bazel.repository.skylark.SkylarkRepositoryContext",
+    "com.google.devtools.build.lib.bazel.repository.skylark.SkylarkRepositoryModule",
+]
 
 genrule(
     name = "gen_skylarklibrary",
     outs = ["skylark-library.zip"],
     cmd = "mkdir -p $(@D)/skylark-lib &&" +
-          "$(location //src/main/java/com/google/devtools/build/docgen:skydoc_bin) $(@D)/skylark-lib &&" +
-          "zip -qj $@ $(@D)/skylark-lib/*",
+          "$(location //src/main/java/com/google/devtools/build/docgen:skydoc_bin) $(@D)/skylark-lib " +
+          " ".join(SKYLARK_REPOSITORY_CLASSES) +
+          " && zip -qj $@ $(@D)/skylark-lib/*",
     tools = ["//src/main/java/com/google/devtools/build/docgen:skydoc_bin"],
+    visibility = ["//site:__pkg__"],
 )
 
 # Bootstrapping SingleJar using Skylark rules
@@ -956,7 +1139,7 @@ load("//tools/build_rules:java_rules_skylark.bzl", "bootstrap_java_library")
 bootstrap_java_library(
     name = "shell-skylark",
     srcs = glob(["shell/*.java"]),
-    jars = ["//third_party:guava"],
+    jars = ["//third_party:guava-jars"],
 )
 
 ########################################################################

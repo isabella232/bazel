@@ -44,11 +44,9 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-
 import javax.annotation.Nullable;
 
 /**
@@ -79,12 +77,24 @@ public class PrepareDepsOfPatternFunction implements SkyFunction {
     Preconditions.checkState(patternKey.getPolicy().equals(FilteringPolicies.NO_FILTER),
         patternKey.getPolicy());
 
+    TargetPattern parsedPattern = patternKey.getParsedPattern();
+
+    BlacklistedPackagePrefixesValue blacklist =
+        (BlacklistedPackagePrefixesValue) env.getValue(BlacklistedPackagePrefixesValue.key());
+    if (blacklist == null) {
+      return null;
+    }
+    ImmutableSet<PathFragment> subdirectoriesToExclude =
+        patternKey.getAllSubdirectoriesToExclude(blacklist.getPatterns());
+
+    DepsOfPatternPreparer preparer = new DepsOfPatternPreparer(env, pkgPath.get());
+
     try {
-      TargetPattern parsedPattern = patternKey.getParsedPattern();
-      DepsOfPatternPreparer preparer = new DepsOfPatternPreparer(env, pkgPath.get());
-      ImmutableSet<PathFragment> excludedSubdirectories = patternKey.getExcludedSubdirectories();
       parsedPattern.eval(
-          preparer, excludedSubdirectories, NullCallback.<Void>instance(), RuntimeException.class);
+          preparer,
+          subdirectoriesToExclude,
+          NullCallback.<Void>instance(),
+          RuntimeException.class);
     } catch (TargetParsingException e) {
       throw new PrepareDepsOfPatternFunctionException(e);
     } catch (MissingDepException e) {
@@ -165,16 +175,17 @@ public class PrepareDepsOfPatternFunction implements SkyFunction {
     }
 
     @Override
-    public ResolvedTargets<Void> getTargetsInPackage(String originalPattern,
-        PackageIdentifier packageIdentifier, boolean rulesOnly) throws TargetParsingException {
+    public ResolvedTargets<Void> getTargetsInPackage(
+        String originalPattern, PackageIdentifier packageIdentifier, boolean rulesOnly)
+        throws TargetParsingException, InterruptedException {
       FilteringPolicy policy =
           rulesOnly ? FilteringPolicies.RULES_ONLY : FilteringPolicies.NO_FILTER;
       return getTargetsInPackage(originalPattern, packageIdentifier, policy);
     }
 
-    private ResolvedTargets<Void> getTargetsInPackage(String originalPattern,
-        PackageIdentifier packageIdentifier, FilteringPolicy policy)
-        throws TargetParsingException {
+    private ResolvedTargets<Void> getTargetsInPackage(
+        String originalPattern, PackageIdentifier packageIdentifier, FilteringPolicy policy)
+        throws TargetParsingException, InterruptedException {
       try {
         Package pkg = packageProvider.getPackage(env.getListener(), packageIdentifier);
         ResolvedTargets<Target> packageTargets =
@@ -197,7 +208,7 @@ public class PrepareDepsOfPatternFunction implements SkyFunction {
     }
 
     @Override
-    public boolean isPackage(PackageIdentifier packageIdentifier) {
+    public boolean isPackage(PackageIdentifier packageIdentifier) throws InterruptedException {
       return packageProvider.isPackage(env.getListener(), packageIdentifier);
     }
 

@@ -8,12 +8,13 @@ filegroup(
     srcs = select({
         ":darwin": ["//src/main/native:libunix.dylib"],
         ":darwin_x86_64": ["//src/main/native:libunix.dylib"],
-        ":windows": [],
+        ":windows": ["//src/main/native:windows_jni.dll"],
         "//conditions:default": ["//src/main/native:libunix.so"],
     }),
     visibility = [
         "//src/test/java:__pkg__",
         "//src/tools/generate_workspace:__pkg__",
+        "//src/tools/remote_worker:__subpackages__",
     ],
 )
 
@@ -25,9 +26,9 @@ filegroup(
         ":libunix",
         "//src/main/tools:build-runfiles",
         "//src/main/tools:process-wrapper",
-        "//src/main/tools:xcode-locator",
-        "//src/main/tools:namespace-sandbox",
+        "//src/main/tools:linux-sandbox",
         "//src/main/tools:build_interface_so",
+        "//tools/osx:xcode-locator",
     ] + embedded_tools,
     outs = ["install_base_key" + suffix],
     cmd = select({
@@ -68,11 +69,39 @@ genrule(
           """,
 )
 
+# Create dummy tools so we can do select to prevent building iOS target on
+# Linux.
+OSX_DUMMY_TARGETS = [
+    "src/tools/xcode/actoolwrapper/actoolwrapper",
+    "src/tools/xcode/ibtoolwrapper/ibtoolwrapper",
+    "src/tools/xcode/libtool/libtool",
+    "src/tools/xcode/momcwrapper/momcwrapper",
+    "src/tools/xcode/swiftstdlibtoolwrapper/swiftstdlibtoolwrapper",
+    "src/tools/xcode/environment/environment_plist",
+    "src/tools/xcode/xcrunwrapper/xcrunwrapper",
+    "src/objc_tools/bundlemerge/bundlemerge_deploy.jar",
+    "src/objc_tools/plmerge/plmerge_deploy.jar",
+    "src/objc_tools/xcodegen/xcodegen_deploy.jar",
+    "src/tools/xcode/realpath/realpath",
+    "src/tools/xcode/stdredirect/StdRedirect.dylib",
+]
+
+[
+    genrule(
+        name = "dummy_darwin_tool_" + name.replace("/", "_"),
+        srcs = [],
+        outs = ["dummy_darwin_tools/" + name],
+        cmd = "touch $@",
+    )
+    for name in OSX_DUMMY_TARGETS
+]
+
 filegroup(
     name = "darwin_tools",
     srcs = [
         "//src/tools/xcode/actoolwrapper:actoolwrapper",
         "//src/tools/xcode/ibtoolwrapper:ibtoolwrapper",
+        "//src/tools/xcode/libtool:libtool",
         "//src/tools/xcode/momcwrapper:momcwrapper",
         "//src/tools/xcode/swiftstdlibtoolwrapper:swiftstdlibtoolwrapper",
         "//src/tools/xcode/environment:environment_plist",
@@ -81,10 +110,19 @@ filegroup(
         "//src/objc_tools/plmerge:plmerge_deploy.jar",
         "//src/objc_tools/xcodegen:xcodegen_deploy.jar",
         "//src/tools/xcode/realpath:realpath",
+        "//tools/osx:xcode_locator.m",
     ] + select({
         ":iphonesdk": ["//src/tools/xcode/stdredirect:StdRedirect.dylib"],
-        "//conditions:default": [],
+        "//conditions:default": [":dummy_darwin_tool_src_tools_xcode_stdredirect_StdRedirect.dylib"],
     }),
+)
+
+filegroup(
+    name = "dummy_darwin_tools",
+    srcs = [
+        "dummy_darwin_tool_" + name.replace("/", "_")
+        for name in OSX_DUMMY_TARGETS
+    ],
 )
 
 genrule(
@@ -92,7 +130,12 @@ genrule(
     srcs = [
         ":create_embedded_tools.sh",
         "//tools:embedded_tools_srcs",
-        "//third_party:srcs",
+        "//third_party:gpl-srcs",
+        "//third_party/iossim:srcs",
+        "//third_party/java/jarjar:srcs",
+        "//third_party/java/jdk/langtools:test-srcs",
+        "//third_party/py/concurrent:srcs",
+        "//third_party/py/gflags:srcs",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/jarhelper:srcs",
         "//src/tools/android/java/com/google/devtools/build/android:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/ideinfo:embedded_tools",
@@ -100,7 +143,7 @@ genrule(
         "//src/tools/android/java/com/google/devtools/build/android/incrementaldeployment:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/ziputils:embedded_tools",
         "//src/main/protobuf:srcs",
-        "//src/java_tools/buildjar:JavaBuilder_deploy.jar",
+        "//src/java_tools/buildjar:JavaBuilderDeploy",
         "//src/java_tools/singlejar:SingleJar_deploy.jar",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass:GenClass_deploy.jar",
         "//src/java_tools/junitrunner/java/com/google/testing/junit/runner:Runner_deploy.jar",
@@ -115,8 +158,15 @@ genrule(
             ":darwin_tools",
             "//third_party/ijar:zipper",
         ],
-        ":windows": [],  # Windows specifically exclude zipper for now.
-        "//conditions:default": ["//third_party/ijar:zipper"],
+        "//conditions:default": [
+            ":dummy_darwin_tools",
+            "//third_party/ijar:zipper",
+        ],
+    }) + select({
+        "//tools/jdk:jdk7": [],
+        "//conditions:default": [
+            "//src/java_tools/buildjar/java/com/google/devtools/build/java/turbine:turbine_deploy.jar",
+        ],
     }),
     outs = ["embedded_tools.zip"],
     cmd = "$(location :create_embedded_tools.sh) $@ $(SRCS)",
@@ -134,10 +184,10 @@ genrule(
         ":libunix",
         "//src/main/tools:build-runfiles",
         "//src/main/tools:process-wrapper",
-        "//src/main/tools:xcode-locator",
         "//src/main/tools:jdk-support",
-        "//src/main/tools:namespace-sandbox",
+        "//src/main/tools:linux-sandbox",
         "//src/main/tools:build_interface_so",
+        "//tools/osx:xcode-locator",
         ":java-version",
     ],
     outs = ["package" + suffix + ".zip"],
@@ -155,12 +205,16 @@ genrule(
         "package-zip" + suffix,
     ],
     outs = ["bazel" + suffix],
-    cmd = "cat $(location //src/main/cpp:client) $(location :package-zip" + suffix + ") > $@ && zip -qA $@",
+    # In msys, a file path without .exe suffix(say foo), refers to a file with .exe
+    # suffix(say foo.exe), if foo.exe exists and foo doesn't. So, on windows, we
+    # need to remove bazel.exe first, so that cat to bazel won't fail.
+    cmd = "rm -f $@; cat $(location //src/main/cpp:client) $(location :package-zip" + suffix + ") > $@ && zip -qA $@",
     executable = 1,
     output_to_bindir = 1,
     visibility = [
         "//scripts:__pkg__",  # For bash completion generation
         "//scripts/packages:__pkg__",  # For installer generation
+        "//src/java:__subpackages__",  # For command line reference generation
         "//src/test:__subpackages__",  # For integration tests
     ],
 ) for suffix in [
@@ -243,17 +297,28 @@ filegroup(
         "//src/objc_tools/bundlemerge:srcs",
         "//src/objc_tools/plmerge:srcs",
         "//src/objc_tools/xcodegen:srcs",
+        "//src/test/cpp:srcs",
+        "//src/test/java/com/google/devtools/build/android:srcs",
+        "//src/test/java/com/google/devtools/build/docgen:srcs",
+        "//src/test/java/com/google/devtools/build/lib:srcs",
+        "//src/test/java/com/google/devtools/build/skyframe:srcs",
+        "//src/test/java/com/google/devtools/common/options:srcs",
+        "//src/test/shell:srcs",
         "//src/tools/android/java/com/google/devtools/build/android:srcs",
         "//src/tools/generate_workspace:srcs",
         "//src/tools/xcode/actoolwrapper:srcs",
         "//src/tools/xcode/environment:srcs",
         "//src/tools/xcode/ibtoolwrapper:srcs",
+        "//src/tools/xcode/libtool:srcs",
         "//src/tools/xcode/momcwrapper:srcs",
         "//src/tools/xcode/realpath:srcs",
+        "//src/tools/singlejar:srcs",
         "//src/tools/xcode/stdredirect:srcs",
         "//src/tools/xcode/swiftstdlibtoolwrapper:srcs",
         "//src/tools/xcode/xcrunwrapper:srcs",
         "//src/tools/xcode-common:srcs",
+        "//src/tools/remote_worker:srcs",
+        "//tools/osx:srcs",
     ],
     visibility = ["//:__pkg__"],
 )

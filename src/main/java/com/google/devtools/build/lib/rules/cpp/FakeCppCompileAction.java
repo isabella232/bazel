@@ -20,6 +20,7 @@ import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
@@ -44,8 +45,6 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.UUID;
 import java.util.logging.Logger;
-
-import javax.annotation.Nullable;
 
 /**
  * Action that represents a fake C++ compilation step.
@@ -76,13 +75,10 @@ public class FakeCppCompileAction extends CppCompileAction {
       CppCompilationContext context,
       Class<? extends CppCompileActionContext> actionContext,
       ImmutableList<String> copts,
-      ImmutableList<String> pluginOpts,
       Predicate<String> nocopts,
-      ImmutableList<PathFragment> extraSystemIncludePrefixes,
-      @Nullable String fdoBuildStamp,
-      RuleContext ruleContext,
-      boolean usePic) {
-    super(owner,
+      RuleContext ruleContext) {
+    super(
+        owner,
         features,
         featureConfiguration,
         variables,
@@ -104,9 +100,16 @@ public class FakeCppCompileAction extends CppCompileAction {
         // cc_fake_binary and for the negative compilation tests that depend on
         // the cc_fake_binary, and the runfiles must be determined at analysis
         // time, so they can't depend on the contents of the ".d" file.)
-        CppCompilationContext.disallowUndeclaredHeaders(context), actionContext, copts, pluginOpts,
-        nocopts, extraSystemIncludePrefixes, fdoBuildStamp, VOID_INCLUDE_RESOLVER,
-        ImmutableList.<IncludeScannable>of(), GUID, usePic, ruleContext);
+        CppCompilationContext.disallowUndeclaredHeaders(context),
+        actionContext,
+        copts,
+        nocopts,
+        VOID_SPECIAL_INPUTS_HANDLER,
+        ImmutableList.<IncludeScannable>of(),
+        GUID,
+        ImmutableSet.<String>of(),
+        CppCompileAction.CPP_COMPILE,
+        ruleContext);
     this.tempOutputFile = Preconditions.checkNotNull(tempOutputFile);
   }
 
@@ -180,9 +183,15 @@ public class FakeCppCompileAction extends CppCompileAction {
         @Override
         public String apply(String input) {
           String result = ShellEscaper.escapeString(input);
+          // Once -c and -o options are added into action_config, the argument of
+          // getArgv(outputFile.getExecPath()) won't be used anymore. There will always be
+          // -c <tempOutputFile>, but here it has to be outputFile, so we replace it.
+          if (input.equals(tempOutputFile.getPathString())) {
+            result = outputPrefix + ShellEscaper.escapeString(outputFile.getExecPathString());
+          }
           if (input.equals(outputFile.getExecPathString())
               || input.equals(getDotdFile().getSafeExecPath().getPathString())) {
-            result = outputPrefix + result;
+            result = outputPrefix + ShellEscaper.escapeString(input);
           }
           return result;
         }

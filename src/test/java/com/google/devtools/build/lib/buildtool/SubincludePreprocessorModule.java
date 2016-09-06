@@ -14,33 +14,13 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
-import com.google.devtools.build.lib.packages.Preprocessor;
 import com.google.devtools.build.lib.packages.util.SubincludePreprocessor;
 import com.google.devtools.build.lib.runtime.BlazeModule;
-import com.google.devtools.build.lib.util.AbruptExitException;
-import com.google.devtools.build.lib.util.Clock;
-import com.google.devtools.build.lib.vfs.FileSystem;
-import com.google.devtools.common.options.OptionsProvider;
-
-import java.util.UUID;
+import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 
 public class SubincludePreprocessorModule extends BlazeModule {
-  private FileSystem fileSystem;
-
   @Override
-  public void blazeStartup(
-      OptionsProvider startupOptions,
-      BlazeVersionInfo versionInfo,
-      UUID instanceId,
-      BlazeDirectories directories,
-      Clock clock)
-      throws AbruptExitException {
-    this.fileSystem = directories.getFileSystem();
-  }
-
-  @Override
-  public Preprocessor.Factory.Supplier getPreprocessorFactorySupplier() {
-    return new SubincludePreprocessor.FactorySupplier(fileSystem);
+  public void workspaceInit(BlazeDirectories directories, WorkspaceBuilder builder) {
+    builder.setPreprocessorFactorySupplier(new SubincludePreprocessor.FactorySupplier());
   }
 }

@@ -31,7 +31,6 @@ import com.google.devtools.build.lib.syntax.DictionaryLiteral.DictionaryEntryLit
 import com.google.devtools.build.lib.syntax.IfStatement.ConditionalStatements;
 import com.google.devtools.build.lib.syntax.SkylarkImports.SkylarkImportSyntaxException;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -40,7 +39,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import javax.annotation.Nullable;
 
 /**
  * Recursive descent parser for LL(2) BUILD language.
@@ -168,10 +166,15 @@ public class Parser {
           .put(TokenKind.STAR, Operator.MULT)
           .build();
 
+  // TODO(bazel-team): add support for |=
   private static final Map<TokenKind, Operator> augmentedAssignmentMethods =
       new ImmutableMap.Builder<TokenKind, Operator>()
-      .put(TokenKind.PLUS_EQUALS, Operator.PLUS) // += // TODO(bazel-team): other similar operators
-      .build();
+          .put(TokenKind.PLUS_EQUALS, Operator.PLUS)
+          .put(TokenKind.MINUS_EQUALS, Operator.MINUS)
+          .put(TokenKind.STAR_EQUALS, Operator.MULT)
+          .put(TokenKind.SLASH_EQUALS, Operator.DIVIDE)
+          .put(TokenKind.PERCENT_EQUALS, Operator.PERCENT)
+          .build();
 
   /** Highest precedence goes last.
    *  Based on: http://docs.python.org/2/reference/expressions.html#operator-precedence
@@ -224,31 +227,20 @@ public class Parser {
   }
 
   /**
-   * Entry-point to parser that parses a build file with comments.  All errors
-   * encountered during parsing are reported via "reporter".  Enable Skylark extensions
-   * that are not part of the core BUILD language.
+   * Entry-point to parser that parses a build file with comments. All errors encountered during
+   * parsing are reported via "reporter". Enable Skylark extensions that are not part of the core
+   * BUILD language.
    */
   public static ParseResult parseFileForSkylark(
-      ParserInputSource input,
-      EventHandler eventHandler,
-      @Nullable ValidationEnvironment validationEnvironment) {
+      ParserInputSource input, EventHandler eventHandler) {
     Lexer lexer = new Lexer(input, eventHandler, false);
     Parser parser = new Parser(lexer, eventHandler, SKYLARK);
     List<Statement> statements = parser.parseFileInput();
-    boolean hasSemanticalErrors = false;
-    try {
-      if (validationEnvironment != null) {
-        validationEnvironment.validateAst(statements);
-      }
-    } catch (EvalException e) {
-      // Do not report errors caused by a previous parsing error, as it has already been reported.
-      if (!e.isDueToIncompleteAST()) {
-        eventHandler.handle(Event.error(e.getLocation(), e.getMessage()));
-      }
-      hasSemanticalErrors = true;
-    }
-    return new ParseResult(statements, parser.comments, locationFromStatements(lexer, statements),
-        parser.errorsCount > 0 || lexer.containsErrors() || hasSemanticalErrors);
+    return new ParseResult(
+        statements,
+        parser.comments,
+        locationFromStatements(lexer, statements),
+        parser.errorsCount > 0 || lexer.containsErrors());
   }
 
   /**
@@ -1084,9 +1076,9 @@ public class Parser {
    * Parses the next symbol argument of a load statement and puts it into the output map.
    *
    * <p> The symbol is either "name" (STRING) or name = "declared" (IDENTIFIER EQUALS STRING).
-   * "Declared" refers to the original name in the bazel file that should be loaded.
-   * Moreover, it will be the key of the entry in the map.
-   * If no alias is used, "name" and "declared" will be identical.
+   * If no alias is used, "name" and "declared" will be identical. "Declared" refers to the
+   * original name in the Bazel file that should be loaded, while "name" will be the key of the
+   * entry in the map.
    */
   private void parseLoadSymbol(Map<Identifier, String> symbols) {
     Token nameToken, declaredToken;
@@ -1114,10 +1106,12 @@ public class Parser {
 
       if (symbols.containsKey(identifier)) {
         syntaxError(
-            nameToken, String.format("Symbol '%s' has already been loaded", identifier.getName()));
+            nameToken, String.format("Identifier '%s' is used more than once",
+                identifier.getName()));
       } else {
         symbols.put(
-            setLocation(identifier, nameToken.left, token.left), declaredToken.value.toString());
+            setLocation(identifier, nameToken.left, nameToken.right),
+            declaredToken.value.toString());
       }
     } catch (NullPointerException npe) {
       // This means that the value of at least one token is null. In this case, the previous
@@ -1404,7 +1398,8 @@ public class Parser {
       list.add(parseIfStatement());
     } else if (token.kind == TokenKind.FOR && parsingMode == SKYLARK) {
       if (isTopLevel) {
-        reportError(lexer.createLocation(token.left, token.right),
+        reportError(
+            lexer.createLocation(token.left, token.right),
             "for loops are not allowed on top-level. Put it into a function");
       }
       parseForStatement(list);
@@ -1446,7 +1441,11 @@ public class Parser {
     int start = token.left;
     Token blockToken = token;
     syncTo(EnumSet.of(TokenKind.COLON, TokenKind.EOF)); // skip over expression or name
-    if (parsingMode != PYTHON) {
+    if (blockToken.kind == TokenKind.ELSE && parsingMode == SKYLARK) {
+      reportError(
+          lexer.createLocation(blockToken.left, blockToken.right),
+          "syntax error at 'else': not allowed here.");
+    } else if (parsingMode != PYTHON) {
       String msg =
           ILLEGAL_BLOCK_KEYWORDS.containsKey(blockToken.kind)
               ? String.format("%ss are not supported.", ILLEGAL_BLOCK_KEYWORDS.get(blockToken.kind))

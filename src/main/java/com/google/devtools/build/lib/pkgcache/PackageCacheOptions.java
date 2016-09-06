@@ -18,7 +18,6 @@ import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
@@ -35,25 +34,6 @@ import java.util.List;
  * Options for configuring the PackageCache.
  */
 public class PackageCacheOptions extends OptionsBase {
-  /**
-   * A converter for package path that defaults to {@code Constants.DEFAULT_PACKAGE_PATH} if the
-   * option is not given.
-   *
-   * <p>Required because you cannot specify a non-constant value in annotation attributes.
-   */
-  public static class PackagePathConverter implements Converter<List<String>> {
-    @Override
-    public List<String> convert(String input) throws OptionsParsingException {
-      return input.isEmpty()
-          ? Constants.DEFAULT_PACKAGE_PATH
-          : new Converters.ColonSeparatedOptionListConverter().convert(input);
-    }
-
-    @Override
-    public String getTypeDescription() {
-      return "a string";
-    }
-  }
 
   /**
    * Converter for the {@code --default_visibility} option.
@@ -78,9 +58,9 @@ public class PackageCacheOptions extends OptionsBase {
   }
 
   @Option(name = "package_path",
-          defaultValue = "",
+          defaultValue = "%workspace%",
           category = "package loading",
-          converter = PackagePathConverter.class,
+          converter = Converters.ColonSeparatedOptionListConverter.class,
           help = "A colon-separated list of where to look for packages. "
           +  "Elements beginning with '%workspace%' are relative to the enclosing "
           +  "workspace. If omitted or empty, the default is the output of "
@@ -156,6 +136,13 @@ public class PackageCacheOptions extends OptionsBase {
       category = "undocumented",
       help = "Allows the command to fetch external dependencies")
   public boolean fetch;
+
+  @Option(name = "experimental_check_output_files",
+        defaultValue = "true",
+        category = "undocumented",
+        help = "Check for modifications made to the output files of a build. Consider setting "
+            + "this flag to false to see the effect on incremental build times.")
+  public boolean checkOutputFiles;
 
   /**
    * A converter from strings containing comma-separated names of packages to lists of strings.

@@ -1,16 +1,4 @@
-load("/tools/build_defs/d/d", "d_repositories")
-load("/tools/build_defs/dotnet/csharp", "csharp_repositories")
-load("/tools/build_defs/jsonnet/jsonnet", "jsonnet_repositories")
-load("/tools/build_defs/sass/sass", "sass_repositories")
-load("/tools/build_rules/go/def", "go_repositories")
-load("/tools/build_rules/rust/rust", "rust_repositories")
-
-csharp_repositories()
-d_repositories()
-go_repositories()
-jsonnet_repositories()
-rust_repositories()
-sass_repositories()
+workspace(name = "io_bazel")
 
 # Protobuf expects an //external:python_headers label which would contain the
 # Python headers if fast Python protos is enabled. Since we are not using fast
@@ -31,6 +19,25 @@ bind(
     actual = "//:dummy",
 )
 
+# Protobuf code generation for GRPC requires three external labels:
+# //external:grpc-java_plugin
+# //external:grpc-jar
+# //external:guava
+bind(
+    name = "grpc-java-plugin",
+    actual = "//third_party/grpc:grpc-java-plugin",
+)
+
+bind(
+    name = "grpc-jar",
+    actual = "//third_party/grpc:grpc-jar",
+)
+
+bind(
+    name = "guava",
+    actual = "//third_party:guava",
+)
+
 # For tools/cpp/test/...
 load("//tools/cpp/test:docker_repository.bzl", "docker_repository")
 docker_repository()
@@ -39,3 +46,9 @@ docker_repository()
 # scripts/workspace_user.sh and uncomment the next two lines.
 # load("/WORKSPACE.user", "android_repositories")
 # android_repositories()
+
+# This allows rules written in skylark to locate apple build tools.
+bind(name = "xcrunwrapper", actual = "@bazel_tools//tools/objc:xcrunwrapper")
+
+bind(name = "protobuf/java_runtime", actual = "//third_party/protobuf:protobuf")
+bind(name = "protobuf/javalite_runtime", actual = "//third_party/protobuf:protobuf-lite")

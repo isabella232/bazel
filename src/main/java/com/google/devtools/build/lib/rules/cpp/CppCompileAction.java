@@ -28,8 +28,8 @@ import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
-import com.google.devtools.build.lib.actions.ArtifactFile;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
+import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.PackageRootResolutionException;
@@ -38,6 +38,7 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.extra.CppCompileInfo;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.actions.ExecutionInfoSpecifier;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.PerLabelOptions;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -47,7 +48,6 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
@@ -65,7 +65,6 @@ import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -78,34 +77,39 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
-/**
- * Action that represents some kind of C++ compilation step.
- */
+/** Action that represents some kind of C++ compilation step. */
 @ThreadCompatible
-public class CppCompileAction extends AbstractAction implements IncludeScannable {
+public class CppCompileAction extends AbstractAction
+    implements IncludeScannable, ExecutionInfoSpecifier, CommandAction {
   /**
-   * Represents logic that determines which artifacts, if any, should be added to the actual inputs
-   * for each included file (in addition to the included file itself)
+   * Represents logic that determines if an artifact is a special input, meaning that it may require
+   * additional inputs when it is compiled or may not be available to other actions.
    */
-  public interface IncludeResolver {
-    /**
-     * Returns the set of files to be added for an included file (as returned in the .d file)
-     */
+  public interface SpecialInputsHandler {
+    /** Returns if {@code includedFile} is special, so may not be available to other actions. */
+    boolean isSpecialFile(Artifact includedFile);
+
+    /** Returns the set of files to be added for an included file (as returned in the .d file). */
     Collection<Artifact> getInputsForIncludedFile(
         Artifact includedFile, ArtifactResolver artifactResolver);
   }
 
-  public static final IncludeResolver VOID_INCLUDE_RESOLVER = new IncludeResolver() {
-    @Override
-    public Collection<Artifact> getInputsForIncludedFile(Artifact includedFile,
-        ArtifactResolver artifactResolver) {
-      return ImmutableList.of();
-    }
-  };
+  static final SpecialInputsHandler VOID_SPECIAL_INPUTS_HANDLER =
+      new SpecialInputsHandler() {
+        @Override
+        public boolean isSpecialFile(Artifact includedFile) {
+          return false;
+        }
+
+        @Override
+        public Collection<Artifact> getInputsForIncludedFile(
+            Artifact includedFile, ArtifactResolver artifactResolver) {
+          return ImmutableList.of();
+        }
+      };
 
   private static final int VALIDATION_DEBUG = 0;  // 0==none, 1==warns/errors, 2==all
   private static final boolean VALIDATION_DEBUG_WARN = VALIDATION_DEBUG >= 1;
@@ -120,6 +124,16 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
    */
   public static final String CPP_COMPILE = "c++-compile";
 
+  /**
+   * A string constant for the objc compilation action.
+   */
+  public static final String OBJC_COMPILE = "objc-compile";
+
+  /**
+   * A string constant for the objc++ compile action.
+   */
+  public static final String OBJCPP_COMPILE = "objc++-compile";
+  
   /**
    * A string constant for the c++ header parsing.
    */
@@ -146,20 +160,19 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private final BuildConfiguration configuration;
   protected final Artifact outputFile;
   private final Label sourceLabel;
-  private final Artifact dwoFile;
   private final Artifact optionalSourceFile;
   private final NestedSet<Artifact> mandatoryInputs;
   private final boolean shouldScanIncludes;
   private final CppCompilationContext context;
-  private final Collection<PathFragment> extraSystemIncludePrefixes;
   private final Iterable<IncludeScannable> lipoScannables;
-  private final CppCompileCommandLine cppCompileCommandLine;
-  private final boolean usePic;
+  private final ImmutableList<Artifact> builtinIncludeFiles;
+  @VisibleForTesting public final CppCompileCommandLine cppCompileCommandLine;
+  private final ImmutableSet<String> executionRequirements;
 
   @VisibleForTesting
   final CppConfiguration cppConfiguration;
   protected final Class<? extends CppCompileActionContext> actionContext;
-  private final IncludeResolver includeResolver;
+  private final SpecialInputsHandler specialInputsHandler;
 
   /**
    * Identifier for the actual execution time behavior of the action.
@@ -206,8 +219,13 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
    * @param context the compilation context
    * @param copts options for the compiler
    * @param coptsFilter regular expression to remove options from {@code copts}
+   * @param executionRequirements out-of-band hints to be passed to the execution backend to signal
+   *        platform requirements
+   * @param actionName a string giving the name of this action for the purpose of toolchain
+   *        evaluation
    */
-  protected CppCompileAction(ActionOwner owner,
+  protected CppCompileAction(
+      ActionOwner owner,
       // TODO(bazel-team): Eventually we will remove 'features'; all functionality in 'features'
       // will be provided by 'featureConfiguration'.
       ImmutableList<String> features,
@@ -227,28 +245,29 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       CppCompilationContext context,
       Class<? extends CppCompileActionContext> actionContext,
       ImmutableList<String> copts,
-      ImmutableList<String> pluginOpts,
       Predicate<String> coptsFilter,
-      ImmutableList<PathFragment> extraSystemIncludePrefixes,
-      @Nullable String fdoBuildStamp,
-      IncludeResolver includeResolver,
+      SpecialInputsHandler specialInputsHandler,
       Iterable<IncludeScannable> lipoScannables,
       UUID actionClassId,
-      boolean usePic,
+      ImmutableSet<String> executionRequirements,
+      String actionName,
       RuleContext ruleContext) {
-    super(owner,
-          createInputs(mandatoryInputs, context.getCompilationPrerequisites(), optionalSourceFile),
-          CollectionUtils.asListWithoutNulls(outputFile,
-              (dotdFile == null ? null : dotdFile.artifact()),
-              gcnoFile, dwoFile));
+    super(
+        owner,
+        createInputs(
+            ruleContext,
+            mandatoryInputs,
+            context.getTransitiveCompilationPrerequisites(),
+            optionalSourceFile,
+            lipoScannables),
+        CollectionUtils.asListWithoutNulls(
+            outputFile, (dotdFile == null ? null : dotdFile.artifact()), gcnoFile, dwoFile));
     this.configuration = configuration;
     this.sourceLabel = sourceLabel;
     this.outputFile = Preconditions.checkNotNull(outputFile);
-    this.dwoFile = dwoFile;
     this.optionalSourceFile = optionalSourceFile;
     this.context = context;
-    this.extraSystemIncludePrefixes = extraSystemIncludePrefixes;
-    this.includeResolver = includeResolver;
+    this.specialInputsHandler = specialInputsHandler;
     this.cppConfiguration = cppConfiguration;
     // inputsKnown begins as the logical negation of shouldScanIncludes.
     // When scanning includes, the inputs begin as not known, and become
@@ -262,19 +281,19 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
             dotdFile,
             copts,
             coptsFilter,
-            pluginOpts,
             features,
             featureConfiguration,
             variables,
-            fdoBuildStamp);
+            actionName);
     this.actionContext = actionContext;
     this.lipoScannables = lipoScannables;
     this.actionClassId = actionClassId;
-    this.usePic = usePic;
+    this.executionRequirements = executionRequirements;
 
     // We do not need to include the middleman artifact since it is a generated
     // artifact and will definitely exist prior to this action execution.
     this.mandatoryInputs = mandatoryInputs;
+    this.builtinIncludeFiles = CppHelper.getToolchain(ruleContext).getBuiltinIncludeFiles();
     verifyIncludePaths(ruleContext);
   }
 
@@ -309,14 +328,32 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   }
 
   private static NestedSet<Artifact> createInputs(
+      RuleContext ruleContext,
       NestedSet<Artifact> mandatoryInputs,
-      Set<Artifact> prerequisites, Artifact optionalSourceFile) {
+      Set<Artifact> prerequisites,
+      Artifact optionalSourceFile,
+      Iterable<IncludeScannable> lipoScannables) {
     NestedSetBuilder<Artifact> builder = NestedSetBuilder.stableOrder();
     if (optionalSourceFile != null) {
       builder.add(optionalSourceFile);
     }
     builder.addAll(prerequisites);
+    builder.addAll(CppHelper.getToolchain(ruleContext).getBuiltinIncludeFiles());
     builder.addTransitive(mandatoryInputs);
+    if (lipoScannables != null && lipoScannables.iterator().hasNext()) {
+      // We need to add "legal generated scanner files" coming through LIPO scannables here. These
+      // usually contain pre-grepped source files, i.e. files just containing the #include lines
+      // extracted from generated files. With LIPO, some of these files can be accessed, even though
+      // there is no direct dependency on them. Adding the artifacts as inputs to this compile
+      // action ensures that the action generating them is actually executed.
+      for (IncludeScannable lipoScannable : lipoScannables) {
+        for (Artifact value : lipoScannable.getLegalGeneratedScannerFileMap().values()) {
+          if (value != null) {
+            builder.add(value);
+          }
+        }
+      }
+    }
     return builder.build();
   }
 
@@ -341,8 +378,8 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
 
   @Nullable
   @Override
-  public Artifact getBuiltInIncludeFile() {
-    return cppConfiguration.getBuiltInIncludeFile();
+  public List<Artifact> getBuiltInIncludeFiles() {
+    return builtinIncludeFiles;
   }
 
   public String getHostSystemName() {
@@ -406,10 +443,10 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     ArtifactResolver artifactResolver =
         executor.getContext(IncludeScanningContext.class).getArtifactResolver();
     for (Artifact artifact : initialResult) {
-      result.addAll(includeResolver.getInputsForIncludedFile(artifact, artifactResolver));
+      result.addAll(specialInputsHandler.getInputsForIncludedFile(artifact, artifactResolver));
     }
     for (Artifact artifact : getInputs()) {
-      result.addAll(includeResolver.getInputsForIncludedFile(artifact, artifactResolver));
+      result.addAll(specialInputsHandler.getInputsForIncludedFile(artifact, artifactResolver));
     }
     // TODO(ulfjack): This only works if include scanning is enabled; the cleanup is in progress,
     // and this needs to be fixed before we can even consider disabling it.
@@ -446,26 +483,8 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return outputFile;
   }
 
-  /**
-   * Returns the path of the debug info output file (when debug info is
-   * spliced out of the .o file via fission).
-   */
-  @Nullable
-  Artifact getDwoFile() {
-    return dwoFile;
-  }
-
   protected PathFragment getInternalOutputFile() {
     return outputFile.getExecPath();
-  }
-
-  @VisibleForTesting
-  public List<String> getPluginOpts() {
-    return cppCompileCommandLine.pluginOpts;
-  }
-
-  Collection<PathFragment> getExtraSystemIncludePrefixes() {
-    return extraSystemIncludePrefixes;
   }
 
   @Override
@@ -565,9 +584,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   @Override
   public Collection<Artifact> getIncludeScannerSources() {
     NestedSetBuilder<Artifact> builder = NestedSetBuilder.stableOrder();
-    // For every header module we use for the build we need the set of sources that it can
-    // reference.
-    builder.addTransitive(context.getTransitiveHeaderModuleSrcs());
     if (CppFileTypes.CPP_MODULE_MAP.matches(getSourceFile().getPath())) {
       // If this is an action that compiles the header module itself, the source we build is the
       // module map, and we need to include-scan all headers that are referenced in the module map.
@@ -594,10 +610,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return context.getDefines();
   }
 
-  /**
-   * Returns an (immutable) map of environment key, value pairs to be
-   * provided to the C++ compiler.
-   */
+  @Override
   public ImmutableMap<String, String> getEnvironment() {
     Map<String, String> environment = new LinkedHashMap<>(configuration.getLocalShellEnvironment());
     if (configuration.isCodeCoverageEnabled()) {
@@ -642,8 +655,19 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return getArgv(getInternalOutputFile());
   }
 
+  @Override
+  public List<String> getArguments() {
+    return getArgv();
+  }
+
   protected final List<String> getArgv(PathFragment outputFile) {
     return cppCompileCommandLine.getArgv(outputFile);
+  }
+
+  @Override
+  public boolean extraActionCanAttach() {
+    return cppConfiguration.alwaysAttachExtraActions()
+        || !specialInputsHandler.isSpecialFile(getPrimaryInput());
   }
 
   @Override
@@ -675,6 +699,15 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return cppCompileCommandLine.getCompilerOptions();
   }
 
+  @Override
+  public Map<String, String> getExecutionInfo() {
+    ImmutableMap.Builder<String, String> result = ImmutableMap.<String, String>builder();
+    for (String requirement : executionRequirements) {
+      result.put(requirement, "");
+    }
+    return result.build();
+  }
+  
   /**
    * Enforce that the includes actually visited during the compile were properly
    * declared in the rules.
@@ -702,7 +735,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       throws ActionExecutionException {
     IncludeProblems errors = new IncludeProblems();
     IncludeProblems warnings = new IncludeProblems();
-    Set<ArtifactFile> allowedIncludes = new HashSet<>();
+    Set<Artifact> allowedIncludes = new HashSet<>();
     for (Artifact input : mandatoryInputs) {
       if (input.isMiddlemanArtifact() || input.isTreeArtifact()) {
         artifactExpander.expand(input, allowedIncludes);
@@ -720,9 +753,9 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     // Avoid immutable sets here to limit memory churn.
     Set<PathFragment> declaredIncludeDirs = Sets.newHashSet(context.getDeclaredIncludeDirs());
     Set<PathFragment> warnIncludeDirs = Sets.newHashSet(context.getDeclaredIncludeWarnDirs());
-    Set<Artifact> declaredIncludeSrcs = Sets.newHashSet(context.getDeclaredIncludeSrcs());
+    Set<Artifact> declaredIncludeSrcs = Sets.newHashSet(getDeclaredIncludeSrcs());
     for (Artifact input : inputsForValidation) {
-      if (context.getCompilationPrerequisites().contains(input)
+      if (context.getTransitiveCompilationPrerequisites().contains(input)
           || allowedIncludes.contains(input)) {
         continue; // ignore our fixed source in mandatoryInput: we just want includes
       }
@@ -772,9 +805,10 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
 
     if (warnings.hasProblems()) {
       eventHandler.handle(
-          new Event(EventKind.WARNING,
-              getOwner().getLocation(), warnings.getMessage(this, getSourceFile()),
-          Label.print(getOwner().getLabel())));
+          Event.warn(
+              getOwner().getLocation(),
+              warnings.getMessage(this, getSourceFile()))
+              .withTag(Label.print(getOwner().getLabel())));
     }
     errors.assertProblemFree(this, getSourceFile());
   }
@@ -782,7 +816,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private Iterable<PathFragment> getValidationIgnoredDirs() {
     List<PathFragment> cxxSystemIncludeDirs = cppConfiguration.getBuiltInIncludeDirectories();
     return Iterables.concat(
-        cxxSystemIncludeDirs, extraSystemIncludePrefixes, context.getSystemIncludeDirs());
+        cxxSystemIncludeDirs, context.getSystemIncludeDirs());
   }
 
   /**
@@ -854,7 +888,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       if (optionalSourceFile != null) {
         inputs.add(optionalSourceFile);
       }
-      inputs.addAll(context.getCompilationPrerequisites());
+      inputs.addAll(context.getTransitiveCompilationPrerequisites());
       inputs.addTransitive(discoveredInputs);
       inputsKnown = true;
     } finally {
@@ -906,19 +940,19 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
 
       // Determine prefixes of allowed absolute inclusions.
       CppConfiguration toolchain = cppConfiguration;
-      List<PathFragment> systemIncludePrefixes = new ArrayList<>();
+      List<Path> systemIncludePrefixes = new ArrayList<>();
       for (PathFragment includePath : toolchain.getBuiltInIncludeDirectories()) {
         if (includePath.isAbsolute()) {
-          systemIncludePrefixes.add(includePath);
+          systemIncludePrefixes.add(execRoot.getFileSystem().getPath(includePath));
         }
       }
-      systemIncludePrefixes.addAll(extraSystemIncludePrefixes);
 
       // Check inclusions.
       IncludeProblems problems = new IncludeProblems();
       Map<PathFragment, Artifact> allowedDerivedInputsMap = getAllowedDerivedInputsMap();
-      for (PathFragment execPath : depSet.getDependencies()) {
-        if (execPath.isAbsolute()) {
+      for (Path execPath : depSet.getDependencies()) {
+        PathFragment execPathFragment = execPath.asFragment();
+        if (execPathFragment.isAbsolute()) {
           // Absolute includes from system paths are ignored.
           if (FileSystemUtils.startsWithAny(execPath, systemIncludePrefixes)) {
             continue;
@@ -927,26 +961,26 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
           // non-system include paths here should never be absolute. If they
           // are, it's probably due to a non-hermetic #include, & we should stop
           // the build with an error.
-          if (execPath.startsWith(execRoot.asFragment())) {
-            execPath = execPath.relativeTo(execRoot.asFragment()); // funky but tolerable path
+          if (execPath.startsWith(execRoot)) {
+            execPathFragment = execPath.relativeTo(execRoot); // funky but tolerable path
           } else {
-            problems.add(execPath.getPathString());
+            problems.add(execPathFragment.getPathString());
             continue;
           }
         }
-        Artifact artifact = allowedDerivedInputsMap.get(execPath);
+        Artifact artifact = allowedDerivedInputsMap.get(execPathFragment);
         if (artifact == null) {
-          artifact = artifactResolver.resolveSourceArtifact(execPath);
+          artifact = artifactResolver.resolveSourceArtifact(execPathFragment);
         }
         if (artifact != null) {
           inputs.add(artifact);
           // In some cases, execution backends need extra files for each included file. Add them
           // to the set of actual inputs.
-          inputs.addAll(includeResolver.getInputsForIncludedFile(artifact, artifactResolver));
+          inputs.addAll(specialInputsHandler.getInputsForIncludedFile(artifact, artifactResolver));
         } else {
           // Abort if we see files that we can't resolve, likely caused by
           // undeclared includes or illegal include constructs.
-          problems.add(execPath.getPathString());
+          problems.add(execPathFragment.getPathString());
         }
       }
       problems.assertProblemFree(this, getSourceFile());
@@ -959,8 +993,10 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
 
   @Override
   public Iterable<Artifact> resolveInputsFromCache(
-      ArtifactResolver artifactResolver, PackageRootResolver resolver,
-      Collection<PathFragment> inputPaths) throws PackageRootResolutionException {
+      ArtifactResolver artifactResolver,
+      PackageRootResolver resolver,
+      Collection<PathFragment> inputPaths)
+      throws PackageRootResolutionException, InterruptedException {
     // Note that this method may trigger a violation of the desirable invariant that getInputs()
     // is a superset of getMandatoryInputs(). See bug about an "action not in canonical form"
     // error message and the integration test test_crosstool_change_and_failure().
@@ -1009,8 +1045,8 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private Map<PathFragment, Artifact> getAllowedDerivedInputsMap() {
     Map<PathFragment, Artifact> allowedDerivedInputMap = new HashMap<>();
     addToMap(allowedDerivedInputMap, mandatoryInputs);
-    addToMap(allowedDerivedInputMap, context.getDeclaredIncludeSrcs());
-    addToMap(allowedDerivedInputMap, context.getCompilationPrerequisites());
+    addToMap(allowedDerivedInputMap, getDeclaredIncludeSrcs());
+    addToMap(allowedDerivedInputMap, context.getTransitiveCompilationPrerequisites());
     Artifact artifact = getSourceFile();
     if (!artifact.isSourceArtifact()) {
       allowedDerivedInputMap.put(artifact.getExecPath(), artifact);
@@ -1053,21 +1089,17 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
    * Return explicit header files (i.e., header files explicitly listed). The
    * return value may contain duplicate elements.
    */
+  @Override
   public NestedSet<Artifact> getDeclaredIncludeSrcs() {
-    return context.getDeclaredIncludeSrcs();
-  }
-
-  /**
-   * Return explicit header files (i.e., header files explicitly listed) in an order
-   * that is stable between builds.
-   */
-  protected final List<PathFragment> getDeclaredIncludeSrcsInStableOrder() {
-    List<PathFragment> paths = new ArrayList<>();
-    for (Artifact declaredIncludeSrc : context.getDeclaredIncludeSrcs()) {
-      paths.add(declaredIncludeSrc.getExecPath());
+    if (lipoScannables != null && lipoScannables.iterator().hasNext()) {
+      NestedSetBuilder<Artifact> srcs = NestedSetBuilder.stableOrder();
+      srcs.addTransitive(context.getDeclaredIncludeSrcs());
+      for (IncludeScannable lipoScannable : lipoScannables) {
+        srcs.addTransitive(lipoScannable.getDeclaredIncludeSrcs());
+      }
+      return srcs.build();
     }
-    Collections.sort(paths); // Order is not important, but stability is.
-    return paths;
+    return context.getDeclaredIncludeSrcs();
   }
 
   @Override
@@ -1095,6 +1127,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     f.addUUID(actionClassId);
     f.addStringMap(getEnvironment());
     f.addStrings(getArgv());
+    f.addStrings(executionRequirements);
 
     /*
      * getArgv() above captures all changes which affect the compilation
@@ -1105,9 +1138,13 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
      */
     f.addPaths(context.getDeclaredIncludeDirs());
     f.addPaths(context.getDeclaredIncludeWarnDirs());
-    f.addPaths(getDeclaredIncludeSrcsInStableOrder());
-    f.addPaths(getExtraSystemIncludePrefixes());
-    f.addPaths(Artifact.asSortedPathFragments(getMandatoryInputs()));
+    for (Artifact declaredIncludeSrc : context.getDeclaredIncludeSrcs()) {
+      f.addPath(declaredIncludeSrc.getExecPath());
+    }
+    f.addInt(0);  // mark the boundary between input types
+    for (Artifact input : getMandatoryInputs()) {
+      f.addPath(input.getExecPath());
+    }
     return f.hexDigestAndReset();
   }
 
@@ -1216,17 +1253,12 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       message.append('\n');
     }
 
-    for (PathFragment path : getDeclaredIncludeSrcsInStableOrder()) {
+    for (Artifact src : getDeclaredIncludeSrcs()) {
       message.append("  Declared include source: ");
-      message.append(ShellEscaper.escapeString(path.getPathString()));
+      message.append(ShellEscaper.escapeString(src.getExecPathString()));
       message.append('\n');
     }
 
-    for (PathFragment path : getExtraSystemIncludePrefixes()) {
-      message.append("  Extra system include prefix: ");
-      message.append(ShellEscaper.escapeString(path.getPathString()));
-      message.append('\n');
-    }
     return message.toString();
   }
 
@@ -1238,98 +1270,72 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     private final DotdFile dotdFile;
     private final List<String> copts;
     private final Predicate<String> coptsFilter;
-    private final List<String> pluginOpts;
     private final Collection<String> features;
     private final FeatureConfiguration featureConfiguration;
-    private final CcToolchainFeatures.Variables variables;
-
-    // The value of the BUILD_FDO_TYPE macro to be defined on command line
-    @Nullable private final String fdoBuildStamp;
+    @VisibleForTesting public final CcToolchainFeatures.Variables variables;
+    private final String actionName;
 
     public CppCompileCommandLine(
         Artifact sourceFile,
         DotdFile dotdFile,
         ImmutableList<String> copts,
         Predicate<String> coptsFilter,
-        ImmutableList<String> pluginOpts,
         Collection<String> features,
         FeatureConfiguration featureConfiguration,
         CcToolchainFeatures.Variables variables,
-        @Nullable String fdoBuildStamp) {
+        String actionName) {
       this.sourceFile = Preconditions.checkNotNull(sourceFile);
       this.dotdFile = CppFileTypes.mustProduceDotdFile(sourceFile.getPath().toString())
                       ? Preconditions.checkNotNull(dotdFile) : null;
       this.copts = Preconditions.checkNotNull(copts);
       this.coptsFilter = coptsFilter;
-      this.pluginOpts = Preconditions.checkNotNull(pluginOpts);
       this.features = Preconditions.checkNotNull(features);
       this.featureConfiguration = featureConfiguration;
       this.variables = variables;
-      this.fdoBuildStamp = fdoBuildStamp;
+      this.actionName = actionName;
     }
 
     /**
      * Returns the environment variables that should be set for C++ compile actions.
      */
     protected Map<String, String> getEnvironment() {
-      return featureConfiguration.getEnvironmentVariables(getActionName(), variables);
+      return featureConfiguration.getEnvironmentVariables(actionName, variables);
     }
 
     protected List<String> getArgv(PathFragment outputFile) {
       List<String> commandLine = new ArrayList<>();
 
       // first: The command name.
-      commandLine.add(cppConfiguration.getToolPathFragment(Tool.GCC).getPathString());
+      if (!featureConfiguration.actionIsConfigured(actionName)) {
+        commandLine.add(cppConfiguration.getToolPathFragment(Tool.GCC).getPathString());
+      } else {
+        commandLine.add(
+            featureConfiguration
+                .getToolForAction(actionName)
+                .getToolPath(cppConfiguration.getCrosstoolTopPathFragment())
+                .getPathString());
+      }
 
       // second: The compiler options.
       commandLine.addAll(getCompilerOptions());
 
-      // third: The file to compile!
-      commandLine.add("-c");
-      commandLine.add(sourceFile.getExecPathString());
+      if (!featureConfiguration.isEnabled("compile_action_flags_in_flag_set")) {
+        // third: The file to compile!
+        commandLine.add("-c");
+        commandLine.add(sourceFile.getExecPathString());
 
-      // finally: The output file. (Prefixed with -o).
-      commandLine.add("-o");
-      commandLine.add(outputFile.getPathString());
+        // finally: The output file. (Prefixed with -o).
+        commandLine.add("-o");
+        commandLine.add(outputFile.getPathString());
+      }
 
       return commandLine;
-    }
-
-    private String getActionName() {
-      PathFragment sourcePath = sourceFile.getExecPath();
-      if (CppFileTypes.CPP_MODULE_MAP.matches(sourcePath)) {
-        return CPP_MODULE_COMPILE;
-      } else if (CppFileTypes.CPP_HEADER.matches(sourcePath)) {
-        // TODO(bazel-team): Handle C headers that probably don't work in C++ mode.
-        if (featureConfiguration.isEnabled(CppRuleClasses.PARSE_HEADERS)) {
-          return CPP_HEADER_PARSING;
-        } else if (featureConfiguration.isEnabled(CppRuleClasses.PREPROCESS_HEADERS)) {
-          return CPP_HEADER_PREPROCESSING;
-        } else {
-          // CcCommon.collectCAndCppSources() ensures we do not add headers to
-          // the compilation artifacts unless either 'parse_headers' or
-          // 'preprocess_headers' is set.
-          throw new IllegalStateException();
-        }
-      } else if (CppFileTypes.C_SOURCE.matches(sourcePath)) {
-        return C_COMPILE;
-      } else if (CppFileTypes.CPP_SOURCE.matches(sourcePath)) {
-        return CPP_COMPILE;
-      } else if (CppFileTypes.ASSEMBLER.matches(sourcePath)) {
-        return ASSEMBLE;
-      } else if (CppFileTypes.ASSEMBLER_WITH_C_PREPROCESSOR.matches(sourcePath)) {
-        return PREPROCESS_ASSEMBLE;
-      }
-      // CcLibraryHelper ensures CppCompileAction only gets instantiated for supported file types.
-      throw new IllegalStateException();
     }
 
     public List<String> getCompilerOptions() {
       List<String> options = new ArrayList<>();
       CppConfiguration toolchain = cppConfiguration;
 
-      // pluginOpts has to be added before defaultCopts because -fplugin must precede -plugin-arg.
-      options.addAll(pluginOpts);
       addFilteredOptions(options, toolchain.getCompilerOptions(features));
 
       String sourceFilename = sourceFile.getExecPathString();
@@ -1342,34 +1348,13 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         addFilteredOptions(options, toolchain.getCxxOptions(features));
       }
 
-      for (String warn : cppConfiguration.getCWarns()) {
-        options.add("-W" + warn);
-      }
-      for (String define : context.getDefines()) {
-        options.add("-D" + define);
-      }
-
-      // Stamp FDO builds with FDO subtype string
-      if (fdoBuildStamp != null) {
-        options.add("-D" + CppConfiguration.FDO_STAMP_MACRO + "=\"" + fdoBuildStamp + "\"");
-      }
-
       // TODO(bazel-team): This needs to be before adding getUnfilteredCompilerOptions() and after
       // adding the warning flags until all toolchains are migrated; currently toolchains use the
       // unfiltered compiler options to inject include paths, which is superseded by the feature
       // configuration; on the other hand toolchains switch off warnings for the layering check
       // that will be re-added by the feature flags.
-      addFilteredOptions(options,
-          featureConfiguration.getCommandLine(getActionName(), variables));
+      addFilteredOptions(options, featureConfiguration.getCommandLine(actionName, variables));
 
-      // TODO(bazel-team): Move this into a feature; more specifically, create a feature for both
-      // the amount of debug information requested, and whether the debug info is written in a
-      // split out file. Until then, keep this before the user-provided copts so it can be
-      // overwritten.
-      if (cppConfiguration.useFission()) {
-        options.add("-gsplit-dwarf");
-      }
-      
       // Users don't expect the explicit copts to be filtered by coptsFilter, add them verbatim.
       // Make sure these are added after the options from the feature configuration, so that
       // those options can be overriden.
@@ -1380,14 +1365,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       // own include paths first.
       options.addAll(toolchain.getUnfilteredCompilerOptions(features));
 
-      // GCC gives randomized names to symbols which are defined in
-      // an anonymous namespace but have external linkage.  To make
-      // computation of these deterministic, we want to override the
-      // default seed for the random number generator.  It's safe to use
-      // any value which differs for all translation units; we use the
-      // path to the object file.
-      options.add("-frandom-seed=" + outputFile.getExecPathString());
-
       // Add the options of --per_file_copt, if the label or the base name of the source file
       // matches the specified regular expression filter.
       for (PerLabelOptions perLabelOptions : cppConfiguration.getPerFileCopts()) {
@@ -1397,32 +1374,14 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         }
       }
 
-      // Enable <object>.d file generation.
-      if (dotdFile != null) {
-        // Gcc options:
-        //  -MD turns on .d file output as a side-effect (doesn't imply -E)
-        //  -MM[D] enables user includes only, not system includes
-        //  -MF <name> specifies the dotd file name
-        // Issues:
-        //  -M[M] alone subverts actual .o output (implies -E)
-        //  -M[M]D alone breaks some of the .d naming assumptions
-        // This combination gets user and system includes with specified name:
-        //  -MD -MF <name>
-        options.add("-MD");
-        options.add("-MF");
-        options.add(dotdFile.getSafeExecPath().getPathString());
-      }
-
-      if (FileType.contains(outputFile, CppFileTypes.ASSEMBLER, CppFileTypes.PIC_ASSEMBLER)) {
-        options.add("-S");
-      } else if (FileType.contains(outputFile, CppFileTypes.PREPROCESSED_C,
-          CppFileTypes.PREPROCESSED_CPP, CppFileTypes.PIC_PREPROCESSED_C,
-          CppFileTypes.PIC_PREPROCESSED_CPP)) {
-        options.add("-E");
-      }
-
-      if (usePic) {
-        options.add("-fPIC");
+      if (!featureConfiguration.isEnabled("compile_action_flags_in_flag_set")) {
+        if (FileType.contains(outputFile, CppFileTypes.ASSEMBLER, CppFileTypes.PIC_ASSEMBLER)) {
+          options.add("-S");
+        } else if (FileType.contains(outputFile, CppFileTypes.PREPROCESSED_C,
+            CppFileTypes.PREPROCESSED_CPP, CppFileTypes.PIC_PREPROCESSED_C,
+            CppFileTypes.PIC_PREPROCESSED_CPP)) {
+          options.add("-E");
+        }
       }
 
       return options;

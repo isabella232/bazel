@@ -13,20 +13,18 @@
 // limitations under the License.
 package com.google.devtools.build.lib.syntax;
 
+import com.google.common.base.Throwables;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
 import com.google.devtools.build.lib.syntax.SkylarkType.SkylarkFunctionType;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.NoSuchElementException;
-import java.util.concurrent.ExecutionException;
-
 import javax.annotation.Nullable;
 
 /**
@@ -149,27 +147,24 @@ public class BuiltinFunction extends BaseFunction {
       }
     }
 
-    Profiler.instance().startTask(ProfilerTask.SKYLARK_BUILTIN_FN,
-        this.getClass().getName() + "#" + getName());
+    Profiler.instance().startTask(ProfilerTask.SKYLARK_BUILTIN_FN, getName());
     // Last but not least, actually make an inner call to the function with the resolved arguments.
     try {
       env.enterScope(this, ast, env.getGlobals());
       return invokeMethod.invoke(this, args);
     } catch (InvocationTargetException x) {
       Throwable e = x.getCause();
+
       if (e instanceof EvalException) {
         throw ((EvalException) e).ensureLocation(loc);
-      } else if (e instanceof InterruptedException) {
-        throw (InterruptedException) e;
-      } else if (e instanceof ClassCastException
-          || e instanceof ExecutionException
-          || e instanceof IllegalStateException) {
-        throw new EvalException(loc, "in call to " + getName(), e);
       } else if (e instanceof IllegalArgumentException) {
         throw new EvalException(loc, "Illegal argument in call to " + getName(), e);
-      } else {
-        throw badCallException(loc, e, args);
       }
+      // TODO(bazel-team): replace with Throwables.throwIfInstanceOf once Guava 20 is released.
+      Throwables.propagateIfInstanceOf(e, InterruptedException.class);
+      // TODO(bazel-team): replace with Throwables.throwIfUnchecked once Guava 20 is released.
+      Throwables.propagateIfPossible(e);
+      throw badCallException(loc, e, args);
     } catch (IllegalArgumentException e) {
       // Either this was thrown by Java itself, or it's a bug
       // To cover the first case, let's manually check the arguments.

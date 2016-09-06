@@ -14,9 +14,14 @@
 package com.google.devtools.build.lib.rules.java;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.syntax.Type;
 
@@ -32,15 +37,32 @@ public class JavaPlugin implements RuleConfiguredTargetFactory {
   }
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext) throws InterruptedException {
+  public ConfiguredTarget create(RuleContext ruleContext)
+      throws InterruptedException, RuleErrorException {
     JavaLibrary javaLibrary = new JavaLibrary(semantics);
     JavaCommon common = new JavaCommon(ruleContext, semantics);
     RuleConfiguredTargetBuilder builder = javaLibrary.init(ruleContext, common);
     if (builder == null) {
       return null;
     }
-    builder.add(JavaPluginInfoProvider.class, new JavaPluginInfoProvider(
-        getProcessorClasses(ruleContext), common.getRuntimeClasspath()));
+    ImmutableSet<String> processorClasses = getProcessorClasses(ruleContext);
+    NestedSet<Artifact> processorClasspath = common.getRuntimeClasspath();
+    ImmutableSet<String> apiGeneratingProcessorClasses;
+    NestedSet<Artifact> apiGeneratingProcessorClasspath;
+    if (ruleContext.attributes().get("generates_api", Type.BOOLEAN)) {
+      apiGeneratingProcessorClasses = processorClasses;
+      apiGeneratingProcessorClasspath = processorClasspath;
+    } else {
+      apiGeneratingProcessorClasses = ImmutableSet.of();
+      apiGeneratingProcessorClasspath = NestedSetBuilder.emptySet(Order.NAIVE_LINK_ORDER);
+    }
+    builder.add(
+        JavaPluginInfoProvider.class,
+        new JavaPluginInfoProvider(
+            processorClasses,
+            processorClasspath,
+            apiGeneratingProcessorClasses,
+            apiGeneratingProcessorClasspath));
     return builder.build();
   }
 

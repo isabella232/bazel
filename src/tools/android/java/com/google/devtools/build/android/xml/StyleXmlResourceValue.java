@@ -13,23 +13,35 @@
 // limitations under the License.
 package com.google.devtools.build.android.xml;
 
+import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
+import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.android.AndroidDataWritingVisitor;
+import com.google.devtools.build.android.AndroidDataWritingVisitor.ValuesResourceDefinition;
+import com.google.devtools.build.android.AndroidResourceClassWriter;
 import com.google.devtools.build.android.FullyQualifiedName;
 import com.google.devtools.build.android.XmlResourceValue;
-
-import java.io.Writer;
+import com.google.devtools.build.android.XmlResourceValues;
+import com.google.devtools.build.android.proto.SerializeFormat;
+import com.google.devtools.build.android.proto.SerializeFormat.DataValueXml.XmlType;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Path;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
+import javax.annotation.Nullable;
+import javax.annotation.concurrent.Immutable;
 
 /**
  * Represents an Android Style Resource.
  *
- * <p>Styles (http://developer.android.com/guide/topics/resources/style-resource.html) define a
- * look and feel for a layout or other ui construct. They are effectively a s set of values that
+ * <p>
+ * Styles (http://developer.android.com/guide/topics/resources/style-resource.html) define a look
+ * and feel for a layout or other ui construct. They are effectively a s set of values that
  * correspond to &lt;attr&gt; resources defined either in the base android framework or in other
  * resources. They also allow inheritance on other styles. For a style to valid in a given resource
- * pass, they must only contain definer attributes with acceptable values.
- * <code>
+ * pass, they must only contain definer attributes with acceptable values. <code>
  *   &lt;resources&gt;
  *     &lt;style name="CustomText" parent="@style/Text"&gt;
  *       &lt;item name="android:textSize"&gt;20sp&lt;/item&gt;
@@ -38,23 +50,81 @@ import java.util.Objects;
  *  &lt;/resources&gt;
  * </code>
  */
+@Immutable
 public class StyleXmlResourceValue implements XmlResourceValue {
-  private String parent;
-  private Map<String, String> values;
+  public static final Function<Entry<String, String>, String> ENTRY_TO_ITEM =
+      new Function<Entry<String, String>, String>() {
+        @Nullable
+        @Override
+        public String apply(Entry<String, String> input) {
+          return String.format("<item name='%s'>%s</item>", input.getKey(), input.getValue());
+        }
+      };
+  private final String parent;
+  private final ImmutableMap<String, String> values;
 
   public static StyleXmlResourceValue of(String parent, Map<String, String> values) {
-    return new StyleXmlResourceValue(parent, values);
+    return new StyleXmlResourceValue(parent, ImmutableMap.copyOf(values));
   }
 
-  private StyleXmlResourceValue(String parent, Map<String, String> values) {
+  @SuppressWarnings("deprecation")
+  public static XmlResourceValue from(SerializeFormat.DataValueXml proto) {
+    return of(proto.hasValue() ? proto.getValue() : null, proto.getMappedStringValue());
+  }
+
+  private StyleXmlResourceValue(@Nullable String parent, ImmutableMap<String, String> values) {
     this.parent = parent;
     this.values = values;
   }
 
   @Override
-  public void write(Writer buffer, FullyQualifiedName name) {
-    // TODO(corysmith): Implement write.
-    throw new UnsupportedOperationException();
+  public void write(
+      FullyQualifiedName key, Path source, AndroidDataWritingVisitor mergedDataWriter) {
+
+    ValuesResourceDefinition definition =
+        mergedDataWriter
+            .define(key)
+            .derivedFrom(source)
+            .startTag("style")
+            .named(key)
+            .optional()
+            .attribute("parent")
+            .setTo(parent)
+            .closeTag()
+            .addCharactersOf("\n");
+    for (Entry<String, String> entry : values.entrySet()) {
+      definition =
+          definition
+              .startItemTag()
+              .named(entry.getKey())
+              .closeTag()
+              .addCharactersOf(entry.getValue())
+              .endTag()
+              .addCharactersOf("\n");
+    }
+    definition.endTag().save();
+  }
+
+  @Override
+  public void writeResourceToClass(FullyQualifiedName key,
+      AndroidResourceClassWriter resourceClassWriter) {
+    resourceClassWriter.writeSimpleResource(key.type(), key.name());
+  }
+
+  @Override
+  public int serializeTo(int sourceId, Namespaces namespaces, OutputStream output)
+      throws IOException {
+    SerializeFormat.DataValueXml.Builder xmlValueBuilder =
+        SerializeFormat.DataValueXml.newBuilder()
+            .setType(XmlType.STYLE)
+            .putAllNamespace(namespaces.asMap())
+            .putAllMappedStringValue(values);
+    if (parent != null) {
+      xmlValueBuilder.setValue(parent);
+    }
+    return XmlResourceValues.serializeProtoDataValue(
+        output,
+        XmlResourceValues.newSerializableDataValueBuilder(sourceId).setXmlValue(xmlValueBuilder));
   }
 
   @Override
@@ -77,5 +147,10 @@ public class StyleXmlResourceValue implements XmlResourceValue {
         .add("parent", parent)
         .add("values", values)
         .toString();
+  }
+
+  @Override
+  public XmlResourceValue combineWith(XmlResourceValue value) {
+    throw new IllegalArgumentException(this + " is not a combinable resource.");
   }
 }

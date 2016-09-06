@@ -19,7 +19,6 @@ import com.google.devtools.build.lib.query2.engine.OutputFormatterCallback;
 import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.output.OutputFormatter.StreamedFormatter;
 import com.google.devtools.build.lib.query2.output.QueryOptions.OrderOutput;
-
 import java.io.IOException;
 import java.io.PrintStream;
 import java.util.Set;
@@ -49,8 +48,10 @@ public class QueryOutputUtils {
           ((DigraphQueryEvalResult<Target>) result).getGraph().extractSubgraph(targetsResult),
           outputStream, aspectResolver);
     } else {
-      OutputFormatterCallback.processAllTargets(((StreamedFormatter) formatter)
-          .createStreamCallback(queryOptions, outputStream, aspectResolver), targetsResult);
+      StreamedFormatter streamedFormatter = (StreamedFormatter) formatter;
+      streamedFormatter.setOptions(queryOptions, aspectResolver);
+      OutputFormatterCallback.processAllTargets(
+          streamedFormatter.createStreamCallback(outputStream, queryOptions), targetsResult);
     }
   }
 }

@@ -101,21 +101,6 @@ public class FingerprintTest {
   }
 
   @Test
-  public void toStringTest() throws Exception {
-    Fingerprint f1 = new Fingerprint();
-    f1.addString("Hello ");
-    f1.addString("World!");
-    String fp = f1.hexDigestAndReset();
-    Fingerprint f2 = new Fingerprint();
-    f2.addString("Hello ");
-    // make sure that you can call toString on the intermediate result
-    // and continue with the operation.
-    assertThat(fp).isNotEqualTo(f2.toString());
-    f2.addString("World!");
-    assertThat(fp).isEqualTo(f2.hexDigestAndReset());
-  }
-
-  @Test
   public void addBoolean() throws Exception {
     String f1 = new Fingerprint().addBoolean(true).hexDigestAndReset();
     String f2 = new Fingerprint().addBoolean(false).hexDigestAndReset();
@@ -133,5 +118,28 @@ public class FingerprintTest {
     Path p = new InMemoryFileSystem(BlazeClock.instance()).getPath(pf);
     assertThat("01cc3eeea3a2f58e447e824f9f62d3d1").isEqualTo(
         new Fingerprint().addPath(p).hexDigestAndReset());
+  }
+
+  @Test
+  public void addNullableBoolean() throws Exception {
+    String f1 = new Fingerprint().addNullableBoolean(null).hexDigestAndReset();
+    assertThat(f1).isEqualTo(new Fingerprint().addNullableBoolean(null).hexDigestAndReset());
+    assertThat(f1).isNotEqualTo(new Fingerprint().addNullableBoolean(false).hexDigestAndReset());
+    assertThat(f1).isNotEqualTo(new Fingerprint().addNullableBoolean(true).hexDigestAndReset());
+  }
+
+  @Test
+  public void addNullableInteger() throws Exception {
+    String f1 = new Fingerprint().addNullableInt(null).hexDigestAndReset();
+    assertThat(f1).isEqualTo(new Fingerprint().addNullableInt(null).hexDigestAndReset());
+    assertThat(f1).isNotEqualTo(new Fingerprint().addNullableInt(0).hexDigestAndReset());
+    assertThat(f1).isNotEqualTo(new Fingerprint().addNullableInt(1).hexDigestAndReset());
+  }
+
+  @Test
+  public void addNullableString() throws Exception {
+    String f1 = new Fingerprint().addNullableString(null).hexDigestAndReset();
+    assertThat(f1).isEqualTo(new Fingerprint().addNullableString(null).hexDigestAndReset());
+    assertThat(f1).isNotEqualTo(new Fingerprint().addNullableString("").hexDigestAndReset());
   }
 }

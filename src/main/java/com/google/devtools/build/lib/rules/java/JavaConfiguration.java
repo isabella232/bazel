@@ -28,21 +28,20 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.common.options.TriState;
-
 import java.util.List;
-
 import javax.annotation.Nullable;
 
-/**
- * A java compiler configuration containing the flags required for compilation.
- */
+/** A java compiler configuration containing the flags required for compilation. */
 @Immutable
-@SkylarkModule(name = "java", doc = "A java compiler configuration")
+@SkylarkModule(
+  name = "java",
+  doc = "A java compiler configuration",
+  category = SkylarkModuleCategory.CONFIGURATION_FRAGMENT
+)
 public final class JavaConfiguration extends Fragment {
-  /**
-   * Values for the --experimental_java_classpath option
-   */
+  /** Values for the --java_classpath option */
   public static enum JavaClasspathMode {
     /** Use full transitive classpaths, the default behavior. */
     OFF,
@@ -126,18 +125,16 @@ public final class JavaConfiguration extends Fragment {
 
   private final ImmutableList<String> commandLineJavacFlags;
   private final Label javaLauncherLabel;
-  private final Label javaBuilderTop;
-  private final Label javaLangtoolsJar;
   private final boolean useIjars;
   private final boolean useHeaderCompilation;
+  private final boolean optimizeHeaderCompilationAnnotationProcessing;
   private final boolean generateJavaDeps;
-  private final JavaClasspathMode experimentalJavaClasspath;
+  private final boolean strictDepsJavaProtos;
+  private final JavaClasspathMode javaClasspath;
   private final ImmutableList<String> javaWarns;
   private final ImmutableList<String> defaultJvmFlags;
   private final ImmutableList<String> checkedConstraints;
   private final StrictDepsMode strictJavaDeps;
-  private final Label javacBootclasspath;
-  private final Label javacExtdir;
   private final ImmutableList<String> javacOpts;
   private final Label proguardBinary;
   private final ImmutableList<Label> extraProguardSpecs;
@@ -156,18 +153,16 @@ public final class JavaConfiguration extends Fragment {
     this.commandLineJavacFlags =
         ImmutableList.copyOf(JavaHelper.tokenizeJavaOptions(javaOptions.javacOpts));
     this.javaLauncherLabel = javaOptions.javaLauncher;
-    this.javaBuilderTop = javaOptions.javaBuilderTop;
-    this.javaLangtoolsJar = javaOptions.javaLangtoolsJar;
     this.useIjars = javaOptions.useIjars;
     this.useHeaderCompilation = javaOptions.headerCompilation;
+    this.optimizeHeaderCompilationAnnotationProcessing =
+        javaOptions.optimizeHeaderCompilationAnnotationProcessing;
     this.generateJavaDeps = generateJavaDeps;
-    this.experimentalJavaClasspath = javaOptions.experimentalJavaClasspath;
+    this.javaClasspath = javaOptions.javaClasspath;
     this.javaWarns = ImmutableList.copyOf(javaOptions.javaWarns);
     this.defaultJvmFlags = ImmutableList.copyOf(defaultJvmFlags);
     this.checkedConstraints = ImmutableList.copyOf(javaOptions.checkedConstraints);
     this.strictJavaDeps = javaOptions.strictJavaDeps;
-    this.javacBootclasspath = javaOptions.javacBootclasspath;
-    this.javacExtdir = javaOptions.javacExtdir;
     this.javacOpts = ImmutableList.copyOf(javaOptions.javacOpts);
     this.proguardBinary = javaOptions.proguard;
     this.extraProguardSpecs = ImmutableList.copyOf(javaOptions.extraProguardSpecs);
@@ -176,6 +171,7 @@ public final class JavaConfiguration extends Fragment {
     this.javaToolchain = javaToolchain;
     this.javaOptimizationMode = javaOptions.javaOptimizationMode;
     this.legacyBazelJavaTest = javaOptions.legacyBazelJavaTest;
+    this.strictDepsJavaProtos = javaOptions.strictDepsJavaProtos;
 
     ImmutableList.Builder<Label> translationsBuilder = ImmutableList.builder();
     for (String s : javaOptions.translationTargets) {
@@ -213,20 +209,6 @@ public final class JavaConfiguration extends Fragment {
   }
 
   /**
-   * Returns the default javabuilder jar
-   */
-  public Label getDefaultJavaBuilderJar() {
-    return javaBuilderTop;
-  }
-
-  /**
-   * Returns the default java langtools jar
-   */
-  public Label getDefaultJavaLangtoolsJar() {
-    return javaLangtoolsJar;
-  }
-
-  /**
    * Returns true iff Java compilation should use ijars.
    */
   public boolean getUseIjars() {
@@ -238,6 +220,11 @@ public final class JavaConfiguration extends Fragment {
     return useHeaderCompilation;
   }
 
+  /** Returns true if only api-generating java_plugins should be run during header compilation. */
+  public boolean optimizeHeaderCompilationAnnotationProcessing() {
+    return optimizeHeaderCompilationAnnotationProcessing;
+  }
+
   /**
    * Returns true iff dependency information is generated after compilation.
    */
@@ -246,7 +233,7 @@ public final class JavaConfiguration extends Fragment {
   }
 
   public JavaClasspathMode getReduceJavaClasspath() {
-    return experimentalJavaClasspath;
+    return javaClasspath;
   }
 
   /**
@@ -284,14 +271,6 @@ public final class JavaConfiguration extends Fragment {
    */
   public Label getJavaLauncherLabel() {
     return javaLauncherLabel;
-  }
-
-  public Label getJavacBootclasspath() {
-    return javacBootclasspath;
-  }
-
-  public Label getJavacExtdir() {
-    return javacExtdir;
   }
 
   public ImmutableList<String> getJavacOpts() {
@@ -356,5 +335,9 @@ public final class JavaConfiguration extends Fragment {
    */
   public boolean useLegacyBazelJavaTest() {
     return legacyBazelJavaTest;
+  }
+
+  public boolean strictDepsJavaProtos() {
+    return strictDepsJavaProtos;
   }
 }

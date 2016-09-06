@@ -23,16 +23,13 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 import com.google.devtools.build.lib.syntax.compiler.ByteCodeUtils;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
-import net.bytebuddy.implementation.bytecode.StackManipulation;
-
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import net.bytebuddy.implementation.bytecode.StackManipulation;
 
 /**
  * Utilities used by the evaluator.
@@ -122,17 +119,6 @@ public final class EvalUtils {
   // NB: This is used as the basis for accepting objects in SkylarkNestedSet-s,
   // as well as for accepting objects as keys for Skylark dict-s.
   public static boolean isImmutable(Object o) {
-    if (o instanceof Tuple) {
-      for (Object item : (Tuple) o) {
-        if (!isImmutable(item)) {
-          return false;
-        }
-      }
-      return true;
-    }
-    if (o instanceof SkylarkMutable) {
-      return false;
-    }
     if (o instanceof SkylarkValue) {
       return ((SkylarkValue) o).isImmutable();
     }
@@ -292,8 +278,6 @@ public final class EvalUtils {
     } else if (NestedSet.class.isAssignableFrom(c) || SkylarkNestedSet.class.isAssignableFrom(c)) {
       // TODO(bazel-team): no one should be seeing naked NestedSet at all.
       return "set";
-    } else if (ClassObject.SkylarkClassObject.class.isAssignableFrom(c)) {
-      return "struct";
     } else {
       if (c.getSimpleName().isEmpty()) {
         return c.getName();

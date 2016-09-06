@@ -24,23 +24,29 @@ import com.google.devtools.build.lib.actions.ActionContextConsumer;
 import com.google.devtools.build.lib.actions.ActionContextProvider;
 import com.google.devtools.build.lib.actions.Executor.ActionContext;
 import com.google.devtools.build.lib.actions.SimpleActionContextProvider;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.actions.FileWriteActionContext;
+import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses;
 import com.google.devtools.build.lib.query2.output.OutputFormatter;
 import com.google.devtools.build.lib.rules.android.WriteAdbArgsActionContext;
 import com.google.devtools.build.lib.rules.cpp.CppCompileActionContext;
 import com.google.devtools.build.lib.rules.cpp.CppLinkActionContext;
+import com.google.devtools.build.lib.rules.cpp.FdoSupportFunction;
+import com.google.devtools.build.lib.rules.cpp.FdoSupportValue;
 import com.google.devtools.build.lib.rules.cpp.IncludeScanningContext;
 import com.google.devtools.build.lib.rules.genquery.GenQuery;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.GotOptionsEvent;
+import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
+import com.google.devtools.build.lib.util.ResourceFileLoader;
 import com.google.devtools.common.options.Converters.AssignmentConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
-
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -86,16 +92,22 @@ public class BazelRulesModule extends BlazeModule {
     public List<Map.Entry<String, String>> strategy;
   }
 
-  private static class BazelActionContextConsumer implements ActionContextConsumer {
-    BazelExecutionOptions options;
+  /**
+   * An object describing the {@link ActionContext} implementation that some actions require in
+   * Bazel.
+   */
+  protected static class BazelActionContextConsumer implements ActionContextConsumer {
+    private final BazelExecutionOptions options;
 
-    private BazelActionContextConsumer(BazelExecutionOptions options) {
+    protected BazelActionContextConsumer(BazelExecutionOptions options) {
       this.options = options;
-
     }
     @Override
-    public Map<String, String> getSpawnActionContexts() {
+    public ImmutableMap<String, String> getSpawnActionContexts() {
       Map<String, String> contexts = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+
+      // Default strategies for certain mnemonics - they can be overridden by --strategy= flags.
+      contexts.put("Javac", "worker");
 
       contexts.put("Genrule", options.genruleStrategy);
 
@@ -129,7 +141,7 @@ public class BazelRulesModule extends BlazeModule {
   }
 
   private CommandEnvironment env;
-  private BazelExecutionOptions options;
+  protected BazelExecutionOptions options;
 
   @Override
   public void beforeCommand(Command command, CommandEnvironment env) {
@@ -145,7 +157,7 @@ public class BazelRulesModule extends BlazeModule {
 
   @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
-    return command.builds()
+    return "build".equals(command.name())
         ? ImmutableList.<Class<? extends OptionsBase>>of(BazelExecutionOptions.class)
         : ImmutableList.<Class<? extends OptionsBase>>of();
   }
@@ -169,12 +181,22 @@ public class BazelRulesModule extends BlazeModule {
 
   @Override
   public void initializeRuleClasses(ConfiguredRuleClassProvider.Builder builder) {
+    builder.setToolsRepository(BazelRuleClassProvider.TOOLS_REPOSITORY);
     BazelRuleClassProvider.setup(builder);
+    try {
+      // Load auto-configuration files, it is made outside of the rule class provider so that it
+      // will not be loaded for our Java tests.
+      builder.addWorkspaceFileSuffix(
+          ResourceFileLoader.loadResource(BazelCppRuleClasses.class, "cc_configure.WORKSPACE"));
+    } catch (IOException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   @Override
-  public Iterable<PrecomputedValue.Injected> getPrecomputedSkyframeValues() {
-    return ImmutableList.of(PrecomputedValue.injected(
+  public void workspaceInit(BlazeDirectories directories, WorkspaceBuilder builder) {
+    builder.addSkyFunction(FdoSupportValue.SKYFUNCTION, new FdoSupportFunction());
+    builder.addPrecomputedValue(PrecomputedValue.injected(
         GenQuery.QUERY_OUTPUT_FORMATTERS,
         new Supplier<ImmutableList<OutputFormatter>>() {
           @Override

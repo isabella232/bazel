@@ -14,10 +14,8 @@
 
 package com.google.devtools.build.lib.bazel;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.bazel.commands.FetchCommand;
@@ -53,23 +51,20 @@ import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunctio
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryLoaderFunction;
-import com.google.devtools.build.lib.runtime.BlazeCommand;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.runtime.ServerBuilder;
+import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker;
 import com.google.devtools.build.lib.util.AbruptExitException;
-import com.google.devtools.build.lib.util.Clock;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
-import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.common.options.OptionsProvider;
 
 import java.util.Map.Entry;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.annotation.Nullable;
@@ -84,9 +79,10 @@ public class BazelRepositoryModule extends BlazeModule {
   private final AtomicBoolean isFetch = new AtomicBoolean(false);
   private final SkylarkRepositoryFunction skylarkRepositoryFunction =
       new SkylarkRepositoryFunction();
+  private final RepositoryDelegatorFunction delegator;
 
   public BazelRepositoryModule() {
-    repositoryHandlers =
+    this.repositoryHandlers =
         ImmutableMap.<String, RepositoryFunction>builder()
             .put(LocalRepositoryRule.NAME, new LocalRepositoryFunction())
             .put(HttpArchiveRule.NAME, new HttpArchiveFunction())
@@ -101,16 +97,8 @@ public class BazelRepositoryModule extends BlazeModule {
             .put(AndroidNdkRepositoryRule.NAME, new AndroidNdkRepositoryFunction())
             .put(MavenServerRule.NAME, new MavenServerRepositoryFunction())
             .build();
-  }
-
-  @Override
-  public void blazeStartup(OptionsProvider startupOptions,
-      BlazeVersionInfo versionInfo, UUID instanceId, BlazeDirectories directories,
-      Clock clock) {
-    for (RepositoryFunction handler : repositoryHandlers.values()) {
-      handler.setDirectories(directories);
-    }
-    skylarkRepositoryFunction.setDirectories(directories);
+    this.delegator = new RepositoryDelegatorFunction(
+        repositoryHandlers, skylarkRepositoryFunction, isFetch);
   }
 
   /**
@@ -143,8 +131,17 @@ public class BazelRepositoryModule extends BlazeModule {
       };
 
   @Override
-  public Iterable<SkyValueDirtinessChecker> getCustomDirtinessCheckers() {
-    return ImmutableList.of(REPOSITORY_VALUE_CHECKER);
+  public void serverInit(OptionsProvider startupOptions, ServerBuilder builder) {
+    builder.addCommands(new FetchCommand());
+  }
+
+  @Override
+  public void workspaceInit(BlazeDirectories directories, WorkspaceBuilder builder) {
+    builder.addCustomDirtinessChecker(REPOSITORY_VALUE_CHECKER);
+    // Create the repository function everything flows through.
+    builder.addSkyFunction(SkyFunctions.REPOSITORY, new RepositoryLoaderFunction());
+    builder.addSkyFunction(SkyFunctions.REPOSITORY_DIRECTORY, delegator);
+    builder.addSkyFunction(MavenServerFunction.NAME, new MavenServerFunction());
   }
 
   @Override
@@ -163,33 +160,14 @@ public class BazelRepositoryModule extends BlazeModule {
   }
 
   @Override
-  public Iterable<? extends BlazeCommand> getCommands() {
-    return ImmutableList.of(new FetchCommand());
-  }
-
-  @Override
   public void handleOptions(OptionsProvider optionsProvider) {
     PackageCacheOptions pkgOptions = optionsProvider.getOptions(PackageCacheOptions.class);
     isFetch.set(pkgOptions != null && pkgOptions.fetch);
   }
 
   @Override
-  public ImmutableMap<SkyFunctionName, SkyFunction> getSkyFunctions(BlazeDirectories directories) {
-    ImmutableMap.Builder<SkyFunctionName, SkyFunction> builder = ImmutableMap.builder();
-
-    // Create the repository function everything flows through.
-    builder.put(SkyFunctions.REPOSITORY, new RepositoryLoaderFunction());
-
-    builder.put(
-        SkyFunctions.REPOSITORY_DIRECTORY,
-        new RepositoryDelegatorFunction(
-            directories, repositoryHandlers, skylarkRepositoryFunction, isFetch));
-    builder.put(MavenServerFunction.NAME, new MavenServerFunction(directories));
-    return builder.build();
-  }
-
-  @Override
   public void beforeCommand(Command command, CommandEnvironment env) throws AbruptExitException {
+    delegator.setClientEnvironment(env.getClientEnv());
     skylarkRepositoryFunction.setCommandEnvironment(env);
   }
 }

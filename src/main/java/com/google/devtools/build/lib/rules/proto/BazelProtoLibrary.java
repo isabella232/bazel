@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.rules.proto;
 
+import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -21,7 +22,9 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 
 /**
@@ -30,7 +33,8 @@ import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 public class BazelProtoLibrary implements RuleConfiguredTargetFactory {
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext) throws InterruptedException {
+  public ConfiguredTarget create(RuleContext ruleContext)
+      throws InterruptedException, RuleErrorException {
     ImmutableList<Artifact> protoSources =
         ruleContext.getPrerequisiteArtifacts("srcs", Mode.TARGET).list();
     ImmutableList<Artifact> checkDepsProtoSources = ProtoCommon.getCheckDepsProtoSources(
@@ -47,9 +51,18 @@ public class BazelProtoLibrary implements RuleConfiguredTargetFactory {
         ProtoSourcesProvider.create(
             transitiveImports, transitiveImports, protoSources, checkDepsProtoSources);
 
+    final SupportData supportData =
+        SupportData.create(
+            Predicates.<TransitiveInfoCollection>alwaysTrue() /* nonWeakDepsPredicate */,
+            protoSources,
+            transitiveImports,
+            null /* usedDirectDeps */,
+            !protoSources.isEmpty());
+
     return new RuleConfiguredTargetBuilder(ruleContext)
         .add(RunfilesProvider.class, runfilesProvider)
         .addProvider(ProtoSourcesProvider.class, sourcesProvider)
+        .addProvider(ProtoSupportDataProvider.class, new ProtoSupportDataProvider(supportData))
         .addSkylarkTransitiveInfo(ProtoSourcesProvider.SKYLARK_NAME, sourcesProvider)
         .build();
   }

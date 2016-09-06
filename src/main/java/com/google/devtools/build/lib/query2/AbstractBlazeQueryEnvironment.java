@@ -31,24 +31,22 @@ import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.AggregateAllCallback;
+import com.google.devtools.build.lib.query2.engine.VariableContext;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
 /**
- * {@link QueryEnvironment} that can evaluate queries to produce a result, and implements as much
- * of QueryEnvironment as possible while remaining mostly agnostic as to the objects being stored.
+ * {@link QueryEnvironment} that can evaluate queries to produce a result, and implements as much of
+ * QueryEnvironment as possible while remaining mostly agnostic as to the objects being stored.
  */
-public abstract class AbstractBlazeQueryEnvironment<T> implements QueryEnvironment<T> {
+public abstract class AbstractBlazeQueryEnvironment<T>
+    implements QueryEnvironment<T>, AutoCloseable {
   protected final ErrorSensingEventHandler eventHandler;
-  private final Map<String, Set<T>> letBindings = new HashMap<>();
   protected final boolean keepGoing;
   protected final boolean strictScope;
 
@@ -116,7 +114,7 @@ public abstract class AbstractBlazeQueryEnvironment<T> implements QueryEnvironme
         throw new QueryException(expr, e.getMessage());
       }
       try {
-        this.eval(expr, new Callback<T>() {
+        this.eval(expr, VariableContext.<T>empty(), new Callback<T>() {
           @Override
           public void process(Iterable<T> partialResult)
               throws QueryException, InterruptedException {
@@ -144,6 +142,9 @@ public abstract class AbstractBlazeQueryEnvironment<T> implements QueryEnvironme
     return new QueryEvalResult(!eventHandler.hasErrors(), empty.get());
   }
 
+  @Override
+  public abstract void close();
+
   public QueryExpression transformParsedQuery(QueryExpression queryExpression) {
     return queryExpression;
   }
@@ -163,17 +164,8 @@ public abstract class AbstractBlazeQueryEnvironment<T> implements QueryEnvironme
     }
   }
 
-  public abstract Target getTarget(Label label) throws TargetNotFoundException, QueryException;
-
-  @Override
-  public Set<T> getVariable(String name) {
-    return letBindings.get(name);
-  }
-
-  @Override
-  public Set<T> setVariable(String name, Set<T> value) {
-    return letBindings.put(name, value);
-  }
+  public abstract Target getTarget(Label label)
+      throws TargetNotFoundException, QueryException, InterruptedException;
 
   protected boolean validateScope(Label label, boolean strict) throws QueryException {
     if (!labelFilter.apply(label)) {
@@ -189,7 +181,7 @@ public abstract class AbstractBlazeQueryEnvironment<T> implements QueryEnvironme
   }
 
   public Set<T> evalTargetPattern(QueryExpression caller, String pattern)
-      throws QueryException {
+      throws QueryException, InterruptedException {
     try {
       preloadOrThrow(caller, ImmutableList.of(pattern));
     } catch (TargetParsingException e) {
@@ -202,12 +194,12 @@ public abstract class AbstractBlazeQueryEnvironment<T> implements QueryEnvironme
   }
 
   /**
-   * Perform any work that should be done ahead of time to resolve the target patterns in the
-   * query. Implementations may choose to cache the results of resolving the patterns, cache
-   * intermediate work, or not cache and resolve patterns on the fly.
+   * Perform any work that should be done ahead of time to resolve the target patterns in the query.
+   * Implementations may choose to cache the results of resolving the patterns, cache intermediate
+   * work, or not cache and resolve patterns on the fly.
    */
   protected abstract void preloadOrThrow(QueryExpression caller, Collection<String> patterns)
-      throws QueryException, TargetParsingException;
+      throws QueryException, TargetParsingException, InterruptedException;
 
   @Override
   public boolean isSettingEnabled(Setting setting) {

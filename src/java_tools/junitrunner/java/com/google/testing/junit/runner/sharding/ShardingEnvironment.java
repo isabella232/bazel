@@ -14,11 +14,9 @@
 
 package com.google.testing.junit.runner.sharding;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.io.Files;
-
 import java.io.File;
 import java.io.IOException;
+import javax.inject.Inject;
 
 /**
  * Utility class that encapsulates dependencies from sharding implementations
@@ -34,6 +32,9 @@ public class ShardingEnvironment {
 
   /** Usage: -Dtest.sharding.strategy=round_robin */
   private static final String TEST_SHARDING_STRATEGY = "test.sharding.strategy";
+
+  @Inject
+  public ShardingEnvironment() {}
 
   /**
    * Return true iff the current test should be sharded.
@@ -71,11 +72,13 @@ public class ShardingEnvironment {
     touchShardFile(shardFile);
   }
 
-  @VisibleForTesting
+  // VisibleForTesting
   static void touchShardFile(File shardFile) {
     if (shardFile != null) {
       try {
-        Files.touch(shardFile);
+        if (!shardFile.createNewFile() && !shardFile.setLastModified(System.currentTimeMillis())) {
+          throw new IOException("Unable to update modification time of " + shardFile);
+        }
       } catch (IOException e) {
         throw new RuntimeException("Error writing shard file " + shardFile, e);
       }

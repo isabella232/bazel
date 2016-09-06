@@ -51,13 +51,6 @@ import java.util.List;
  * Rule class definitions used by (almost) every rule.
  */
 public class BaseRuleClasses {
-  /**
-   * Label of the pseudo-filegroup that contains all the targets that are needed
-   * for running tests in coverage mode.
-   */
-  private static final Label COVERAGE_SUPPORT_LABEL =
-      Label.parseAbsoluteUnchecked("//tools/defaults:coverage");
-
   private static final Attribute.ComputedDefault testonlyDefault =
       new Attribute.ComputedDefault() {
         @Override
@@ -81,7 +74,7 @@ public class BaseRuleClasses {
   static final LateBoundLabelList<BuildConfiguration> ACTION_LISTENER =
       new LateBoundLabelList<BuildConfiguration>() {
     @Override
-    public List<Label> getDefault(Rule rule, AttributeMap attributes,
+    public List<Label> resolve(Rule rule, AttributeMap attributes,
         BuildConfiguration configuration) {
       // action_listeners are special rules; they tell the build system to add extra_actions to
       // existing rules. As such they need an edge to every ConfiguredTarget with the limitation
@@ -91,46 +84,13 @@ public class BaseRuleClasses {
     }
   };
 
-  private static final LateBoundLabelList<BuildConfiguration> COVERAGE_SUPPORT =
-      new LateBoundLabelList<BuildConfiguration>(ImmutableList.of(COVERAGE_SUPPORT_LABEL)) {
-        @Override
-        public List<Label> getDefault(Rule rule,  AttributeMap attributes,
-            BuildConfiguration configuration) {
-          return configuration.isCodeCoverageEnabled()
-              ? ImmutableList.copyOf(configuration.getCoverageLabels())
-              : ImmutableList.<Label>of();
-        }
-      };
-
-  private static final LateBoundLabelList<BuildConfiguration> GCOV =
-      new LateBoundLabelList<BuildConfiguration>(ImmutableList.of(COVERAGE_SUPPORT_LABEL)) {
-        @Override
-        public List<Label> getDefault(Rule rule,  AttributeMap attributes,
-            BuildConfiguration configuration) {
-          return configuration.isCodeCoverageEnabled()
-              ? ImmutableList.copyOf(configuration.getGcovLabels())
-              : ImmutableList.<Label>of();
-        }
-      };
-
-  private static final LateBoundLabelList<BuildConfiguration> COVERAGE_REPORT_GENERATOR =
-      new LateBoundLabelList<BuildConfiguration>(ImmutableList.of(COVERAGE_SUPPORT_LABEL)) {
-        @Override
-        public List<Label> getDefault(Rule rule,  AttributeMap attributes,
-            BuildConfiguration configuration) {
-          return configuration.isCodeCoverageEnabled()
-              ? ImmutableList.copyOf(configuration.getCoverageReportGeneratorLabels())
-              : ImmutableList.<Label>of();
-        }
-      };
-
   /**
    * Implementation for the :run_under attribute.
    */
-  private static final LateBoundLabel<BuildConfiguration> RUN_UNDER =
+  public static final LateBoundLabel<BuildConfiguration> RUN_UNDER =
       new LateBoundLabel<BuildConfiguration>() {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           RunUnder runUnder = configuration.getRunUnder();
           return runUnder == null ? null : runUnder.getLabel();
@@ -168,17 +128,18 @@ public class BaseRuleClasses {
               .nonconfigurable("policy decision: should be consistent across configurations"))
           .add(attr("args", STRING_LIST)
               .nonconfigurable("policy decision: should be consistent across configurations"))
+          // Input files for every test action
           .add(attr("$test_runtime", LABEL_LIST).cfg(HOST).value(ImmutableList.of(
               env.getToolsLabel("//tools/test:runtime"))))
-
-          // TODO(bazel-team): TestActions may need to be run with coverage, so all tests
-          // implicitly depend on crosstool, which provides gcov.  We could add gcov to
-          // InstrumentedFilesProvider.getInstrumentationMetadataFiles() (or a new method) for
-          // all the test rules that have C++ in their transitive closure. Then this could go.
-          .add(attr(":gcov", LABEL_LIST).cfg(HOST).value(GCOV))
-          .add(attr(":coverage_support", LABEL_LIST).cfg(HOST).value(COVERAGE_SUPPORT))
-          .add(attr(":coverage_report_generator", LABEL_LIST).cfg(HOST)
-              .value(COVERAGE_REPORT_GENERATOR))
+          // Input files for test actions collecting code coverage
+          .add(attr("$coverage_support", LABEL)
+              .cfg(HOST)
+              .value(env.getLabel("//tools/defaults:coverage_support")))
+          // Used in the one-per-build coverage report generation action.
+          .add(attr("$coverage_report_generator", LABEL)
+              .cfg(HOST)
+              .value(env.getLabel("//tools/defaults:coverage_report_generator"))
+              .singleArtifact())
 
           // The target itself and run_under both run on the same machine. We use the DATA config
           // here because the run_under acts like a data dependency (e.g. no LIPO optimization).
@@ -224,11 +185,15 @@ public class BaseRuleClasses {
         .add(attr(RuleClass.COMPATIBLE_ENVIRONMENT_ATTR, LABEL_LIST)
             .allowedRuleClasses(EnvironmentRule.RULE_NAME)
             .cfg(Attribute.ConfigurationTransition.HOST)
-            .allowedFileTypes(FileTypeSet.NO_FILE))
+            .allowedFileTypes(FileTypeSet.NO_FILE)
+            .nonconfigurable("special logic for constraints and select: see ConstraintSemantics")
+        )
         .add(attr(RuleClass.RESTRICTED_ENVIRONMENT_ATTR, LABEL_LIST)
             .allowedRuleClasses(EnvironmentRule.RULE_NAME)
             .cfg(Attribute.ConfigurationTransition.HOST)
-            .allowedFileTypes(FileTypeSet.NO_FILE));
+            .allowedFileTypes(FileTypeSet.NO_FILE)
+            .nonconfigurable("special logic for constraints and select: see ConstraintSemantics")
+        );
   }
 
   /**

@@ -41,7 +41,7 @@ public class JavaConfigurationLoader implements ConfigurationFragmentFactory {
 
   @Override
   public JavaConfiguration create(ConfigurationEnvironment env, BuildOptions buildOptions)
-      throws InvalidConfigurationException {
+      throws InvalidConfigurationException, InterruptedException {
     CppConfiguration cppConfiguration = env.getFragment(buildOptions, CppConfiguration.class);
     if (cppConfiguration == null) {
       return null;
@@ -62,8 +62,8 @@ public class JavaConfigurationLoader implements ConfigurationFragmentFactory {
   public JavaConfiguration create(JavaOptions javaOptions, Label javaToolchain, String javaCpu)
           throws InvalidConfigurationException {
 
-    boolean generateJavaDeps = javaOptions.javaDeps ||
-        javaOptions.experimentalJavaClasspath != JavaClasspathMode.OFF;
+    boolean generateJavaDeps =
+        javaOptions.javaDeps || javaOptions.javaClasspath != JavaClasspathMode.OFF;
 
     return new JavaConfiguration(
         generateJavaDeps, javaOptions.jvmOpts, javaOptions, javaToolchain, javaCpu);

@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.vfs.Path;
 
 import java.io.IOException;
@@ -30,16 +31,19 @@ import java.util.List;
  * something other than a SkylarkRepositoryContext.
  */
 @Immutable
-@SkylarkModule(name = "path", doc = "A structure representing a file to be used inside a repository"
+@SkylarkModule(
+  name = "path",
+  category = SkylarkModuleCategory.NONE,
+  doc = "A structure representing a file to be used inside a repository"
 )
 final class SkylarkPath {
-  final Path path;
+  private final Path path;
 
-  public SkylarkPath(Path path) {
+  SkylarkPath(Path path) {
     this.path = path;
   }
 
-  public Path getPath() {
+  Path getPath() {
     return path;
   }
 

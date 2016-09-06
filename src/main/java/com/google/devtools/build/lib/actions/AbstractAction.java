@@ -25,7 +25,6 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -33,16 +32,14 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
-
 import java.io.IOException;
 import java.util.Collection;
-
 import javax.annotation.Nullable;
 
 /**
- * Abstract implementation of Action which implements basic functionality: the
- * inputs, outputs, and toString method.  Both input and output sets are
- * immutable.
+ * Abstract implementation of Action which implements basic functionality: the inputs, outputs, and
+ * toString method. Both input and output sets are immutable. Subclasses must be generally
+ * immutable - see the documentation on {@link Action}.
  */
 @Immutable @ThreadSafe
 public abstract class AbstractAction implements Action, SkylarkValue {
@@ -155,9 +152,11 @@ public abstract class AbstractAction implements Action, SkylarkValue {
 
   @Nullable
   @Override
-  public Iterable<Artifact> resolveInputsFromCache(ArtifactResolver artifactResolver,
-      PackageRootResolver resolver, Collection<PathFragment> inputPaths)
-          throws PackageRootResolutionException {
+  public Iterable<Artifact> resolveInputsFromCache(
+      ArtifactResolver artifactResolver,
+      PackageRootResolver resolver,
+      Collection<PathFragment> inputPaths)
+      throws PackageRootResolutionException, InterruptedException {
     throw new IllegalStateException(
         "Method must be overridden for actions that may have unknown inputs.");
   }
@@ -230,6 +229,12 @@ public abstract class AbstractAction implements Action, SkylarkValue {
 
   @Override
   public abstract String getMnemonic();
+
+  /**
+   * See the javadoc for {@link com.google.devtools.build.lib.actions.Action} and
+   * {@link com.google.devtools.build.lib.actions.ActionMetadata#getKey()} for the contract for
+   * {@link #computeKey()}.
+   */
   protected abstract String computeKey();
 
   @Override
@@ -368,10 +373,12 @@ public abstract class AbstractAction implements Action, SkylarkValue {
       Path path = output.getPath();
       String ownerString = Label.print(getOwner().getLabel());
       if (path.isDirectory()) {
-        eventHandler.handle(new Event(EventKind.WARNING, getOwner().getLocation(),
-            "output '" + output.prettyPrint() + "' of " + ownerString
-                  + " is a directory; dependency checking of directories is unsound",
-                  ownerString));
+        eventHandler.handle(
+            Event.warn(
+                getOwner().getLocation(),
+                "output '" + output.prettyPrint() + "' of " + ownerString
+                    + " is a directory; dependency checking of directories is unsound")
+                .withTag(ownerString));
       }
     }
   }
@@ -388,8 +395,13 @@ public abstract class AbstractAction implements Action, SkylarkValue {
   }
 
   @Override
-  public boolean shouldReportPathPrefixConflict(Action action) {
+  public boolean shouldReportPathPrefixConflict(ActionAnalysisMetadata action) {
     return this != action;
+  }
+
+  @Override
+  public boolean extraActionCanAttach() {
+    return true;
   }
 
   @Override

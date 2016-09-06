@@ -14,11 +14,9 @@
 package com.google.devtools.build.lib.query2.engine;
 
 import com.google.common.collect.ImmutableList;
-
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
-
 import javax.annotation.Nonnull;
 
 /**
@@ -116,7 +114,11 @@ public interface QueryEnvironment<T> {
      * @param args the input arguments. These are type-checked against the specification returned
      *     by {@link #getArgumentTypes} and {@link #getMandatoryArguments}
      */
-    <T> void eval(QueryEnvironment<T> env, QueryExpression expression, List<Argument> args,
+    <T> void eval(
+        QueryEnvironment<T> env,
+        VariableContext<T> context,
+        QueryExpression expression,
+        List<Argument> args,
         Callback<T> callback) throws QueryException, InterruptedException;
   }
 
@@ -139,7 +141,7 @@ public interface QueryEnvironment<T> {
    * pattern, in 'blaze build' syntax.
    */
   void getTargetsMatchingPattern(QueryExpression owner, String pattern, Callback<T> callback)
-      throws QueryException;
+      throws QueryException, InterruptedException;
 
   /** Ensures the specified target exists. */
   // NOTE(bazel-team): this method is left here as scaffolding from a previous refactoring. It may
@@ -147,17 +149,16 @@ public interface QueryEnvironment<T> {
   T getOrCreate(T target);
 
   /** Returns the direct forward dependencies of the specified targets. */
-  Collection<T> getFwdDeps(Iterable<T> targets);
+  Collection<T> getFwdDeps(Iterable<T> targets) throws InterruptedException;
 
   /** Returns the direct reverse dependencies of the specified targets. */
-  Collection<T> getReverseDeps(Iterable<T> targets);
+  Collection<T> getReverseDeps(Iterable<T> targets) throws InterruptedException;
 
   /**
-   * Returns the forward transitive closure of all of the targets in
-   * "targets".  Callers must ensure that {@link #buildTransitiveClosure}
-   * has been called for the relevant subgraph.
+   * Returns the forward transitive closure of all of the targets in "targets". Callers must ensure
+   * that {@link #buildTransitiveClosure} has been called for the relevant subgraph.
    */
-  Set<T> getTransitiveClosure(Set<T> targets);
+  Set<T> getTransitiveClosure(Set<T> targets) throws InterruptedException;
 
   /**
    * Construct the dependency graph for a depth-bounded forward transitive closure
@@ -172,21 +173,8 @@ public interface QueryEnvironment<T> {
                               Set<T> targetNodes,
                               int maxDepth) throws QueryException, InterruptedException;
 
-  /**
-   * Returns the set of nodes on some path from "from" to "to".
-   */
-  Set<T> getNodesOnPath(T from, T to);
-
-  /**
-   * Returns the value of the specified variable, or null if it is undefined.
-   */
-  Set<T> getVariable(String name);
-
-  /**
-   * Sets the value of the specified variable.  If value is null the variable
-   * becomes undefined.  Returns the previous value, if any.
-   */
-  Set<T> setVariable(String name, Set<T> value);
+  /** Returns the set of nodes on some path from "from" to "to". */
+  Set<T> getNodesOnPath(T from, T to) throws InterruptedException;
 
   /**
    * Eval an expression {@code expr} and pass the results to the {@code callback}.
@@ -195,7 +183,8 @@ public interface QueryEnvironment<T> {
    * @param expr The expression to evaluate
    * @param callback The caller callback to notify when results are available
    */
-  void eval(QueryExpression expr, Callback<T> callback) throws QueryException, InterruptedException;
+  void eval(QueryExpression expr, VariableContext<T> context, Callback<T> callback)
+      throws QueryException, InterruptedException;
 
   /**
    * Creates a Uniquifier for use in a {@code QueryExpression}. Note that the usage of this an
@@ -207,12 +196,12 @@ public interface QueryEnvironment<T> {
   void reportBuildFileError(QueryExpression expression, String msg) throws QueryException;
 
   /**
-   * Returns the set of BUILD, and optionally sub-included and Skylark files that define the given set of
-   * targets. Each such file is itself represented as a target in the result.
+   * Returns the set of BUILD, and optionally sub-included and Skylark files that define the given
+   * set of targets. Each such file is itself represented as a target in the result.
    */
   Set<T> getBuildFiles(
       QueryExpression caller, Set<T> nodes, boolean buildFiles, boolean subincludes, boolean loads)
-      throws QueryException;
+      throws QueryException, InterruptedException;
 
   /**
    * Returns an object that can be used to query information about targets. Implementations should
@@ -313,8 +302,9 @@ public interface QueryEnvironment<T> {
      *
      * @throws IllegalArgumentException if target is not a rule (according to {@link #isRule})
      */
-    List<T> getLabelListAttr(QueryExpression caller, T target, String attrName,
-        String errorMsgPrefix) throws QueryException;
+    List<T> getLabelListAttr(
+        QueryExpression caller, T target, String attrName, String errorMsgPrefix)
+        throws QueryException, InterruptedException;
 
     /**
      * If the attribute of the given name on the given target is a string list, then this method
@@ -353,7 +343,7 @@ public interface QueryEnvironment<T> {
      * Returns the set of package specifications the given target is visible from, represented as
      * {@link QueryVisibility}s.
      */
-    Set<QueryVisibility<T>> getVisibility(T from) throws QueryException;
+    Set<QueryVisibility<T>> getVisibility(T from) throws QueryException, InterruptedException;
   }
 
   /** List of the default query functions. */

@@ -1,4 +1,4 @@
-#!/bin/bash -eu
+#!/bin/bash
 
 # Copyright 2015 The Bazel Authors. All rights reserved.
 #
@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+set -eu
 
 # Main deploy functions for the continous build system
 # Just source this file and use the various method:
@@ -29,14 +31,13 @@ source $(dirname ${SCRIPT_DIR})/release/common.sh
 
 : ${GCS_BASE_URL:=https://storage.googleapis.com}
 : ${GCS_BUCKET:=bucket-o-bazel}
+: ${GCS_APT_BUCKET:=bazel-apt}
 
 : ${EMAIL_TEMPLATE_RC:=${SCRIPT_DIR}/rc_email.txt}
 : ${EMAIL_TEMPLATE_RELEASE:=${SCRIPT_DIR}/release_email.txt}
 
 : ${RELEASE_CANDIDATE_URL:="${GCS_BASE_URL}/${GCS_BUCKET}/%release_name%/rc%rc%/index.html"}
 : ${RELEASE_URL="${GIT_REPOSITORY_URL}/releases/tag/%release_name%"}
-
-set -eu
 
 PLATFORM="$(uname -s | tr 'A-Z' 'a-z')"
 if [[ ${PLATFORM} == "darwin" ]]; then
@@ -98,45 +99,6 @@ EOF
   fi
 }
 
-# Set the various arguments when JDK 7 is required (deprecated).
-# This method is here to continue to build binary release of Bazel
-# for JDK 7. We will drop this method and JDK 7 support when our
-# ci system turn red on this one.
-function setup_jdk7() {
-  # This is a JDK 7 JavaBuilder from release 0.1.0.
-  local javabuilder_url="https://storage.googleapis.com/bazel/0.1.0/JavaBuilder_deploy.jar"
-  local javac_url="https://github.com/bazelbuild/bazel/blob/0.1.0/third_party/java/jdk/langtools/javac.jar?raw=true"
-  sed -i.bak 's/_version = "8"/_version = "7"/' tools/jdk/BUILD
-  rm -f tools/jdk/BUILD.bak
-  rm -f third_party/java/jdk/langtools/javac.jar
-  curl -Ls -o tools/jdk/JavaBuilder_deploy.jar "${javabuilder_url}"
-  curl -Ls -o third_party/java/jdk/langtools/javac.jar "${javac_url}"
-  # Do not use the skylark bootstrapped version of JavaBuilder
-  export BAZEL_ARGS="--singlejar_top=//src/java_tools/singlejar:bootstrap_deploy.jar \
-      --genclass_top=//src/java_tools/buildjar:bootstrap_genclass_deploy.jar \
-      --ijar_top=//third_party/ijar"
-  # Skip building JavaBuilder
-  export BAZEL_SKIP_TOOL_COMPILATION=tools/jdk/JavaBuilder_deploy.jar
-  # Ignore JDK8 tests
-  export BAZEL_TEST_FILTERS="-jdk8"
-  if ! grep -Fq 'RealJavaBuilder' src/java_tools/buildjar/BUILD; then
-    # And more ugly hack. Overwrite the BUILD file of JavaBuilder
-    # so we use the pre-built version in integration tests.
-    sed -i.bak 's/name = \"JavaBuilder\"/name = \"RealJavaBuilder\"/' \
-        src/java_tools/buildjar/BUILD
-    rm -f src/java_tools/buildjar/BUILD.bak
-    cat >>src/java_tools/buildjar/BUILD <<'EOF'
-genrule(
-    name = "JavaBuilder",
-    outs = ["JavaBuilder_deploy.jar"],
-    srcs = ["//tools/jdk:JavaBuilder_deploy.jar"],
-    cmd = "cp $< $@",
-    visibility = ["//visibility:public"],
-)
-EOF
-  fi
-}
-
 # Main entry point for building bazel.
 # It sets the embed label to the release name if any, calls the whole
 # test suite, compile the various packages, then copy the artifacts
@@ -151,7 +113,6 @@ function bazel_build() {
 
   if [[ "${JAVA_VERSION-}" =~ ^(1\.)?7$ ]]; then
     JAVA_VERSION=1.7
-    setup_jdk7
     release_label="${release_label}-jdk7"
   else
     JAVA_VERSION=1.8
@@ -177,7 +138,8 @@ function bazel_build() {
       --workspace_status_command=scripts/ci/build_status_command.sh \
       --define JAVA_VERSION=${JAVA_VERSION} \
       ${ARGS} \
-      //scripts/packages/... || exit $?
+      //site:jekyll-tree \
+      //scripts/packages || exit $?
 
   if [ -n "${1-}" ]; then
     # Copy the results to the output directory
@@ -186,7 +148,10 @@ function bazel_build() {
     cp bazel-bin/scripts/packages/install.sh $1/bazel-${release_label}-installer.sh
     if [ "$PLATFORM" = "linux" ]; then
       cp bazel-bin/scripts/packages/bazel-debian.deb $1/bazel_${release_label}.deb
+      cp -f bazel-genfiles/scripts/packages/bazel.dsc $1/bazel.dsc
+      cp -f bazel-genfiles/scripts/packages/bazel.tar.gz $1/bazel.tar.gz
     fi
+    cp bazel-genfiles/site/jekyll-tree.tar $1/www.bazel.io.tar
     cp bazel-genfiles/scripts/packages/README.md $1/README.md
   fi
 
@@ -249,6 +214,12 @@ function release_to_github() {
   local release_name=$(get_release_name)
   local rc=$(get_release_candidate)
   local release_tool="${GITHUB_RELEASE:-$(which github-release 2>/dev/null || true)}"
+  local gpl_warning="
+
+_Notice_: Bazel installers contain binaries licensed under the GPLv2 with
+Classpath exception. Those installers should always be redistributed along with
+the source code."
+
   if [ ! -x "${release_tool}" ]; then
     echo "Please set GITHUB_RELEASE to the path to the github-release binary." >&2
     echo "This probably means you haven't installed https://github.com/c4milo/github-release " >&2
@@ -259,7 +230,7 @@ function release_to_github() {
   if [ -n "${release_name}" ] && [ -z "${rc}" ]; then
     mkdir -p "${tmpdir}/to-github"
     cp "${@}" "${tmpdir}/to-github"
-    "${GITHUB_RELEASE}" "${github_repo}" "${release_name}" "" "# $(git_commit_msg)" "${tmpdir}/to-github/"'*'
+    "${GITHUB_RELEASE}" "${github_repo}" "${release_name}" "" "# $(git_commit_msg) ${gpl_warning}" "${tmpdir}/to-github/"'*'
   fi
 }
 
@@ -292,6 +263,17 @@ function create_index_html() {
       | "${hoedown}"
 }
 
+function get_gsutil() {
+  local gs="${GSUTIL:-$(which gsutil 2>/dev/null || true) -m}"
+  if [ ! -x "${gs}" ]; then
+    echo "Please set GSUTIL to the path the gsutil binary." >&2
+    echo "gsutil (https://cloud.google.com/storage/docs/gsutil/) is the" >&2
+    echo "command-line interface to google cloud." >&2
+    exit 1
+  fi
+  echo "${gs}"
+}
+
 # Deploy a release candidate to Google Cloud Storage.
 # It requires to have gsutil installed. You can force the path to gsutil
 # by setting the GSUTIL environment variable. The GCS_BUCKET should be the
@@ -299,15 +281,9 @@ function create_index_html() {
 # This methods expects the following arguments:
 #   $1..$n files generated by package_build
 function release_to_gcs() {
-  local gs="${GSUTIL:-$(which gsutil 2>/dev/null || true) -m}"
-  local release_name=$(get_release_name)
-  local rc=$(get_release_candidate)
-  if [ ! -x "${gs}" ]; then
-    echo "Please set GSUTIL to the path the gsutil binary." >&2
-    echo "gsutil (https://cloud.google.com/storage/docs/gsutil/) is the" >&2
-    echo "command-line interface to google cloud." >&2
-    return 1
-  fi
+  local gs="$(get_gsutil)"
+  local release_name="$(get_release_name)"
+  local rc="$(get_release_candidate)"
   if [ -z "${GCS_BUCKET-}" ]; then
     echo "Please set GCS_BUCKET to the name of your Google Cloud Storage bucket." >&2
     return 1
@@ -324,8 +300,99 @@ function release_to_gcs() {
         >"${dir}/${release_name}/rc${rc}"/index.html
     cd ${dir}
     "${gs}" cp -a public-read -r . "gs://${GCS_BUCKET}"
-    cd ${prev_dir}
-    rm -fr ${dir}
+    cd "${prev_dir}"
+    rm -fr "${dir}"
+    trap - EXIT
+  fi
+}
+
+function create_apt_repository() {
+  mkdir conf
+  cat > conf/distributions <<EOF
+Origin: Bazel Authors
+Label: Bazel
+Codename: stable
+Architectures: amd64 source
+Components: jdk1.7 jdk1.8
+Description: Bazel APT Repository
+DebOverride: override.stable
+DscOverride: override.stable
+SignWith: ${APT_GPG_KEY_ID}
+
+Origin: Bazel Authors
+Label: Bazel
+Codename: testing
+Architectures: amd64 source
+Components: jdk1.7 jdk1.8
+Description: Bazel APT Repository
+DebOverride: override.testing
+DscOverride: override.testing
+SignWith: ${APT_GPG_KEY_ID}
+EOF
+
+  cat > conf/options <<EOF
+verbose
+ask-passphrase
+basedir .
+EOF
+
+  touch conf/override.stable
+  touch conf/override.testing
+
+  (gpg --list-keys | grep "${APT_GPG_KEY_ID}" > /dev/null) || \
+  gpg --allow-secret-key-import --import "${APT_GPG_KEY_PATH}"
+
+  local distribution="$1"
+  local deb_pkg_name_jdk8="$2"
+  local deb_pkg_name_jdk7="$3"
+  local deb_dsc_name="$4"
+
+  debsign -k ${APT_GPG_KEY_ID} "${deb_dsc_name}"
+
+  reprepro -C jdk1.8 includedeb "${distribution}" "${deb_pkg_name_jdk8}"
+  reprepro -C jdk1.8 includedsc "${distribution}" "${deb_dsc_name}"
+  reprepro -C jdk1.7 includedeb "${distribution}" "${deb_pkg_name_jdk7}"
+  reprepro -C jdk1.7 includedsc "${distribution}" "${deb_dsc_name}"
+
+  "${gs}" -m cp -a public-read -r dists "gs://${GCS_APT_BUCKET}/"
+  "${gs}" -m cp -a public-read -r pool "gs://${GCS_APT_BUCKET}/"
+}
+
+function release_to_apt() {
+  local gs="$(get_gsutil)"
+  local release_name="$(get_release_name)"
+  local rc="$(get_release_candidate)"
+  if [ -z "${GCS_APT_BUCKET-}" ]; then
+    echo "Please set GCS_APT_BUCKET to the name of your GCS bucket for apt repository." >&2
+    return 1
+  fi
+  if [ -z "${APT_GPG_KEY_ID-}" ]; then
+    echo "Please set APT_GPG_KEY_ID for apt repository." >&2
+    return 1
+  fi
+  if [ -n "${release_name}" ]; then
+    # Make a temporary folder with the desired structure
+    local dir="$(mktemp -d ${TMPDIR:-/tmp}/tmp.XXXXXXXX)"
+    local prev_dir="$PWD"
+    trap "{ cd ${prev_dir}; rm -fr ${dir}; }" EXIT
+    mkdir -p "${dir}/${release_name}"
+    local release_label="$(get_full_release_name)"
+    local deb_pkg_name_jdk8="${release_name}/bazel_${release_label}-linux-x86_64.deb"
+    local deb_pkg_name_jdk7="${release_name}/bazel_${release_label}-jdk7-linux-x86_64.deb"
+    local deb_dsc_name="${release_name}/bazel_$(get_release_name).dsc"
+    local deb_tar_name="${release_name}/bazel_$(get_release_name).tar.gz"
+    cp "${tmpdir}/bazel_${release_label}-linux-x86_64.deb" "${dir}/${deb_pkg_name_jdk8}"
+    cp "${tmpdir}/bazel_${release_label}-jdk7-linux-x86_64.deb" "${dir}/${deb_pkg_name_jdk7}"
+    cp "${tmpdir}/bazel.dsc" "${dir}/${deb_dsc_name}"
+    cp "${tmpdir}/bazel.tar.gz" "${dir}/${deb_tar_name}"
+    cd "${dir}"
+    if [ -n "${rc}" ]; then
+      create_apt_repository testing "${deb_pkg_name_jdk8}" "${deb_pkg_name_jdk7}" "${deb_dsc_name}"
+    else
+      create_apt_repository stable "${deb_pkg_name_jdk8}" "${deb_pkg_name_jdk7}" "${deb_dsc_name}"
+    fi
+    cd "${prev_dir}"
+    rm -fr "${dir}"
     trap - EXIT
   fi
 }
@@ -335,12 +402,13 @@ function deploy_release() {
   local github_args=()
   # Filters out README.md for github releases
   for i in "$@"; do
-    if ! [[ "$i" =~ README.md$ ]]; then
+    if ! ( [[ "$i" =~ README.md$ ]] || [[ "$i" =~ bazel.dsc ]] || [[ "$i" =~ bazel.tar.gz ]] ) ; then
       github_args+=("$i")
     fi
   done
   release_to_github "${github_args[@]}"
   release_to_gcs "$@"
+  release_to_apt
 }
 
 # A wrapper for the whole release phase:
@@ -364,11 +432,14 @@ function bazel_release() {
     local folder=$2
     shift 2
     for file in $folder/*; do
-      if [ $(basename $file) != README.md ]; then
-        if [[ "$file" =~ /([^/]*)(\.[^\./]+)$ ]]; then
+      local filename=$(basename $file)
+      if [ "$filename" != README.md ]; then
+        if [ "$filename" == "bazel.dsc" ] || [ "$filename" == "bazel.tar.gz" ] ; then
+          local destfile=${tmpdir}/$filename
+        elif [[ "$file" =~ /([^/]*)(\.[^\./]+)$ ]]; then
           local destfile=${tmpdir}/${BASH_REMATCH[1]}-${platform}${BASH_REMATCH[2]}
         else
-          local destfile=${tmpdir}/$(basename $file)-${platform}
+          local destfile=${tmpdir}/$filename-${platform}
         fi
         mv $file $destfile
         checksum $destfile > $destfile.sha256
@@ -382,4 +453,27 @@ function bazel_release() {
   export RELEASE_EMAIL_RECIPIENT="$(echo "${RELEASE_EMAIL}" | head -1)"
   export RELEASE_EMAIL_SUBJECT="$(echo "${RELEASE_EMAIL}" | head -2 | tail -1)"
   export RELEASE_EMAIL_CONTENT="$(echo "${RELEASE_EMAIL}" | tail -n +3)"
+}
+
+# Use jekyll build to build the site and then gsutil to copy it to GCS
+# Input: $1 tarball to the jekyll site
+#        $2 name of the bucket to deploy the site to
+# It requires to have gsutil installed. You can force the path to gsutil
+# by setting the GSUTIL environment variable
+function build_and_publish_site() {
+  tmpdir=$(mktemp -d ${TMPDIR:-/tmp}/tmp.XXXXXXXX)
+  trap 'rm -fr ${tmpdir}' EXIT
+  local gs="$(get_gsutil)"
+  local site="$1"
+  local bucket="$2"
+
+  if [ ! -f "${site}" ] || [ -z "${bucket}" ]; then
+    echo "Usage: build_and_publish_site <site-tarball> <bucket>" >&2
+    return 1
+  fi
+  tar xf "${site}" --exclude=CNAME -C "${tmpdir}"
+  jekyll build -s "${tmpdir}" -d "${tmpdir}/production"
+  "${gs}" rsync -r "${tmpdir}/production" "gs://${bucket}"
+  "${gs}" web set -m index.html -e 404.html "gs://${bucket}"
+  "${gs}" -m acl ch -R -u AllUsers:R "gs://${bucket}"
 }

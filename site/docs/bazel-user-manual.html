@@ -182,8 +182,12 @@ the <code class='flag'>--bazelrc=<var>file</var></code> option, and the
 </p>
 <p>
   Options specified in the command line always take precedence over
-  those from a configuration file, and options in the user-specific
-  configuration file always take precedence over the master one.
+  those from a configuration file. In configuration files, lines for a more specific command take
+  precedence over lines for a less specific command (e.g. the 'test' command inherits all the
+  options from the 'build' command, so a 'test --foo=bar' line takes precedence over a
+  'build --foo=baz' line, regardless of which configuration files these two lines are in) and lines
+  equally specific for which command they apply have precedence based on the configuration file they
+  are in, with the user-specific configuration file taking precedence over the master one.
 </p>
 <p>
   Options may include words other than flags, such as the names of
@@ -263,7 +267,7 @@ the <code class='flag'>--bazelrc=<var>file</var></code> option, and the
 </p>
 <p>
   Bazel prints progress messages during
-  the <a href='#phases'>execution phase</a> of the build, showing the
+  the <a href='#execution-phase'>execution phase</a> of the build, showing the
   current build step (compiler, linker, etc.) that is being started,
   and the number of completed over total number of build actions. As the
   build starts the number of total actions will often increase as Bazel
@@ -682,8 +686,7 @@ $ bazel fetch //...
     <code class='flag'>--compiler</code>,
     <code class='flag'>--thin_archives</code>,
     <code class='flag'>--use_ijars</code>,
-    <code class='flag'>--java_langtools</code>,
-    <code class='flag'>--javabuilder_top</code>.
+    <code class='flag'>--java_toolchain</code>,
     If <code class='flag'>--host_crosstool_top</code> is used, then the value of
     <code class='flag'>--host_cpu</code> is used to look up a
     <code>default_toolchain</code> in the Crosstool
@@ -1213,22 +1216,6 @@ $ bazel fetch //...
   will be placed on the gcc command line <em>after</em> these options.
 </p>
 
-<h4 id='flag--cwarn'><code class='flag'>--cwarn <var>gcc-warning</var></code></h4>
-<p>
-  This option takes an argument which is a gcc warning to be enabled when
-  compiling C or C++ source files. This warning enabling will override any
-  other copt, cxxopt or copts that disable the given warning.
-</p>
-<p>
-  This is similar to <code class='flag'>--copt</code> and <code class='flag'>--cxxopt</code>, but can only
-  be used to enable warnings. The arguments to this option are appended to the
-  "-W" flag to gcc, and must not contain a leading "no-" prefix.
-  For example:
-</p>
-<pre>
-  % bazel build --cwarn="unused-variable" --cwarn="unused-function" //foo/cruddy_code
-</pre>
-
 <h4 id='flag--linkopt'><code class='flag'>--linkopt <var>linker-option</var></code></h4>
 <p>
   This option takes an argument which is to be passed to gcc when linking.
@@ -1304,9 +1291,9 @@ $ bazel fetch //...
 
 </p>
 <p>
-  For the LLVM compiler the argument instead is the path to the raw LLVM profile
-  output file to generate, e.g.
-  <code class='flag'>--fdo_instrument=<var>/path/to/profile.profraw</var></code>.
+  For the LLVM compiler the argument is also the directory under which the raw LLVM profile
+  data file(s) is dumped, e.g.
+  <code class='flag'>--fdo_instrument=<var>/path/to/rawprof/dir/</var></code>.
 </p>
 <p>
   The options <code class='flag'>--fdo_instrument</code> and <code class='flag'>--fdo_optimize</code>
@@ -1710,16 +1697,10 @@ the compilation of binaries during the build.
   glibc version, and target CPU are allowed.
 </p>
 
-<h4 id='flag--javabuilder_top'><code class='flag'>--javabuilder_top <var>label</var></code></h4>
+<h4 id='flag--java_toolchain'><code class='flag'>--java_toolchain <var>label</var></code></h4>
 <p>
-  This option specifies the label of the JavaBuilder used to compile Java
+  This option specifies the label of the java_toolchain used to compile Java
   source files.
-</p>
-
-<h4 id='flag--java_langtools'><code class='flag'>--java_langtools <var>label</var></code></h4>
-<p>
-  This option specifies the label of the Java langtools jar (used by
-  Java compilation tools, for example JavaBuilder).
 </p>
 
 <h4 id='flag--javabase'><code class='flag'>--javabase (<var>path</var>|<var>label</var>)</code></h4>
@@ -1735,26 +1716,8 @@ the compilation of binaries during the build.
 <p>
   This does not select the Java compiler that is used to compile Java
   source files. The compiler can be selected by settings the
-  <a href="#flag--java_langtools"><code class='flag'>--java_langtools</code></a>
-  and the
-  <a href="#flag--javabuilder_top"><code class='flag'>--javabuilder_top</code></a>
-  options.
-</p>
-
-<h4 id='flag--javac_bootclasspath'><code class='flag'>--javac_bootclasspath <var>label</var></code></h4>
-<p>
-  This option specifies the label of the bootstrap classes that Java code
-  should be compiled against. This option should always be set together with
-  <a href="#flag--javac_extdir"><code class='flag'>--javac_extdir</code></a>
-  when cross-compiling to a different Java platform version.
-</p>
-
-<h4 id='flag--javac_extdir'><code class='flag'>--javac_extdir <var>label</var></code></h4>
-<p>
-  This option specifies the label of the extension classes that Java code
-  should be compiled against. This option should always be set together with
-  <a href="#flag--javac_bootclasspath"><code class='flag'>--javac_bootclasspath</code></a>
-  when cross-compiling to a different Java platform version.
+  <a href="#flag--java_toolchain"><code class='flag'>--java_toolchain</code></a>
+  option.
 </p>
 
 <h3 id='strategy-options'>Build strategy options</h3>
@@ -2287,17 +2250,17 @@ either to the terminal, or to additional log files.
   which drive a build.
 </p>
 
-<h4 id='flag--subcommands'><code class='flag'>--subcommands</code>  (-s)</h4>
+<h4 id='flag--subcommands'><code class='flag'>--subcommands</code> (<code>-s</code>)</h4>
 <p>
   This option causes Bazel's execution phase to print the full command line
   for each command prior to executing it.
 </p>
 
 <pre>
-  &gt;&gt;&gt;&gt;&gt; # //examples/cpp:hello-world [action 'Linking bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world']
-  (cd /var/tmp/_bazel_jrluser/4c084335afceb392cfbe7c31afee3a9f/base_workspace && \
+  &gt;&gt;&gt;&gt;&gt; # //examples/cpp:hello-world [action 'Linking examples/cpp/hello-world']
+  (cd /home/jrluser/.cache/bazel/_bazel_jrluser/4c084335afceb392cfbe7c31afee3a9f/bazel && \
     exec env - \
-    /usr/bin/gcc -o bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world bazel-out/local_linux-fastbuild/bin/examples/cpp/_objs/hello-world/examples/cpp/hello-world.pic.o bazel-out/local_linux-fastbuild/bin/examples/cpp/libhello-lib.a bazel-out/local_linux-fastbuild/bin/tools/cpp/libmalloc.a -lstdc++ -B/usr/bin -Wl,-S)
+    /usr/bin/gcc -o bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world -B/usr/bin/ -Wl,-z,relro,-z,now -no-canonical-prefixes -pass-exit-codes '-Wl,--build-id=md5' '-Wl,--hash-style=gnu' -Wl,-S -Wl,@bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world-2.params)
 </pre>
 <p>
   Where possible, commands are printed in a Bourne shell compatible syntax,
@@ -2456,7 +2419,7 @@ either to the terminal, or to additional log files.
 
 <h3>Options for <code>bazel test</code></h3>
 
-<h4 id="flag--cache_test_results"><code class='flag'>--cache_test_results=(yes|no|auto)</code> (-t)</h4>
+<h4 id="flag--cache_test_results"><code class='flag'>--cache_test_results=(yes|no|auto)</code> (<code>-t</code>)</h4>
 <p>
   If this option is set to 'auto' (the default) then Bazel will only rerun a test if any of the
   following conditions applies:
@@ -2678,9 +2641,9 @@ value, merely warns if Bazel thinks the timeout could be restricted further.
   order).
   In either form, zero or a negative value for any of the test sizes will
   be substituted by the default timeout for the given timeout categories as
-  defined by the
-  <a href="test-encyclopedia.html">Test Encyclopedia</a>.
-  By default, Bazel will use Test Encyclopedia timeouts for all tests by
+  defined by the page
+  <a href="test-encyclopedia.html">Writing Tests</a>.
+  By default, Bazel will use these timeouts for all tests by
   inferring the timeout limit from the test's size whether the size is
   implicitly or explicitly set.
 </p>
@@ -2826,12 +2789,11 @@ Examples:
 
 <p>
   <code>bazel run</code> can also execute test binaries, which has the effect of
-running the test, but without the setup documented in the
-<a href='test-encyclopedia.html'>Test Encyclopedia</a>, so that the test runs
+running the test, but without the setup documented on the page
+<a href='test-encyclopedia.html'>Writing Tests</a>, so that the test runs
 in an environment closer to the current shell environment. Note that none of the
 --test_* arguments have an effect when running a test in this manner.
 </p>
-
 
 <h2 id='query'>Querying the dependency graph with Bazel</h2>
 
@@ -2892,7 +2854,7 @@ in an environment closer to the current shell environment. Note that none of the
   that do not correspond to commands.
 </p>
 
-<h4 id='flag--long'><code class='flag'>--[no]long</code> (-l)</h4>
+<h4 id='flag--long'><code class='flag'>--[no]long</code> (<code>-l</code>)</h4>
 <p>
   By default, <code>bazel help [<var>topic</var>]</code> prints only a
   summary of the relevant options for a topic.  If
@@ -2966,8 +2928,7 @@ in an environment closer to the current shell environment. Note that none of the
     symlink named
 
     <code>bazel-&lt;workspace&gt;</code>
-    is placed there pointing to this
-    directory.
+    is placed there pointing to this directory.
   </li>
   <li><code>output_path</code>: the absolute path to the output
     directory beneath the execution root used for all files actually

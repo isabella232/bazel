@@ -1,11 +1,20 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 import os
 import re
+import tempfile
+import shutil
 import sys
+import subprocess
+import zipfile
 
+# Return True if running on Windows
+def IsWindows():
+  return os.name == 'nt'
 
 PYTHON_BINARY = '%python_binary%'
+if IsWindows() and not PYTHON_BINARY.endswith('.exe'):
+  PYTHON_BINARY = PYTHON_BINARY + '.exe'
 
 # Find a file in a given search path.
 def SearchPath(name):
@@ -16,6 +25,9 @@ def SearchPath(name):
     if os.path.isfile(path) and os.access(path, os.X_OK):
       return path
   return None
+
+def IsRunningFromZip():
+  return %is_zipfile%
 
 # Find the real Python binary if it's not a normal absolute path
 def FindPythonBinary():
@@ -37,11 +49,8 @@ def CreatePythonPathEntries(python_imports, module_space):
   parts = python_imports.split(':');
   return [module_space] + ["%s/%s" % (module_space, path) for path in parts]
 
-def Main():
-  args = sys.argv[1:]
-
-  new_env = {}
-
+# Find the runfiles tree
+def FindModuleSpace():
   # Follow symlinks, looking for my module space
   stub_filename = os.path.abspath(sys.argv[0])
   while True:
@@ -50,34 +59,50 @@ def Main():
     if os.path.isdir(module_space):
       break
 
-    # Follow a symlink, try again?
-    if os.path.islink(stub_filename):
-      link = os.readlink(stub_filename)
-      # Absolutize
-      stub_filename = os.path.join(os.path.dirname(stub_filename), link)
-      continue
-
-    matchobj = re.match("(.*\.runfiles)/.*", os.path.abspath(sys.argv[0]))
+    runfiles_pattern = "(.*\.runfiles)/.*"
+    if IsWindows():
+      runfiles_pattern = "(.*\.runfiles)\\.*"
+    matchobj = re.match(runfiles_pattern, os.path.abspath(sys.argv[0]))
     if matchobj:
       module_space = matchobj.group(1)
       break
 
     raise AssertionError('Cannot find .runfiles directory for %s' %
                          sys.argv[0])
+  return module_space
+
+# Create the runfiles tree by extracting the zip file
+def CreateModuleSpace():
+  ZIP_RUNFILES_DIRECTORY_NAME = "runfiles"
+  temp_dir = tempfile.mkdtemp("", "Bazel.runfiles_")
+  zf = zipfile.ZipFile(os.path.dirname(__file__))
+  zf.extractall(temp_dir)
+  return os.path.join(temp_dir, ZIP_RUNFILES_DIRECTORY_NAME)
+
+def Main():
+  args = sys.argv[1:]
+
+  new_env = {}
+
+  if IsRunningFromZip():
+    module_space = CreateModuleSpace()
+  else:
+    module_space = FindModuleSpace()
 
   python_imports = '%imports%'
   python_path_entries = CreatePythonPathEntries(python_imports, module_space)
 
-  external_dir = os.path.join(module_space, 'external')
-  if os.path.isdir(external_dir):
-    external_entries = [os.path.join(external_dir, d) for d in os.listdir(external_dir)]
-    repositories = [d for d in external_entries if os.path.isdir(d)]
-    python_path_entries += repositories
+  repo_dirs = [os.path.join(module_space, d) for d in os.listdir(module_space)]
+  repositories = [d for d in repo_dirs if os.path.isdir(d)]
+  python_path_entries += repositories
 
   old_python_path = os.environ.get('PYTHONPATH')
-  python_path = ':'.join(python_path_entries)
+  separator = ':'
+  if IsWindows():
+    separator = ';'
+  python_path = separator.join(python_path_entries)
   if old_python_path:
-    python_path += ':' + old_python_path
+    python_path += separator + old_python_path
 
   new_env['PYTHONPATH'] = python_path
 
@@ -99,7 +124,12 @@ def Main():
 
   try:
     sys.stdout.flush()
-    os.execv(program, args)
+    if IsRunningFromZip():
+      retCode = subprocess.call(args)
+      shutil.rmtree(os.path.dirname(module_space), True)
+      exit(retCode)
+    else:
+      os.execv(args[0], args)
   except EnvironmentError as e:
     # This exception occurs when os.execv() fails for some reason.
     if not getattr(e, 'filename', None):

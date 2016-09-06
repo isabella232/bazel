@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.bazel.repository;
 
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.bazel.repository.downloader.HttpDownloader;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
@@ -38,11 +39,11 @@ public class NewHttpArchiveFunction extends HttpArchiveFunction {
 
   @Nullable
   @Override
-  public SkyValue fetch(Rule rule, Path outputDirectory, Environment env)
-      throws RepositoryFunctionException, InterruptedException {
-
+  public SkyValue fetch(
+      Rule rule, Path outputDirectory, BlazeDirectories directories, Environment env)
+          throws RepositoryFunctionException, InterruptedException {
     NewRepositoryBuildFileHandler buildFileHandler =
-        new NewRepositoryBuildFileHandler(getWorkspace());
+        new NewRepositoryBuildFileHandler(directories.getWorkspace());
     if (!buildFileHandler.prepareBuildFile(rule, env)) {
       return null;
     }
@@ -55,7 +56,8 @@ public class NewHttpArchiveFunction extends HttpArchiveFunction {
     }
 
     // Download.
-    Path downloadedPath = HttpDownloader.download(rule, outputDirectory, env.getListener());
+    Path downloadedPath = HttpDownloader.download(
+        rule, outputDirectory, env.getListener(), clientEnvironment);
 
     // Decompress.
     Path decompressed;
@@ -74,7 +76,7 @@ public class NewHttpArchiveFunction extends HttpArchiveFunction {
         .build());
 
     // Finally, write WORKSPACE and BUILD files.
-    createWorkspaceFile(decompressed, rule);
+    createWorkspaceFile(decompressed, rule.getTargetKind(), rule.getName());
     buildFileHandler.finishBuildFile(outputDirectory);
 
     return RepositoryDirectoryValue.create(outputDirectory);

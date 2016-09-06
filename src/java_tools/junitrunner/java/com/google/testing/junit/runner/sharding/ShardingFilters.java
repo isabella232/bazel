@@ -14,13 +14,14 @@
 
 package com.google.testing.junit.runner.sharding;
 
-import com.google.inject.Inject;
 import com.google.testing.junit.runner.sharding.api.ShardingFilterFactory;
 
 import org.junit.runner.Description;
 import org.junit.runner.manipulation.Filter;
 
 import java.util.Collection;
+
+import javax.inject.Inject;
 
 /**
  * A factory for test sharding filters.
@@ -54,7 +55,7 @@ public class ShardingFilters {
       }
     }
   }
-  
+
   public static final ShardingFilterFactory DEFAULT_SHARDING_STRATEGY =
       ShardingStrategy.ROUND_ROBIN;
   private final ShardingEnvironment shardingEnvironment;
@@ -99,14 +100,15 @@ public class ShardingFilters {
       shardingFilterFactory = ShardingStrategy.valueOf(strategy.toUpperCase());
     } catch (IllegalArgumentException e) {
       try {
-        Class<?> strategyClass = Thread.currentThread().getContextClassLoader().loadClass(strategy);
-        shardingFilterFactory = (ShardingFilterFactory) strategyClass.newInstance();
-      } catch (ClassNotFoundException | InstantiationException |
-          IllegalAccessException | IllegalArgumentException e2) {
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        Class<? extends ShardingFilterFactory> strategyClass =
+            classLoader.loadClass(strategy).asSubclass(ShardingFilterFactory.class);
+        shardingFilterFactory = strategyClass.getConstructor().newInstance();
+      } catch (ReflectiveOperationException | IllegalArgumentException e2) {
         throw new RuntimeException(
-            "Could not create custom sharding strategy class " + strategy, e2);  
+            "Could not create custom sharding strategy class " + strategy, e2);
       }
     }
-    return shardingFilterFactory; 
+    return shardingFilterFactory;
   }
 }

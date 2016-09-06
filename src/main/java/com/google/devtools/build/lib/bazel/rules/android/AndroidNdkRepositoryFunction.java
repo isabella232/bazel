@@ -13,7 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.bazel.rules.android;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools.AndroidNdkCrosstools;
 import com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools.AndroidNdkCrosstools.NdkCrosstoolsException;
@@ -22,6 +25,7 @@ import com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools.NdkPaths;
 import com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools.NdkRelease;
 import com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools.StlImpl;
 import com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools.StlImpls;
+import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
@@ -38,13 +42,11 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CToolchain;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CrosstoolRelease;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.DefaultCpuToolchain;
+import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.ToolPath;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
-import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -74,10 +76,11 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
   }
 
   @Override
-  public SkyValue fetch(Rule rule, Path outputDirectory, Environment env)
-      throws SkyFunctionException {
+  public SkyValue fetch(
+      Rule rule, Path outputDirectory, BlazeDirectories directories, Environment env)
+      throws InterruptedException, RepositoryFunctionException {
     prepareLocalRepositorySymlinkTree(rule, outputDirectory);
-    PathFragment pathFragment = getTargetPath(rule, getWorkspace());
+    PathFragment pathFragment = getTargetPath(rule, directories.getWorkspace());
     Path ndkSymlinkTreeDirectory = outputDirectory.getRelative("ndk");
     try {
       ndkSymlinkTreeDirectory.createDirectory();
@@ -85,21 +88,37 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
       throw new RepositoryFunctionException(e, Transience.TRANSIENT);
     }
 
-    if (!symlinkLocalRepositoryContents(
-        ndkSymlinkTreeDirectory, getOutputBase().getFileSystem().getPath(pathFragment))) {
+    if (!symlinkLocalRepositoryContents(ndkSymlinkTreeDirectory,
+        directories.getOutputBase().getFileSystem().getPath(pathFragment))) {
       return null;
     }
 
     AttributeMap attributes = NonconfigurableAttributeMapper.of(rule);
     String ruleName = rule.getName();
     String apiLevelAttr = attributes.get("api_level", Type.INTEGER).toString();
-    ApiLevel apiLevel = new ApiLevel(env.getListener(), ruleName, apiLevelAttr);
 
     NdkRelease ndkRelease = getNdkRelease(outputDirectory, env);
     if (env.valuesMissing()) {
       return null;
     }
+    
+    ApiLevel apiLevel = ApiLevel.getApiLevel(ndkRelease, env.getListener(), ruleName, apiLevelAttr);
 
+    if (!ndkRelease.isValid) {
+      env.getListener().handle(Event.warn(String.format(
+          "The revision of the Android NDK given in android_ndk_repository rule '%s' could not be "
+          + "determined (the revision string found is '%s'). "
+          + "Defaulting to Android NDK revision %s", ruleName, ndkRelease.rawRelease,
+          AndroidNdkCrosstools.LATEST_KNOWN_REVISION)));
+    }
+
+    if (!AndroidNdkCrosstools.isKnownNDKRevision(ndkRelease)) {
+      env.getListener().handle(Event.warn(String.format(
+          "Bazel Android NDK crosstools are based on Android NDK revision %s. "
+          + "The revision of the Android NDK given in android_ndk_repository rule '%s' is '%s'",
+          AndroidNdkCrosstools.LATEST_KNOWN_REVISION, ruleName, ndkRelease.rawRelease)));
+    }
+    
     ImmutableList.Builder<CrosstoolStlPair> crosstoolsAndStls = ImmutableList.builder();
     try {
 
@@ -109,11 +128,8 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
       for (StlImpl stlImpl : StlImpls.get(ndkPaths)) {
 
         CrosstoolRelease crosstoolRelease = AndroidNdkCrosstools.create(
-            env.getListener(),
-            ndkPaths,
-            ruleName,
-            apiLevel,
             ndkRelease,
+            ndkPaths,
             stlImpl,
             hostPlatform);
 
@@ -150,9 +166,11 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
       CrosstoolRelease crosstool = crosstoolStlPair.crosstoolRelease;
 
       StringBuilder toolchainMap = new StringBuilder();
-      for (DefaultCpuToolchain defaultToolchain : crosstool.getDefaultToolchainList()) {
-        toolchainMap.append(String.format("      \"%s\": \":%s\",\n",
-            defaultToolchain.getCpu(), defaultToolchain.getToolchainIdentifier()));
+      for (CToolchain toolchain : crosstool.getToolchainList()) {
+        toolchainMap.append(String.format("      \"%s|%s\": \":%s\",\n",
+            toolchain.getTargetCpu(),
+            toolchain.getCompiler(),
+            toolchain.getToolchainIdentifier()));
       }
 
       String toolchainName = createToolchainName(crosstoolStlPair.stlImpl.getName());
@@ -198,9 +216,17 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
     // go away, but globbing the entire NDK takes ~60 seconds, mostly because of MD5ing all the
     // binary files in the NDK (eg the .so / .a / .o files).
 
-    // This also includes the files captured with cxx_builtin_include_directory
-    String toolchainDirectory = NdkPaths.getToolchainDirectoryFromToolPath(
-        toolchain.getToolPathList().get(0).getPath());
+    // This also includes the files captured with cxx_builtin_include_directory.
+    // Use gcc specifically because clang toolchains will have both gcc and llvm toolchain paths,
+    // but the gcc tool will actually be clang.
+    ToolPath gcc = null;
+    for (ToolPath toolPath : toolchain.getToolPathList()) {
+      if ("gcc".equals(toolPath.getName())) {
+        gcc = toolPath;
+      }
+    }
+    checkNotNull(gcc, "gcc not found in crosstool toolpaths");
+    String toolchainDirectory = NdkPaths.getToolchainDirectoryFromToolPath(gcc.getPath());
 
     // Create file glob patterns for the various files that the toolchain references.
 
@@ -214,6 +240,13 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
       if (!cxxFlag.startsWith("-")) { // Skip flag names
         toolchainFileGlobPatterns.add(NdkPaths.stripRepositoryPrefix(cxxFlag) + "/**/*");
       }
+    }
+
+    // If this is a clang toolchain, also add the corresponding gcc toolchain to the globs.
+    int gccToolchainIndex = toolchain.getCompilerFlagList().indexOf("-gcc-toolchain");
+    if (gccToolchainIndex > -1) {
+      String gccToolchain = toolchain.getCompilerFlagList().get(gccToolchainIndex + 1);
+      toolchainFileGlobPatterns.add(NdkPaths.stripRepositoryPrefix(gccToolchain) + "/**/*");
     }
 
     StringBuilder toolchainFileGlobs = new StringBuilder();
@@ -232,13 +265,18 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
   }
 
   private static NdkRelease getNdkRelease(Path directory, Environment env)
-      throws RepositoryFunctionException {
+      throws RepositoryFunctionException, InterruptedException {
 
-    Path releaseFilePath = directory.getRelative("ndk/RELEASE.TXT");
+    // For NDK r11+
+    Path releaseFilePath = directory.getRelative("ndk/source.properties");
+    if (!releaseFilePath.exists()) {
+      // For NDK r10e
+      releaseFilePath = directory.getRelative("ndk/RELEASE.TXT");
+    }
     
-    SkyKey releaseFileKey = FileValue.key(RootedPath.toRootedPath(
-        releaseFilePath, PathFragment.EMPTY_FRAGMENT));
-
+    SkyKey releaseFileKey = FileValue.key(
+        RootedPath.toRootedPath(directory, releaseFilePath));
+    
     String releaseFileContent;
     try {
       env.getValueOrThrow(releaseFileKey,
@@ -249,8 +287,8 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
       releaseFileContent = new String(FileSystemUtils.readContent(releaseFilePath));
     } catch (IOException | FileSymlinkException | InconsistentFilesystemException e) {
       throw new RepositoryFunctionException(
-          new IOException("Could not read RELEASE.TXT in Android NDK: " + e.getMessage()),
-              Transience.PERSISTENT);
+          new IOException("Could not read " + releaseFilePath.getBaseName() + " in Android NDK: "
+              + e.getMessage()), Transience.PERSISTENT);
     }
 
     return NdkRelease.create(releaseFileContent.trim());

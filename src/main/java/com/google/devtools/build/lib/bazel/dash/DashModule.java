@@ -45,6 +45,9 @@ import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.params.BasicHttpParams;
+import org.apache.http.params.HttpConnectionParams;
+import org.apache.http.params.HttpParams;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -64,17 +67,19 @@ import java.util.concurrent.ThreadFactory;
  */
 public class DashModule extends BlazeModule {
   private static final int ONE_MB = 1024 * 1024;
+  private static final NoOpSender NO_OP_SENDER = new NoOpSender();
 
   private static final String DASH_SECRET_HEADER = "bazel-dash-secret";
 
+  private final ExecutorService executorService;
+
   private Sendable sender;
   private CommandEnvironment env;
-  private final ExecutorService executorService;
   private BuildData optionsBuildData;
 
   public DashModule() {
     // Make sure sender != null before we hop on the event bus.
-    sender = new NoOpSender();
+    sender = NO_OP_SENDER;
     executorService = Executors.newFixedThreadPool(5,
         new ThreadFactory() {
           @Override
@@ -93,8 +98,15 @@ public class DashModule extends BlazeModule {
   }
 
   @Override
+  public void afterCommand() {
+    this.sender = NO_OP_SENDER;
+    this.env = null;
+    this.optionsBuildData = null;
+  }
+
+  @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
-    return (command.name().equals("build") || command.name().equals("test"))
+    return "build".equals(command.name())
         ? ImmutableList.<Class<? extends OptionsBase>>of(DashOptions.class)
         : ImmutableList.<Class<? extends OptionsBase>>of();
   }
@@ -104,11 +116,11 @@ public class DashModule extends BlazeModule {
     DashOptions options = optionsProvider.getOptions(DashOptions.class);
     try {
       sender = (options == null || !options.useDash)
-          ? new NoOpSender()
+          ? NO_OP_SENDER
           : new Sender(options.url, options.secret, env, executorService);
     } catch (SenderException e) {
       env.getReporter().handle(e.toEvent());
-      sender = new NoOpSender();
+      sender = NO_OP_SENDER;
     }
     if (optionsBuildData != null) {
       sender.send("options", optionsBuildData);
@@ -308,7 +320,11 @@ public class DashModule extends BlazeModule {
 
     private void sendMessage(final String suffix, final HttpEntity message)
         throws SenderException {
-      HttpClient httpClient = new DefaultHttpClient();
+      HttpParams httpParams = new BasicHttpParams();
+      HttpConnectionParams.setConnectionTimeout(httpParams, 5000);
+      HttpConnectionParams.setSoTimeout(httpParams, 5000);
+      HttpClient httpClient = new DefaultHttpClient(httpParams);
+
       HttpPost httppost = new HttpPost(url + "/" + suffix + "/" + buildId);
       if (message != null) {
         httppost.setHeader(HttpHeaders.CONTENT_TYPE, "application/x-protobuf");
@@ -353,5 +369,4 @@ public class DashModule extends BlazeModule {
     public void send(String suffix, BuildData message) {
     }
   }
-
 }

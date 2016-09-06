@@ -37,40 +37,38 @@ import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.FailAction;
 import com.google.devtools.build.lib.analysis.BuildView.AnalysisResult;
+import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestBase;
+import com.google.devtools.build.lib.analysis.util.ExpectedDynamicConfigurationErrors;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.packages.Aspect;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.pkgcache.LoadingFailedException;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
+import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.lib.testutil.Suite;
-import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestSpec;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.DeterministicInMemoryGraph;
-import com.google.devtools.build.skyframe.NotifyingInMemoryGraph;
-import com.google.devtools.build.skyframe.NotifyingInMemoryGraph.EventType;
-import com.google.devtools.build.skyframe.NotifyingInMemoryGraph.Listener;
-import com.google.devtools.build.skyframe.NotifyingInMemoryGraph.Order;
+import com.google.devtools.build.skyframe.NotifyingHelper.EventType;
+import com.google.devtools.build.skyframe.NotifyingHelper.Listener;
+import com.google.devtools.build.skyframe.NotifyingHelper.Order;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.TrackingAwaiter;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests for the {@link BuildView}.
@@ -154,8 +152,11 @@ public class BuildViewTest extends BuildViewTestBase {
     OutputFileConfiguredTarget outputCT = (OutputFileConfiguredTarget)
         getConfiguredTarget("//pkg:a.out");
     Artifact outputArtifact = outputCT.getArtifact();
-    assertEquals(getTargetConfiguration().getBinDirectory(), outputArtifact.getRoot());
-    assertEquals(getTargetConfiguration().getBinFragment().getRelative("pkg/a.out"),
+    assertEquals(
+        outputCT.getConfiguration().getBinDirectory(
+            outputCT.getTarget().getLabel().getPackageIdentifier().getRepository()),
+        outputArtifact.getRoot());
+    assertEquals(outputCT.getConfiguration().getBinFragment().getRelative("pkg/a.out"),
         outputArtifact.getExecPath());
     assertEquals(new PathFragment("pkg/a.out"), outputArtifact.getRootRelativePath());
 
@@ -344,12 +345,12 @@ public class BuildViewTest extends BuildViewTestBase {
           Dependency.withTransitionAndAspects(
               Label.parseAbsolute("//package:inner"),
               Attribute.ConfigurationTransition.NONE,
-              ImmutableSet.<Aspect>of());
+              ImmutableSet.<AspectDescriptor>of());
       fileDependency =
           Dependency.withTransitionAndAspects(
               Label.parseAbsolute("//package:file"),
-              Attribute.ConfigurationTransition.NONE,
-              ImmutableSet.<Aspect>of());
+              Attribute.ConfigurationTransition.NULL,
+              ImmutableSet.<AspectDescriptor>of());
     } else {
       innerDependency =
           Dependency.withConfiguration(
@@ -480,7 +481,15 @@ public class BuildViewTest extends BuildViewTestBase {
     assertContainsEvent("and referenced by '//foo:bad'");
     assertContainsEvent("in sh_library rule //foo");
     assertContainsEvent("cycle in dependency graph");
-    assertEventCount(3, eventCollector);
+    // Dynamic configurations trigger this error both in configuration trimming (which visits
+    // the transitive target closure) and in the normal configured target cycle detection path.
+    // So we get an additional instance of this check (which varies depending on whether Skyframe
+    // loading phase is enabled).
+    // TODO(gregce): refactor away this variation. Note that the duplicate doesn't make it into
+    // real user output (it only affects tests).
+    if (!getTargetConfiguration().useDynamicConfigurations()) {
+      assertEventCount(3, eventCollector);
+    }
   }
 
   @Test
@@ -827,8 +836,7 @@ public class BuildViewTest extends BuildViewTestBase {
             }
           }
         };
-    NotifyingInMemoryGraph graph = new DeterministicInMemoryGraph(listener);
-    setGraphForTesting(graph);
+    injectGraphListenerForTesting(listener, /*deterministic=*/ true);
     reporter.removeHandler(failFastHandler);
     try {
       update("//foo:query", "//foo:zquery");
@@ -838,7 +846,6 @@ public class BuildViewTest extends BuildViewTestBase {
           .contains("Analysis of target '//foo:query' failed; build aborted");
     }
     TrackingAwaiter.INSTANCE.assertNoErrors();
-    graph.assertNoExceptions();
   }
 
   /**
@@ -865,11 +872,20 @@ public class BuildViewTest extends BuildViewTestBase {
 
   @Test
   public void testCycleDueToJavaLauncherConfiguration() throws Exception {
+    if (defaultFlags().contains(Flag.DYNAMIC_CONFIGURATIONS)) {
+      // Dynamic configurations don't yet support late-bound attributes. Development testing already
+      // runs all tests with dynamic configurations enabled, so this will still fail for developers
+      // and won't get lost in the fog.
+      return;
+    }
     scratch.file("foo/BUILD",
         "java_binary(name = 'java', srcs = ['DoesntMatter.java'])",
         "cc_binary(name = 'cpp', data = [':java'])");
     // Everything is fine - the dependency graph is acyclic.
     update("//foo:java", "//foo:cpp");
+    if (getTargetConfiguration().useDynamicConfigurations()) {
+      fail(ExpectedDynamicConfigurationErrors.LATE_BOUND_ATTRIBUTES_UNSUPPORTED);
+    }
     // Now there will be an analysis-phase cycle because the java_binary now has an implicit dep on
     // the cc_binary launcher.
     useConfiguration("--java_launcher=//foo:cpp");
@@ -882,7 +898,6 @@ public class BuildViewTest extends BuildViewTestBase {
           .matches("Analysis of target '//foo:(java|cpp)' failed; build aborted.*");
     }
     assertContainsEvent("cycle in dependency graph");
-    assertContainsEvent("This cycle occurred because of a configuration option");
   }
 
   @Test
@@ -953,12 +968,12 @@ public class BuildViewTest extends BuildViewTestBase {
     update(eventBus, defaultFlags().with(Flag.KEEP_GOING),
         "//cycle:foo", "//cycle:bat", "//cycle:baz");
     assertContainsEvent("in cc_library rule //cycle:foo: cycle in dependency graph:");
-    assertContainsEvent(
-        "errors encountered while analyzing target '//cycle:foo': it will not be built");
     assertContainsEvent("in cc_library rule //cycle:bas: cycle in dependency graph:");
-    assertContainsEvent(
-        "errors encountered while analyzing target '//cycle:bat': it will not be built");
     if (defaultFlags().contains(Flag.SKYFRAME_LOADING_PHASE)) {
+      assertContainsEvent(
+          "errors encountered while analyzing target '//cycle:foo': it will not be built");
+      assertContainsEvent(
+          "errors encountered while analyzing target '//cycle:bat': it will not be built");
       // With interleaved loading and analysis, we can no longer distinguish loading-phase cycles
       // and analysis-phase cycles. This was previously reported as a loading-phase cycle, as it
       // happens with any configuration (cycle is hard-coded in the BUILD files). Also see the
@@ -967,6 +982,9 @@ public class BuildViewTest extends BuildViewTestBase {
           .containsExactly(
               Pair.of("//cycle:foo", "//cycle:foo"), Pair.of("//cycle:bat", "//cycle:bas"));
     } else {
+      assertContainsEvent("errors encountered while loading target '//cycle:foo'");
+      assertContainsEvent("errors encountered while loading target '//cycle:bat'");
+
       assertThat(Iterables.transform(loadingFailureRecorder.events,
           new Function<Pair<Label, Label>, Pair<String, String>>() {
             @Override
@@ -1010,7 +1028,7 @@ public class BuildViewTest extends BuildViewTestBase {
     AnalysisResult result = update(defaultFlags().with(Flag.KEEP_GOING), "//a", "//b");
     assertThat(result.hasError()).isTrue();
     assertThat(result.getError())
-        .contains("execution phase succeeded, but there were loading phase errors");
+        .contains("command succeeded, but there were loading phase errors");
   }
 
   @Test
@@ -1042,8 +1060,7 @@ public class BuildViewTest extends BuildViewTestBase {
       update(defaultFlags().with(Flag.KEEP_GOING));
       fail();
     } catch (LoadingFailedException | InvalidConfigurationException e) {
-      assertContainsEvent(
-          "no such package 'third_party/crosstool/v2': BUILD file not found on package path");
+      assertThat(e.getMessage()).contains("third_party/crosstool/v2");
     }
   }
 
@@ -1069,22 +1086,14 @@ public class BuildViewTest extends BuildViewTestBase {
         "filegroup(name = 'jdk', srcs = [",
         "    '//does/not/exist:a-piii', '//does/not/exist:b-k8', '//does/not/exist:c-default'])");
     scratch.file("does/not/exist/BUILD");
-    useConfigurationFactory(AnalysisMock.get().createFullConfigurationFactory());
+    useConfigurationFactory(AnalysisMock.get().createConfigurationFactory());
     useConfiguration("--javabase=//jdk");
     reporter.removeHandler(failFastHandler);
     try {
       update(defaultFlags().with(Flag.KEEP_GOING));
       fail();
     } catch (LoadingFailedException | InvalidConfigurationException e) {
-      if (TestConstants.THIS_IS_BAZEL) {
-        // TODO(ulfjack): Bazel ignores the --cpu setting and just uses "default" instead. This
-        // means all cross-platform Java builds are broken for checked-in JDKs.
-        assertContainsEvent(
-            "no such target '//does/not/exist:c-default': target 'c-default' not declared in");
-      } else {
-        assertContainsEvent(
-            "no such target '//does/not/exist:b-k8': target 'b-k8' not declared in package");
-      }
+      // Expected
     }
   }
 
@@ -1100,8 +1109,7 @@ public class BuildViewTest extends BuildViewTestBase {
       update(defaultFlags().with(Flag.KEEP_GOING));
       fail();
     } catch (LoadingFailedException | InvalidConfigurationException e) {
-      assertContainsEvent(
-          "no such target '//xcode:does_not_exist': target 'does_not_exist' not declared");
+      assertThat(e.getMessage()).contains("//xcode:does_not_exist");
     }
   }
 
@@ -1138,6 +1146,143 @@ public class BuildViewTest extends BuildViewTestBase {
     }
   }
 
+  @Test
+  public void testNonTopLevelErrorsPrintedExactlyOnce() throws Exception {
+    scratch.file("parent/BUILD",
+        "sh_library(name = 'a', deps = ['//child:b'])");
+    scratch.file("child/BUILD",
+        "sh_library(name = 'b')",
+        "undefined_symbol");
+    reporter.removeHandler(failFastHandler);
+    try {
+      update("//parent:a");
+      fail();
+    } catch (LoadingFailedException | ViewCreationFailedException expected) {
+    }
+    assertContainsEventWithFrequency("name 'undefined_symbol' is not defined", 1);
+    assertContainsEventWithFrequency(
+        "Target '//child:b' contains an error and its package is in error and referenced "
+        + "by '//parent:a'", 1);
+  }
+
+  @Test
+  public void testNonTopLevelErrorsPrintedExactlyOnce_KeepGoing() throws Exception {
+    scratch.file("parent/BUILD",
+        "sh_library(name = 'a', deps = ['//child:b'])");
+    scratch.file("child/BUILD",
+        "sh_library(name = 'b')",
+        "undefined_symbol");
+    reporter.removeHandler(failFastHandler);
+    update(defaultFlags().with(Flag.KEEP_GOING), "//parent:a");
+    assertContainsEventWithFrequency("name 'undefined_symbol' is not defined", 1);
+    assertContainsEventWithFrequency(
+        "Target '//child:b' contains an error and its package is in error and referenced "
+        + "by '//parent:a'", 1);
+  }
+
+  @Test
+  public void testNonTopLevelErrorsPrintedExactlyOnce_ActionListener() throws Exception {
+    scratch.file("parent/BUILD",
+        "sh_library(name = 'a', deps = ['//child:b'])");
+    scratch.file("child/BUILD",
+        "sh_library(name = 'b')",
+        "undefined_symbol");
+    scratch.file("okay/BUILD",
+        "sh_binary(name = 'okay', srcs = ['okay.sh'])");
+    useConfiguration("--experimental_action_listener=//parent:a");
+    reporter.removeHandler(failFastHandler);
+    try {
+      update("//okay");
+      fail();
+    } catch (LoadingFailedException | ViewCreationFailedException e) {
+    }
+    assertContainsEventWithFrequency("name 'undefined_symbol' is not defined", 1);
+    assertContainsEventWithFrequency(
+        "Target '//child:b' contains an error and its package is in error and referenced "
+        + "by '//parent:a'", 1);
+  }
+
+  @Test
+  public void testNonTopLevelErrorsPrintedExactlyOnce_ActionListener_KeepGoing() throws Exception {
+    scratch.file("parent/BUILD",
+        "sh_library(name = 'a', deps = ['//child:b'])");
+    scratch.file("child/BUILD",
+        "sh_library(name = 'b')",
+        "undefined_symbol");
+    scratch.file("okay/BUILD",
+        "sh_binary(name = 'okay', srcs = ['okay.sh'])");
+    useConfiguration("--experimental_action_listener=//parent:a");
+    reporter.removeHandler(failFastHandler);
+    try {
+      update(defaultFlags().with(Flag.KEEP_GOING), "//okay");
+    } catch (LoadingFailedException ignored) {
+      // In the legacy case, we get a loading exception even with keep going. Why?
+    }
+    assertContainsEventWithFrequency("name 'undefined_symbol' is not defined", 1);
+    assertContainsEventWithFrequency(
+        "Target '//child:b' contains an error and its package is in error and referenced "
+        + "by '//parent:a'", 1);
+  }
+
+  @Test
+  public void testTopLevelTargetsAreTrimmedWithDynamicConfigurations() throws Exception {
+    scratch.file("foo/BUILD",
+        "sh_library(name='x', ",
+        "        srcs=['x.sh'])");
+    useConfiguration("--experimental_dynamic_configs");
+    AnalysisResult res = update("//foo:x");
+    ConfiguredTarget topLevelTarget = Iterables.getOnlyElement(res.getTargetsToBuild());
+    assertThat(topLevelTarget.getConfiguration().getAllFragments().keySet()).containsExactly(
+        ruleClassProvider.getUniversalFragment());
+  }
+
+  @Test
+  public void errorOnMissingDepFragments() throws Exception {
+    scratch.file("foo/BUILD",
+        "cc_library(",
+        "    name = 'ccbin', ",
+        "    srcs = ['c.cc'],",
+        "    data = [':javalib'])",
+        "java_library(",
+        "    name = 'javalib',",
+        "    srcs = ['javalib.java'])");
+    useConfiguration("--experimental_dynamic_configs", "--experimental_disable_jvm");
+    reporter.removeHandler(failFastHandler);
+    try {
+      update("//foo:ccbin");
+      fail();
+    } catch (ViewCreationFailedException e) {
+      // Expected.
+    }
+    assertContainsEvent("//foo:ccbin: dependency //foo:javalib from attribute \"data\" is missing "
+        + "required config fragments: Jvm");
+  }
+
+  @Test
+  public void lateBoundSplitAttributeConfigs() throws Exception {
+    useRuleClassProvider(LateBoundSplitUtil.getRuleClassProvider());
+    // Register the latebound split fragment with the config creation environment.
+    useConfigurationFactory(new ConfigurationFactory(
+        ruleClassProvider.getConfigurationCollectionFactory(),
+        ruleClassProvider.getConfigurationFragments()));
+
+    scratch.file("foo/BUILD",
+        "rule_with_latebound_split(",
+        "    name = 'foo')",
+        "rule_with_test_fragment(",
+        "    name = 'latebound_dep')");
+    update("//foo:foo");
+    assertNotNull(getConfiguredTarget("//foo:foo"));
+    Iterable<ConfiguredTarget> deps = SkyframeExecutorTestUtils.getExistingConfiguredTargets(
+        skyframeExecutor, Label.parseAbsolute("//foo:latebound_dep"));
+    assertThat(deps).hasSize(2);
+    assertThat(
+        ImmutableList.of(
+            LateBoundSplitUtil.getOptions(Iterables.get(deps, 0).getConfiguration()).fooFlag,
+            LateBoundSplitUtil.getOptions(Iterables.get(deps, 1).getConfiguration()).fooFlag))
+        .containsExactly("one", "two");
+  }
+
   /** Runs the same test with the reduced loading phase. */
   @TestSpec(size = Suite.SMALL_TESTS)
   @RunWith(JUnit4.class)
@@ -1145,6 +1290,16 @@ public class BuildViewTest extends BuildViewTestBase {
     @Override
     protected FlagBuilder defaultFlags() {
       return super.defaultFlags().with(Flag.SKYFRAME_LOADING_PHASE);
+    }
+  }
+
+  /** Runs the same test with dynamic configurations. */
+  @TestSpec(size = Suite.SMALL_TESTS)
+  @RunWith(JUnit4.class)
+  public static class WithDynamicConfigurations extends BuildViewTest {
+    @Override
+    protected FlagBuilder defaultFlags() {
+      return super.defaultFlags().with(Flag.DYNAMIC_CONFIGURATIONS);
     }
   }
 }

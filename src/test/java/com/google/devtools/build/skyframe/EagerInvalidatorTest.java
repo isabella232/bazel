@@ -39,7 +39,7 @@ import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DirtyingInvali
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DirtyingNodeVisitor;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.InvalidationState;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.InvalidationType;
-
+import com.google.devtools.build.skyframe.QueryableGraph.Reason;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -63,7 +63,7 @@ import javax.annotation.Nullable;
  */
 @RunWith(Enclosed.class)
 public class EagerInvalidatorTest {
-  protected InMemoryGraph graph;
+  protected InMemoryGraphImpl graph;
   protected GraphTester tester = new GraphTester();
   protected InvalidationState state = newInvalidationState();
   protected AtomicReference<InvalidatingNodeVisitor<?>> visitor = new AtomicReference<>();
@@ -84,13 +84,16 @@ public class EagerInvalidatorTest {
   }
 
   @SuppressWarnings("unused") // Overridden by subclasses.
-  void invalidate(DirtiableGraph graph, EvaluationProgressReceiver invalidationReceiver,
-      SkyKey... keys) throws InterruptedException { throw new UnsupportedOperationException(); }
+  void invalidate(
+      InMemoryGraph graph, EvaluationProgressReceiver invalidationReceiver, SkyKey... keys)
+      throws InterruptedException {
+    throw new UnsupportedOperationException();
+  }
 
   boolean gcExpected() { throw new UnsupportedOperationException(); }
 
   private boolean isInvalidated(SkyKey key) {
-    NodeEntry entry = graph.get(key);
+    NodeEntry entry = graph.get(null, Reason.OTHER, key);
     if (gcExpected()) {
       return entry == null;
     } else {
@@ -99,7 +102,7 @@ public class EagerInvalidatorTest {
   }
 
   private void assertChanged(SkyKey key) {
-    NodeEntry entry = graph.get(key);
+    NodeEntry entry = graph.get(null, Reason.OTHER, key);
     if (gcExpected()) {
       assertNull(entry);
     } else {
@@ -108,7 +111,7 @@ public class EagerInvalidatorTest {
   }
 
   private void assertDirtyAndNotChanged(SkyKey key) {
-    NodeEntry entry = graph.get(key);
+    NodeEntry entry = graph.get(null, Reason.OTHER, key);
     if (gcExpected()) {
       assertNull(entry);
     } else {
@@ -211,7 +214,7 @@ public class EagerInvalidatorTest {
         throw new UnsupportedOperationException();
       }
     };
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     set("a", "a");
     set("b", "b");
     tester.getOrCreate("ab").addDependency("a").addDependency("b")
@@ -256,7 +259,7 @@ public class EagerInvalidatorTest {
 
     // Given a graph consisting of two nodes, "a" and "ab" such that "ab" depends on "a",
     // And given "ab" is in error,
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     set("a", "a");
     tester.getOrCreate("ab").addDependency("a").setHasError(true);
     eval(false, skyKey("ab"));
@@ -297,7 +300,7 @@ public class EagerInvalidatorTest {
         throw new UnsupportedOperationException();
       }
     };
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     invalidateWithoutError(receiver, skyKey("a"));
     assertThat(invalidated).isEmpty();
     set("a", "a");
@@ -313,7 +316,7 @@ public class EagerInvalidatorTest {
     WeakReference<HeavyValue> weakRef = new WeakReference<>(heavyValue);
     tester.set("a", heavyValue);
 
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     eval(false, key);
     invalidate(graph, null, key);
 
@@ -331,7 +334,7 @@ public class EagerInvalidatorTest {
 
   @Test
   public void reverseDepsConsistent() throws Exception {
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     set("a", "a");
     set("b", "b");
     set("c", "c");
@@ -341,10 +344,12 @@ public class EagerInvalidatorTest {
         .setComputedValue(CONCATENATE);
     eval(false, skyKey("ab_c"), skyKey("bc"));
 
-    assertThat(graph.get(skyKey("a")).getReverseDeps()).containsExactly(skyKey("ab"));
-    assertThat(graph.get(skyKey("b")).getReverseDeps()).containsExactly(skyKey("ab"), skyKey("bc"));
-    assertThat(graph.get(skyKey("c")).getReverseDeps()).containsExactly(skyKey("ab_c"),
-        skyKey("bc"));
+    assertThat(graph.get(null, Reason.OTHER, skyKey("a"))
+        .getReverseDeps()).containsExactly(skyKey("ab"));
+    assertThat(graph.get(null, Reason.OTHER, skyKey("b"))
+        .getReverseDeps()).containsExactly(skyKey("ab"), skyKey("bc"));
+    assertThat(graph.get(null, Reason.OTHER, skyKey("c"))
+        .getReverseDeps()).containsExactly(skyKey("ab_c"), skyKey("bc"));
 
     invalidateWithoutError(null, skyKey("ab"));
     eval(false);
@@ -358,20 +363,23 @@ public class EagerInvalidatorTest {
     if (reverseDepsPresent()) {
       reverseDeps.add(skyKey("ab"));
     }
-    assertThat(graph.get(skyKey("a")).getReverseDeps()).containsExactlyElementsIn(reverseDeps);
+    assertThat(graph.get(null, Reason.OTHER, skyKey("a"))
+        .getReverseDeps()).containsExactlyElementsIn(reverseDeps);
     reverseDeps.add(skyKey("bc"));
-    assertThat(graph.get(skyKey("b")).getReverseDeps()).containsExactlyElementsIn(reverseDeps);
+    assertThat(graph.get(null, Reason.OTHER, skyKey("b"))
+        .getReverseDeps()).containsExactlyElementsIn(reverseDeps);
     reverseDeps.clear();
     if (reverseDepsPresent()) {
       reverseDeps.add(skyKey("ab_c"));
     }
     reverseDeps.add(skyKey("bc"));
-    assertThat(graph.get(skyKey("c")).getReverseDeps()).containsExactlyElementsIn(reverseDeps);
+    assertThat(graph.get(null, Reason.OTHER, skyKey("c"))
+        .getReverseDeps()).containsExactlyElementsIn(reverseDeps);
   }
 
   @Test
   public void interruptChild() throws Exception {
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     int numValues = 50; // More values than the invalidator has threads.
     final SkyKey[] family = new SkyKey[numValues];
     final SkyKey child = GraphTester.skyKey("child");
@@ -435,8 +443,7 @@ public class EagerInvalidatorTest {
     assertFalse(state.isEmpty());
     final Set<SkyKey> invalidated = Sets.newConcurrentHashSet();
     assertFalse(isInvalidated(parent));
-    SkyValue parentValue = graph.getValue(parent);
-    assertNotNull(parentValue);
+    assertNotNull(graph.get(null, Reason.OTHER, parent).getValue());
     receiver = new EvaluationProgressReceiver() {
       @Override
       public void invalidated(SkyKey skyKey, InvalidationState state) {
@@ -510,7 +517,7 @@ public class EagerInvalidatorTest {
     Random random = new Random(TestUtils.getRandomSeed());
     int graphSize = 1000;
     int tries = 5;
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     SkyKey[] values = constructLargeGraph(graphSize);
     eval(/*keepGoing=*/false, values);
     final Thread mainThread = Thread.currentThread();
@@ -579,7 +586,7 @@ public class EagerInvalidatorTest {
   }
 
   protected void setupInvalidatableGraph() throws Exception {
-    graph = new InMemoryGraph();
+    graph = new InMemoryGraphImpl();
     set("a", "a");
     set("b", "b");
     tester.getOrCreate("ab").addDependency("a").addDependency("b").setComputedValue(CONCATENATE);
@@ -596,8 +603,9 @@ public class EagerInvalidatorTest {
   @RunWith(JUnit4.class)
   public static class DeletingInvalidatorTest extends EagerInvalidatorTest {
     @Override
-    protected void invalidate(DirtiableGraph graph, EvaluationProgressReceiver invalidationReceiver,
-        SkyKey... keys) throws InterruptedException {
+    protected void invalidate(
+        InMemoryGraph graph, EvaluationProgressReceiver invalidationReceiver, SkyKey... keys)
+        throws InterruptedException {
       Iterable<SkyKey> diff = ImmutableList.copyOf(keys);
       DeletingNodeVisitor deletingNodeVisitor =
           EagerInvalidator.createDeletingVisitorIfNeeded(
@@ -666,8 +674,9 @@ public class EagerInvalidatorTest {
   @RunWith(JUnit4.class)
   public static class DirtyingInvalidatorTest extends EagerInvalidatorTest {
     @Override
-    protected void invalidate(DirtiableGraph graph, EvaluationProgressReceiver invalidationReceiver,
-        SkyKey... keys) throws InterruptedException {
+    protected void invalidate(
+        InMemoryGraph graph, EvaluationProgressReceiver invalidationReceiver, SkyKey... keys)
+        throws InterruptedException {
       Iterable<SkyKey> diff = ImmutableList.copyOf(keys);
       DirtyingNodeVisitor dirtyingNodeVisitor =
           EagerInvalidator.createInvalidatingVisitorIfNeeded(

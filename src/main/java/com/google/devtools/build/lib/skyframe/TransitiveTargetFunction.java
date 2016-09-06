@@ -13,12 +13,11 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import static com.google.devtools.build.lib.analysis.config.ConfigRuleClasses.ConfigSettingRule;
-
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
+import com.google.devtools.build.lib.analysis.config.ConfigRuleClasses.ConfigSettingRule;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -44,16 +43,14 @@ import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.ValueOrException2;
 import com.google.devtools.common.options.Option;
-
 import java.lang.reflect.Field;
 import java.util.Collection;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -86,15 +83,18 @@ public class TransitiveTargetFunction
   private static Map<String, Class<? extends Fragment>> computeOptionsToFragmentMap(
       ConfiguredRuleClassProvider ruleClassProvider) {
     Map<String, Class<? extends Fragment>> result = new LinkedHashMap<>();
-    Set<Class<? extends FragmentOptions>> visitedOptionsClasses = new HashSet<>();
+    Map<Class<? extends FragmentOptions>, Integer> visitedOptionsClasses = new HashMap<>();
     for (ConfigurationFragmentFactory factory : ruleClassProvider.getConfigurationFragments()) {
-      for (Class<? extends FragmentOptions> optionsClass : factory.requiredOptions()) {
-        if (visitedOptionsClasses.contains(optionsClass)) {
+      Set<Class<? extends FragmentOptions>> requiredOpts = factory.requiredOptions();
+      for (Class<? extends FragmentOptions> optionsClass : requiredOpts) {
+        Integer previousBest = visitedOptionsClasses.get(optionsClass);
+        if (previousBest != null && previousBest <= requiredOpts.size()) {
           // Multiple config fragments may require the same options class, but we only need one of
-          // them to guarantee that class makes it into the configuration.
+          // them to guarantee that class makes it into the configuration. Pick one that depends
+          // on as few options classes as possible (not necessarily unique).
           continue;
         }
-        visitedOptionsClasses.add(optionsClass);
+        visitedOptionsClasses.put(optionsClass, requiredOpts.size());
         for (Field field : optionsClass.getFields()) {
           if (field.isAnnotationPresent(Option.class)) {
             result.put(field.getAnnotation(Option.class).name(), factory.creates());
@@ -118,10 +118,13 @@ public class TransitiveTargetFunction
   }
 
   @Override
-  void processDeps(TransitiveTargetValueBuilder builder, EventHandler eventHandler,
+  void processDeps(
+      TransitiveTargetValueBuilder builder,
+      EventHandler eventHandler,
       TargetAndErrorIfAny targetAndErrorIfAny,
       Iterable<Entry<SkyKey, ValueOrException2<NoSuchPackageException, NoSuchTargetException>>>
-          depEntries) {
+          depEntries)
+      throws InterruptedException {
     boolean successfulTransitiveLoading = builder.isSuccessfulTransitiveLoading();
     Target target = targetAndErrorIfAny.getTarget();
     NestedSetBuilder<Label> transitiveRootCauses = builder.getTransitiveRootCauses();
@@ -181,42 +184,73 @@ public class TransitiveTargetFunction
     Target target = targetAndErrorIfAny.getTarget();
     NoSuchTargetException errorLoadingTarget = targetAndErrorIfAny.getErrorLoadingTarget();
 
-    // Get configuration fragments directly required by this target.
+    // Get configuration fragments directly required by this rule.
     if (target instanceof Rule) {
+      Rule rule = (Rule) target;
+
+      // Declared by the rule class:
       ConfigurationFragmentPolicy configurationFragmentPolicy =
-          target.getAssociatedRule().getRuleClassObject().getConfigurationFragmentPolicy();
+          rule.getRuleClassObject().getConfigurationFragmentPolicy();
       for (ConfigurationFragmentFactory factory : ruleClassProvider.getConfigurationFragments()) {
         Class<? extends Fragment> fragment = factory.creates();
         // isLegalConfigurationFragment considers both natively declared fragments and Skylark
         // (named) fragments.
-        if (configurationFragmentPolicy.isLegalConfigurationFragment(fragment)
-            && !builder.getConfigFragmentsFromDeps().contains(fragment)) {
-          builder.getTransitiveConfigFragments().add(
-              fragment.asSubclass(BuildConfiguration.Fragment.class));
+        if (configurationFragmentPolicy.isLegalConfigurationFragment(fragment)) {
+          addFragmentIfNew(builder, fragment.asSubclass(BuildConfiguration.Fragment.class));
+        }
+      }
+
+      // Declared by late-bound attributes:
+      for (Attribute attr : rule.getAttributes()) {
+        if (attr.isLateBound()) {
+          addFragmentsIfNew(builder,
+              attr.getLateBoundDefault().getRequiredConfigurationFragments());
         }
       }
 
       // config_setting rules have values like {"some_flag": "some_value"} that need the
-      // corresponding fragments in their configurations to properly resolve.
-      Rule rule = (Rule) target;
+      // corresponding fragments in their configurations to properly resolve:
       if (rule.getRuleClass().equals(ConfigSettingRule.RULE_NAME)) {
-        builder.getTransitiveConfigFragments().addAll(
+        addFragmentsIfNew(builder,
             ConfigSettingRule.requiresConfigurationFragments(rule, optionsToFragmentMap));
       }
 
-      Class<? extends Fragment> universalFragment =
-          ruleClassProvider.getUniversalFragment().asSubclass(BuildConfiguration.Fragment.class);
-      if (!builder.getConfigFragmentsFromDeps().contains(universalFragment)) {
-        builder.getTransitiveConfigFragments().add(universalFragment);
-      }
+      // Fragments to unconditionally include:
+      addFragmentIfNew(builder,
+          ruleClassProvider.getUniversalFragment().asSubclass(BuildConfiguration.Fragment.class));
     }
 
     return builder.build(errorLoadingTarget);
   }
 
-  protected Collection<Label> getAspectLabels(Rule fromRule, Attribute attr, Label toLabel,
+  private void addFragmentIfNew(TransitiveTargetValueBuilder builder,
+      Class<? extends Fragment> fragment) {
+    // This only checks that the deps don't already use this fragment, not the parent rule itself.
+    // So duplicates are still possible. We can further optimize if needed.
+    if (!builder.getConfigFragmentsFromDeps().contains(fragment)) {
+      builder.getTransitiveConfigFragments().add(fragment);
+    }
+  }
+
+  private void addFragmentsIfNew(TransitiveTargetValueBuilder builder, Iterable<?> fragments) {
+    // We take Iterable<?> instead of Iterable<Class<?>> or Iterable<Class<? extends Fragment>>
+    // because both of the latter are passed as actual parameters and there's no way to consistently
+    // cast to one of them. In actuality, all values are Class<? extends Fragment>, but the values
+    // coming from Attribute.java don't have access to the Fragment symbol since Attribute is built
+    // in a different library.
+    for (Object fragment : fragments) {
+      addFragmentIfNew(builder, (Class<? extends Fragment>) fragment);
+    }
+  }
+
+  @Override
+  protected Collection<Label> getAspectLabels(
+      Rule fromRule,
+      Attribute attr,
+      Label toLabel,
       ValueOrException2<NoSuchPackageException, NoSuchTargetException> toVal,
-      Environment env) {
+      final Environment env)
+      throws InterruptedException {
     SkyKey packageKey = PackageValue.key(toLabel.getPackageIdentifier());
     try {
       PackageValue pkgValue =
@@ -242,14 +276,15 @@ public class TransitiveTargetFunction
 
   @Override
   TargetMarkerValue getTargetMarkerValue(SkyKey targetMarkerKey, Environment env)
-      throws NoSuchTargetException, NoSuchPackageException {
+      throws NoSuchTargetException, NoSuchPackageException, InterruptedException {
     return (TargetMarkerValue)
         env.getValueOrThrow(
             targetMarkerKey, NoSuchTargetException.class, NoSuchPackageException.class);
   }
 
-  private void maybeReportErrorAboutMissingEdge(
-      Target target, Label depLabel, NoSuchThingException e, EventHandler eventHandler) {
+  private static void maybeReportErrorAboutMissingEdge(
+      Target target, Label depLabel, NoSuchThingException e, EventHandler eventHandler)
+      throws InterruptedException {
     if (e instanceof NoSuchTargetException) {
       NoSuchTargetException nste = (NoSuchTargetException) e;
       if (depLabel.equals(nste.getLabel())) {

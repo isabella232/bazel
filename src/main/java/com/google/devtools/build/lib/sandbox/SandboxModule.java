@@ -22,13 +22,12 @@ import com.google.devtools.build.lib.buildtool.buildevent.BuildStartingEvent;
 import com.google.devtools.build.lib.concurrent.ExecutorUtil;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.runtime.BlazeModule;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.common.options.OptionsBase;
-
+import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -49,9 +48,16 @@ public class SandboxModule extends BlazeModule {
   private CommandEnvironment env;
   private BuildRequest buildRequest;
 
-  private synchronized boolean isSandboxingSupported(BlazeRuntime runtime) {
-    if (sandboxingSupported == null) {
-      sandboxingSupported = NamespaceSandboxRunner.isSupported(runtime);
+  private synchronized boolean isSandboxingSupported(CommandEnvironment env) {
+    switch (OS.getCurrent()) {
+      case LINUX:
+        sandboxingSupported = LinuxSandboxRunner.isSupported(env);
+        break;
+      case DARWIN:
+        sandboxingSupported = DarwinSandboxRunner.isSupported();
+        break;
+      default:
+        sandboxingSupported = false;
     }
     return sandboxingSupported.booleanValue();
   }
@@ -60,9 +66,16 @@ public class SandboxModule extends BlazeModule {
   public Iterable<ActionContextProvider> getActionContextProviders() {
     Preconditions.checkNotNull(buildRequest);
     Preconditions.checkNotNull(env);
-    if (isSandboxingSupported(env.getRuntime())) {
-      return ImmutableList.<ActionContextProvider>of(
-          new SandboxActionContextProvider(env, buildRequest, backgroundWorkers));
+    if (isSandboxingSupported(env)) {
+      Iterable<ActionContextProvider> ret;
+      try {
+        ret =
+            ImmutableList.<ActionContextProvider>of(
+                SandboxActionContextProvider.create(env, buildRequest, backgroundWorkers));
+      } catch (IOException e) {
+        throw new IllegalArgumentException(e);
+      }
+      return ret;
     }
 
     // For now, sandboxing is only supported on Linux and there's not much point in showing a scary
@@ -78,7 +91,7 @@ public class SandboxModule extends BlazeModule {
   @Override
   public Iterable<ActionContextConsumer> getActionContextConsumers() {
     Preconditions.checkNotNull(env);
-    if (isSandboxingSupported(env.getRuntime())) {
+    if (isSandboxingSupported(env)) {
       return ImmutableList.<ActionContextConsumer>of(new SandboxActionContextConsumer());
     }
     return ImmutableList.of();
@@ -86,7 +99,7 @@ public class SandboxModule extends BlazeModule {
 
   @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
-    return command.builds()
+    return "build".equals(command.name())
         ? ImmutableList.<Class<? extends OptionsBase>>of(SandboxOptions.class)
         : ImmutableList.<Class<? extends OptionsBase>>of();
   }

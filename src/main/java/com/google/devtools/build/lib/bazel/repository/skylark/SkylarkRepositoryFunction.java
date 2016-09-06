@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.bazel.repository.skylark;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Rule;
@@ -30,7 +31,6 @@ import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
-import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyValue;
 
@@ -56,12 +56,12 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
   }
 
   /**
-   * Skylark repository context functions can use this function to notify the
+   * Skylark repository context functions can throw the result of this function to notify the
    * SkylarkRepositoryFunction that a dependency was missing and the evaluation of the function must
    * be restarted.
    */
-  static void restart() throws EvalException {
-    throw new SkylarkRepositoryMissingDependencyException();
+  static EvalException restart() {
+    return new SkylarkRepositoryMissingDependencyException();
   }
 
   private CommandEnvironment commandEnvironment = null;
@@ -78,8 +78,9 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
 
   @Nullable
   @Override
-  public SkyValue fetch(Rule rule, Path outputDirectory, Environment env)
-      throws SkyFunctionException, InterruptedException {
+  public SkyValue fetch(
+      Rule rule, Path outputDirectory, BlazeDirectories directories, Environment env)
+      throws RepositoryFunctionException, InterruptedException {
     BaseFunction function = rule.getRuleClassObject().getConfiguredTargetFunction();
     try (Mutability mutability = Mutability.create("skylark repository")) {
       com.google.devtools.build.lib.syntax.Environment buildEnv =
@@ -135,6 +136,10 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
     if (!repositoryValue.isDirectory()) {
       throw new RepositoryFunctionException(
           new IOException(rule + " must create a directory"), Transience.TRANSIENT);
+    }
+
+    if (!outputDirectory.getRelative("WORKSPACE").exists()) {
+      createWorkspaceFile(outputDirectory, rule.getTargetKind(), rule.getName());
     }
 
     return RepositoryDirectoryValue.create(outputDirectory);

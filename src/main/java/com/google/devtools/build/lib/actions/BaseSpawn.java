@@ -25,12 +25,10 @@ import com.google.devtools.build.lib.util.CommandDescriptionForm;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.concurrent.Immutable;
 
 /**
@@ -44,7 +42,7 @@ public class BaseSpawn implements Spawn {
   private final ImmutableMap<PathFragment, Artifact> runfilesManifests;
   private final ImmutableSet<PathFragment> optionalOutputFiles;
   private final RunfilesSupplier runfilesSupplier;
-  private final ActionMetadata action;
+  private final ActionExecutionMetadata action;
   private final ResourceSet localResources;
 
   // TODO(bazel-team): When we migrate ActionSpawn to use this constructor decide on and enforce
@@ -57,7 +55,7 @@ public class BaseSpawn implements Spawn {
       Map<String, String> executionInfo,
       Map<PathFragment, Artifact> runfilesManifests,
       RunfilesSupplier runfilesSupplier,
-      ActionMetadata action,
+      ActionExecutionMetadata action,
       ResourceSet localResources,
       Collection<PathFragment> optionalOutputFiles) {
     this.arguments = ImmutableList.copyOf(arguments);
@@ -78,7 +76,7 @@ public class BaseSpawn implements Spawn {
      Map<String, String> environment,
      Map<String, String> executionInfo,
      RunfilesSupplier runfilesSupplier,
-     ActionMetadata action,
+     ActionExecutionMetadata action,
      ResourceSet localResources) {
     this(
         arguments,
@@ -99,7 +97,7 @@ public class BaseSpawn implements Spawn {
       Map<String, String> environment,
       Map<String, String> executionInfo,
       Map<PathFragment, Artifact> runfilesManifests,
-      ActionMetadata action,
+      ActionExecutionMetadata action,
       ResourceSet localResources) {
     this(
         arguments,
@@ -118,7 +116,7 @@ public class BaseSpawn implements Spawn {
   public BaseSpawn(List<String> arguments,
       Map<String, String> environment,
       Map<String, String> executionInfo,
-      ActionMetadata action,
+      ActionExecutionMetadata action,
       ResourceSet localResources) {
     this(
         arguments,
@@ -134,7 +132,7 @@ public class BaseSpawn implements Spawn {
       Map<String, String> environment,
       Map<String, String> executionInfo,
       RunfilesSupplier runfilesSupplier,
-      ActionMetadata action,
+      ActionExecutionMetadata action,
       ResourceSet localResources,
       Collection<PathFragment> optionalOutputFiles) {
     this(
@@ -212,7 +210,9 @@ public class BaseSpawn implements Spawn {
   @Override
   public ImmutableMap<String, String> getEnvironment() {
     PathFragment runfilesRoot = getRunfilesRoot();
-    if (runfilesRoot == null) {
+    if (runfilesRoot == null
+        || (environment.containsKey("JAVA_RUNFILES")
+            && environment.containsKey("PYTHON_RUNFILES"))) {
       return environment;
     } else {
       ImmutableMap.Builder<String, String> env = ImmutableMap.builder();
@@ -258,7 +258,7 @@ public class BaseSpawn implements Spawn {
   }
 
   @Override
-  public ActionMetadata getResourceOwner() {
+  public ActionExecutionMetadata getResourceOwner() {
     return action;
   }
 
@@ -291,9 +291,23 @@ public class BaseSpawn implements Spawn {
    * A local spawn requiring zero resources.
    */
   public static class Local extends BaseSpawn {
-    public Local(List<String> arguments, Map<String, String> environment, ActionMetadata action) {
-      super(arguments, environment, ImmutableMap.<String, String>of("local", ""),
+    public Local(List<String> arguments, Map<String, String> environment,
+        ActionExecutionMetadata action) {
+      this(arguments, environment, ImmutableMap.<String, String>of(), action);
+    }
+
+    public Local(List<String> arguments, Map<String, String> environment,
+        Map<String, String> executionInfo, ActionExecutionMetadata action) {
+      super(arguments, environment, buildExecutionInfo(executionInfo),
           action, ResourceSet.ZERO);
+    }
+
+    private static ImmutableMap<String, String> buildExecutionInfo(
+        Map<String, String> additionalExecutionInfo) {
+      ImmutableMap.Builder<String, String> executionInfo = ImmutableMap.builder();
+      executionInfo.putAll(additionalExecutionInfo);
+      executionInfo.put("local", "");
+      return executionInfo.build();
     }
   }
 }

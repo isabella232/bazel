@@ -21,7 +21,6 @@ import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.PackageProviderForConfigurations;
 import com.google.devtools.build.lib.events.EventHandler;
-
 import javax.annotation.Nullable;
 
 /**
@@ -31,16 +30,15 @@ public interface ConfigurationCollectionFactory {
   /**
    * Creates the top-level configuration for a build.
    *
-   * <p>Also it may create a set of BuildConfigurations and define a transition table over them.
-   * All configurations during a build should be accessible from this top-level configuration
-   * via configuration transitions.
+   * <p>Also it may create a set of BuildConfigurations and define a transition table over them. All
+   * configurations during a build should be accessible from this top-level configuration via
+   * configuration transitions.
+   *
    * @param configurationFactory the configuration factory
    * @param cache a cache for BuildConfigurations
    * @param loadedPackageProvider the package provider
    * @param buildOptions top-level build options representing the command-line
    * @param errorEventListener the event listener for errors
-   * @param performSanityCheck flag to signal about performing sanity check. Can be false only for
-   * tests in skyframe. Legacy mode uses loadedPackageProvider == null condition for this.
    * @return the top-level configuration
    * @throws InvalidConfigurationException
    */
@@ -50,8 +48,8 @@ public interface ConfigurationCollectionFactory {
       Cache<String, BuildConfiguration> cache,
       PackageProviderForConfigurations loadedPackageProvider,
       BuildOptions buildOptions,
-      EventHandler errorEventListener,
-      boolean performSanityCheck) throws InvalidConfigurationException;
+      EventHandler errorEventListener)
+      throws InvalidConfigurationException, InterruptedException;
 
   /**
    * Returns the module the given configuration should use for choosing dynamic transitions.

@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.packages.NativeAspectClass.NativeAspectFactory;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Environment.Extension;
 import com.google.devtools.build.lib.syntax.Mutability;
@@ -66,18 +65,31 @@ public interface RuleClassProvider {
   /**
    * Returns a map from aspect names to aspect factory objects.
    */
-  Map<String, Class<? extends NativeAspectFactory>> getAspectFactoryMap();
+  Map<String, NativeAspectClass> getNativeAspectClassMap();
 
   /**
-   * Returns the default content of the WORKSPACE file.
+   * Returns the default content that should be added at the beginning of the WORKSPACE file.
    *
    * <p>Used to provide external dependencies for built-in rules. Rules defined here can be
    * overwritten in the WORKSPACE file in the actual workspace.
    */
-  String getDefaultWorkspaceFile();
-  
+  String getDefaultWorkspacePrefix();
+
+
+  /**
+   * Returns the default content that should be added at the end of the WORKSPACE file.
+   *
+   * <p>Used to load skylark repository in the bazel_tools repository.
+   */
+  String getDefaultWorkspaceSuffix();
+
   /**
    * Returns the path to the tools repository
    */
   String getToolsRepository();
+
+  /**
+   * Retrieves an aspect from the aspect factory map using the key provided
+   */
+  NativeAspectClass getNativeAspectClass(String key);
 }

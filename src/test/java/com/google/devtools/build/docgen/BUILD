@@ -4,6 +4,12 @@ package(
 
 licenses(["notice"])  # Apache 2.0
 
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//src:__pkg__"],
+)
+
 test_suite(
     name = "all_tests",
     tags = ["docgen"],
@@ -40,9 +46,9 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
         "//src/main/java/com/google/devtools/build/lib:syntax",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
-        "//src/test/java/com/google/devtools/build/lib:skylark_testutil",
         "//src/test/java/com/google/devtools/build/lib:syntax_testutil",
         "//src/test/java/com/google/devtools/build/lib:testutil",
+        "//src/test/java/com/google/devtools/build/lib/skylark:testutil",
         "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",

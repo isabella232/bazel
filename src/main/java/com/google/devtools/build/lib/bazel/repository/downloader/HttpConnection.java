@@ -18,7 +18,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.io.ByteStreams;
 import com.google.common.net.MediaType;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,8 +25,10 @@ import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.Proxy;
 import java.net.URL;
+import java.net.URLConnection;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /**
  * Represents a connection over HTTP.
@@ -71,11 +72,28 @@ class HttpConnection implements Closeable {
     }
   }
 
-  public static HttpConnection createAndConnect(URL url) throws IOException {
+  public static HttpConnection createAndConnect(URL url, Map<String, String> clientEnv)
+      throws IOException {
+    Proxy proxy = ProxyHelper.createProxyIfNeeded(url.toString(), clientEnv);
+    URLConnection connection = url.openConnection(proxy);
+    if (connection instanceof HttpURLConnection) {
+      return createAndConnectViaHttp(proxy, url, (HttpURLConnection) connection);
+    }
+
+    int contentLength = connection.getContentLength();
+    // check for empty file. -1 is a valid contentLength, meaning the size of unknown. It's a
+    // common return value for an FTP download request for example. Local files will always
+    // have a valid contentLength value.
+    if (contentLength == 0) {
+      throw new IOException("Attempted to download an empty file");
+    }
+    return new HttpConnection(connection.getInputStream(), contentLength);
+  }
+
+  private static HttpConnection createAndConnectViaHttp(
+      Proxy proxy, URL url, HttpURLConnection connection) throws IOException {
     int retries = MAX_REDIRECTS;
-    Proxy proxy = ProxyHelper.createProxyIfNeeded(url.toString());
-    do {
-      HttpURLConnection connection = (HttpURLConnection) url.openConnection(proxy);
+    for (int i = 0; i < retries; ++i, connection = (HttpURLConnection) url.openConnection(proxy)) {
       try {
         connection.connect();
       } catch (IllegalArgumentException e) {
@@ -94,12 +112,14 @@ class HttpConnection implements Closeable {
         case -1:
           throw new IOException("An HTTP error occured");
         default:
-          throw new IOException(String.format("%s %s: %s",
-              connection.getResponseCode(),
-              connection.getResponseMessage(),
-              readBody(connection)));
+          throw new IOException(
+              String.format(
+                  "%s %s: %s",
+                  connection.getResponseCode(),
+                  connection.getResponseMessage(),
+                  readBody(connection)));
       }
-    } while (retries-- > 0);
+    };
     throw new IOException("Maximum redirects (" + MAX_REDIRECTS + ") exceeded");
   }
 

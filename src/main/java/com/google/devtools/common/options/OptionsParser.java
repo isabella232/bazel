@@ -21,6 +21,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.escape.Escaper;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -72,7 +73,20 @@ public class OptionsParser implements OptionsProvider {
   private static final Map<ImmutableList<Class<? extends OptionsBase>>, OptionsData> optionsData =
       Maps.newHashMap();
 
-  private static synchronized OptionsData getOptionsData(
+  /**
+   * Returns {@link OpaqueOptionsData} suitable for passing along to
+   * {@link #newOptionsParser(OpaqueOptionsData optionsData)}.
+   *
+   * This is useful when you want to do the work of analyzing the given {@code optionsClasses}
+   * exactly once, but you want to parse lots of different lists of strings (and thus need to
+   * construct lots of different {@link OptionsParser} instances). 
+   */
+  public static OpaqueOptionsData getOptionsData(
+      ImmutableList<Class<? extends OptionsBase>> optionsClasses) {
+    return getOptionsDataInternal(optionsClasses);
+  }
+
+  private static synchronized OptionsData getOptionsDataInternal(
       ImmutableList<Class<? extends OptionsBase>> optionsClasses) {
     OptionsData result = optionsData.get(optionsClasses);
     if (result == null) {
@@ -87,7 +101,8 @@ public class OptionsParser implements OptionsProvider {
    * ones.
    */
   static Collection<Field> getAllAnnotatedFields(Class<? extends OptionsBase> optionsClass) {
-    OptionsData data = getOptionsData(ImmutableList.<Class<? extends OptionsBase>>of(optionsClass));
+    OptionsData data = getOptionsDataInternal(
+        ImmutableList.<Class<? extends OptionsBase>>of(optionsClass));
     return data.getFieldsForClass(optionsClass);
   }
 
@@ -110,8 +125,17 @@ public class OptionsParser implements OptionsProvider {
    * Create a new {@link OptionsParser}.
    */
   public static OptionsParser newOptionsParser(
-      Iterable<Class<? extends OptionsBase>> optionsClasses) {
-    return new OptionsParser(getOptionsData(ImmutableList.copyOf(optionsClasses)));
+      Iterable<? extends Class<? extends OptionsBase>> optionsClasses) {
+    return newOptionsParser(
+        getOptionsDataInternal(ImmutableList.<Class<? extends OptionsBase>>copyOf(optionsClasses)));
+  }
+
+  /**
+   * Create a new {@link OptionsParser}, using {@link OpaqueOptionsData} previously returned from
+   * {@link #getOptionsData}.
+   */
+  public static OptionsParser newOptionsParser(OpaqueOptionsData optionsData) {
+    return new OptionsParser((OptionsData) optionsData);
   }
 
   private final OptionsParserImpl impl;
@@ -413,7 +437,6 @@ public class OptionsParser implements OptionsProvider {
                                 HelpVerbosity helpVerbosity) {
     StringBuilder desc = new StringBuilder();
     if (!impl.getOptionsClasses().isEmpty()) {
-
       List<Field> allFields = Lists.newArrayList();
       for (Class<? extends OptionsBase> optionsClass : impl.getOptionsClasses()) {
         allFields.addAll(impl.getAnnotatedFieldsFor(optionsClass));
@@ -440,6 +463,52 @@ public class OptionsParser implements OptionsProvider {
       }
     }
     return desc.toString().trim();
+  }
+
+  /**
+   * Returns a description of all the options this parser can digest.
+   * In addition to {@link Option} annotations, this method also
+   * interprets {@link OptionsUsage} annotations which give an intuitive short
+   * description for the options.
+   *
+   * @param categoryDescriptions a mapping from category names to category
+   *   descriptions.  Options of the same category (see {@link
+   *   Option#category}) will be grouped together, preceded by the description
+   *   of the category.
+   */
+  public String describeOptionsHtml(Map<String, String> categoryDescriptions, Escaper escaper) {
+    StringBuilder desc = new StringBuilder();
+    if (!impl.getOptionsClasses().isEmpty()) {
+      List<Field> allFields = Lists.newArrayList();
+      for (Class<? extends OptionsBase> optionsClass : impl.getOptionsClasses()) {
+        allFields.addAll(impl.getAnnotatedFieldsFor(optionsClass));
+      }
+      Collections.sort(allFields, OptionsUsage.BY_CATEGORY);
+      String prevCategory = null;
+
+      for (Field optionField : allFields) {
+        String category = optionField.getAnnotation(Option.class).category();
+        DocumentationLevel level = documentationLevel(category);
+        if (!category.equals(prevCategory) && level == DocumentationLevel.DOCUMENTED) {
+          String description = categoryDescriptions.get(category);
+          if (description == null) {
+            description = "Options category '" + category + "'";
+          }
+          if (prevCategory != null) {
+            desc.append("</dl>\n\n");
+          }
+          desc.append(escaper.escape(description)).append(":\n");
+          desc.append("<dl>");
+          prevCategory = category;
+        }
+
+        if (level == DocumentationLevel.DOCUMENTED) {
+          OptionsUsage.getUsageHtml(optionField, desc, escaper);
+        }
+      }
+      desc.append("</dl>\n");
+    }
+    return desc.toString();
   }
 
   /**
@@ -570,7 +639,8 @@ public class OptionsParser implements OptionsProvider {
    * @return A map of an option name to the old value of the options that were cleared.
    * @throws IllegalArgumentException If the flag does not exist.
    */
-  public Map<String, OptionValueDescription> clearValue(String optionName) {
+  public Map<String, OptionValueDescription> clearValue(String optionName)
+      throws OptionsParsingException {
     Map<String, OptionValueDescription> clearedValues = Maps.newHashMap();
     impl.clearValue(optionName, clearedValues);
     return clearedValues;

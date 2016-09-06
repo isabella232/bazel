@@ -34,9 +34,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.List;
-
 import javax.annotation.Nullable;
 
 /**
@@ -52,21 +50,15 @@ import javax.annotation.Nullable;
  * <p>The loader also supports legacy mode, where the JVM can be defined with an abolute path.
  */
 public final class JvmConfigurationLoader implements ConfigurationFragmentFactory {
-  private final boolean forceLegacy;
   private final JavaCpuSupplier cpuSupplier;
 
-  public JvmConfigurationLoader(boolean forceLegacy, JavaCpuSupplier cpuSupplier) {
-    this.forceLegacy = forceLegacy;
-    this.cpuSupplier = cpuSupplier;
-  }
-
   public JvmConfigurationLoader(JavaCpuSupplier cpuSupplier) {
-    this(/*forceLegacy=*/ false, cpuSupplier);
+    this.cpuSupplier = cpuSupplier;
   }
 
   @Override
   public Jvm create(ConfigurationEnvironment env, BuildOptions buildOptions)
-      throws InvalidConfigurationException {
+      throws InvalidConfigurationException, InterruptedException {
     JavaOptions javaOptions = buildOptions.get(JavaOptions.class);
     if (javaOptions.disableJvm) {
       // TODO(bazel-team): Instead of returning null here, add another method to the interface.
@@ -78,12 +70,10 @@ public final class JvmConfigurationLoader implements ConfigurationFragmentFactor
       return null;
     }
 
-    if (!forceLegacy) {
-      try {
-        return createDefault(env, javaHome, cpu);
-      } catch (LabelSyntaxException e) {
-        // Try again with legacy
-      }
+    try {
+      return createDefault(env, javaHome, cpu);
+    } catch (LabelSyntaxException e) {
+      // Try again with legacy
     }
 
     return createLegacy(javaHome);
@@ -100,8 +90,8 @@ public final class JvmConfigurationLoader implements ConfigurationFragmentFactor
   }
 
   @Nullable
-  private Jvm createDefault(ConfigurationEnvironment lookup, String javaHome, String cpu)
-      throws InvalidConfigurationException, LabelSyntaxException {
+  private static Jvm createDefault(ConfigurationEnvironment lookup, String javaHome, String cpu)
+      throws InvalidConfigurationException, LabelSyntaxException, InterruptedException {
     try {
       Label label = Label.parseAbsolute(javaHome);
       label = RedirectChaser.followRedirects(lookup, label, "jdk");
@@ -137,7 +127,7 @@ public final class JvmConfigurationLoader implements ConfigurationFragmentFactor
             if (jvmTarget.getLabel().getPackageIdentifier().getRepository().isDefault()) {
               javaHomePath = jvmLabel.getPackageFragment();
             } else {
-              javaHomePath = jvmTarget.getLabel().getPackageIdentifier().getPathFragment();
+              javaHomePath = jvmTarget.getLabel().getPackageIdentifier().getSourceRoot();
             }
 
             if ((jvmTarget instanceof Rule) &&

@@ -8,6 +8,7 @@ package(default_visibility = [":packages"])
 java_binary(
     name = "turbine",
     main_class = "com.google.devtools.build.java.turbine.javac.JavacTurbine",
+    visibility = ["//visibility:public"],
     runtime_deps = [
         "//src/java_tools/buildjar/java/com/google/devtools/build/java/turbine/javac:javac_turbine",
     ],
@@ -17,6 +18,7 @@ java_library(
     name = "turbine_options",
     srcs = ["TurbineOptions.java"],
     deps = [
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:JarOwner",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -27,6 +29,7 @@ java_library(
     srcs = ["TurbineOptionsParser.java"],
     deps = [
         ":turbine_options",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:JarOwner",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

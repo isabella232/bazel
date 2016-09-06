@@ -22,19 +22,17 @@ import static org.junit.Assert.fail;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.Package.LegacyBuilder;
+import com.google.devtools.build.lib.packages.Package.Builder;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.Path;
-
+import java.io.IOException;
+import java.util.List;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.IOException;
-import java.util.List;
 
 /**
  * Tests for WorkspaceFactory.
@@ -84,7 +82,7 @@ public class WorkspaceFactoryTest {
     WorkspaceFactoryHelper helper = new WorkspaceFactoryHelper(
         false, "workspace(name = 'foo')");
     assertThat(helper.getParserError()).contains(
-        "workspace() function should be used only at the top of the WORKSPACE file.");
+        "workspace() function should be used only at the top of the WORKSPACE file");
   }
 
   private WorkspaceFactoryHelper parse(String... args) {
@@ -95,7 +93,7 @@ public class WorkspaceFactoryTest {
    * Parses a WORKSPACE file with the given content.
    */
   private class WorkspaceFactoryHelper {
-    private final LegacyBuilder builder;
+    private final Builder builder;
     private final WorkspaceFactory factory;
     private final Exception exception;
     private final ImmutableList<Event> events;
@@ -115,7 +113,8 @@ public class WorkspaceFactoryTest {
         fail("Shouldn't happen: " + e.getMessage());
       }
       StoredEventHandler eventHandler = new StoredEventHandler();
-      builder = Package.newExternalPackageBuilder(workspaceFilePath, "");
+      builder = Package.newExternalPackageBuilder(
+          Package.Builder.DefaultHelper.INSTANCE, workspaceFilePath, "");
       this.factory = new WorkspaceFactory(
           builder,
           TestRuleClassProvider.getRuleClassProvider(),
@@ -127,16 +126,16 @@ public class WorkspaceFactoryTest {
       Exception exception = null;
       try {
         factory.parse(ParserInputSource.create(workspaceFilePath), eventHandler);
-      } catch (IOException e) {
+      } catch (BuildFileContainsErrorsException e) {
         exception = e;
-      } catch (InterruptedException e) {
+      } catch (IOException | InterruptedException e) {
         fail("Shouldn't happen: " + e.getMessage());
       }
       this.events = eventHandler.getEvents();
       this.exception = exception;
     }
 
-    public Package getPackage() {
+    public Package getPackage() throws InterruptedException {
       return builder.build();
     }
 

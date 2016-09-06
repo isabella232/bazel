@@ -14,16 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# xcrunwrapper runs the command passed to it using xcrun.
-# It replaces __BAZEL_XCODE_DEVELOPER_DIR__ with $DEVELOPER_DIR (or reasonable
-# default) and __BAZEL_XCODE_SDKROOT__ with a valid path based on SDKROOT (or
-# reasonable default).
+# xcrunwrapper runs the command passed to it using xcrun. The first arg
+# passed is the name of the tool to be invoked via xcrun. (For example, libtool
+# or clang).
+# xcrunwrapper replaces __BAZEL_XCODE_DEVELOPER_DIR__ with $DEVELOPER_DIR (or
+# reasonable default) and __BAZEL_XCODE_SDKROOT__ with a valid path based on
+# SDKROOT (or reasonable default).
 # These values (__BAZEL_XCODE_*) are a shared secret withIosSdkCommands.java.
 
 set -eu
 
-# Pick values for DEVELOPER_DIR and SDKROOT as appropriate (if they weren't set)
+TOOLNAME=$1
+shift
 
+# Pick values for DEVELOPER_DIR and SDKROOT as appropriate (if they weren't set)
 WRAPPER_DEVDIR="${DEVELOPER_DIR:-}"
 if [[ -z "${WRAPPER_DEVDIR}" ]] ; then
   WRAPPER_DEVDIR="$(xcode-select -p)"
@@ -47,6 +51,7 @@ if [[ -z "${WRAPPER_SDKROOT:-}" ]] ; then
   WRAPPER_SDKROOT="$(/usr/bin/xcrun --show-sdk-path --sdk ${WRAPPER_SDK})"
 fi
 
+# Subsitute toolkit path placeholders.
 UPDATEDARGS=()
 for ARG in "$@" ; do
   ARG="${ARG//__BAZEL_XCODE_DEVELOPER_DIR__/${WRAPPER_DEVDIR}}"
@@ -54,4 +59,4 @@ for ARG in "$@" ; do
   UPDATEDARGS+=("${ARG}")
 done
 
-/usr/bin/xcrun "${UPDATEDARGS[@]}"
+/usr/bin/xcrun "${TOOLNAME}" "${UPDATEDARGS[@]}"

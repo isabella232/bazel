@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.analysis.config;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.Cache;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -23,11 +22,9 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import javax.annotation.Nullable;
 
 /**
@@ -47,7 +44,6 @@ import javax.annotation.Nullable;
 public final class ConfigurationFactory {
   private final List<ConfigurationFragmentFactory> configurationFragmentFactories;
   private final ConfigurationCollectionFactory configurationCollectionFactory;
-  private boolean performSanityCheck = true;
 
   public ConfigurationFactory(
       ConfigurationCollectionFactory configurationCollectionFactory,
@@ -63,35 +59,35 @@ public final class ConfigurationFactory {
     this.configurationFragmentFactories = ImmutableList.copyOf(fragmentFactories);
   }
 
-  @VisibleForTesting
-  public void forbidSanityCheck() {
-    performSanityCheck = false;
-  }
-
-  /** Creates a set of build configurations with top-level configuration having the given options.
+  /**
+   * Creates a set of build configurations with top-level configuration having the given options.
    *
    * <p>The rest of the configurations are created based on the set of transitions available.
    */
   @Nullable
   public BuildConfiguration createConfigurations(
       Cache<String, BuildConfiguration> cache,
-      PackageProviderForConfigurations loadedPackageProvider, BuildOptions buildOptions,
+      PackageProviderForConfigurations loadedPackageProvider,
+      BuildOptions buildOptions,
       EventHandler errorEventListener)
-          throws InvalidConfigurationException {
+      throws InvalidConfigurationException, InterruptedException {
     return configurationCollectionFactory.createConfigurations(this, cache,
-        loadedPackageProvider, buildOptions, errorEventListener, performSanityCheck);
+        loadedPackageProvider, buildOptions, errorEventListener);
   }
 
   /**
-   * Returns a {@link com.google.devtools.build.lib.analysis.config.BuildConfiguration} based on
-   * the given set of build options.
+   * Returns a {@link com.google.devtools.build.lib.analysis.config.BuildConfiguration} based on the
+   * given set of build options.
    *
    * <p>If the configuration has already been created, re-uses it, otherwise, creates a new one.
    */
   @Nullable
-  public BuildConfiguration getConfiguration(PackageProviderForConfigurations loadedPackageProvider,
-      BuildOptions buildOptions, boolean actionsDisabled, Cache<String, BuildConfiguration> cache)
-      throws InvalidConfigurationException {
+  public BuildConfiguration getConfiguration(
+      PackageProviderForConfigurations loadedPackageProvider,
+      BuildOptions buildOptions,
+      boolean actionsDisabled,
+      Cache<String, BuildConfiguration> cache)
+      throws InvalidConfigurationException, InterruptedException {
 
     String cacheKey = buildOptions.computeCacheKey();
     BuildConfiguration result = cache.getIfPresent(cacheKey);

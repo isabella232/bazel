@@ -18,19 +18,21 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets.Builder;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.cmdline.TargetPattern;
+import com.google.devtools.build.lib.cmdline.TargetPattern.Type;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.skyframe.InterruptibleSupplier;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -203,6 +205,30 @@ public final class TargetPatternValue implements SkyValue {
 
     public ImmutableSet<PathFragment> getExcludedSubdirectories() {
       return excludedSubdirectories;
+    }
+
+    ImmutableSet<PathFragment> getAllSubdirectoriesToExclude(
+        Iterable<PathFragment> blacklistedPackagePrefixes) throws InterruptedException {
+      return getAllSubdirectoriesToExclude(
+          new InterruptibleSupplier.Instance<>(blacklistedPackagePrefixes));
+    }
+
+    public ImmutableSet<PathFragment> getAllSubdirectoriesToExclude(
+        InterruptibleSupplier<? extends Iterable<PathFragment>> blacklistedPackagePrefixes)
+        throws InterruptedException {
+      ImmutableSet.Builder<PathFragment> excludedPathsBuilder = ImmutableSet.builder();
+      excludedPathsBuilder.addAll(getExcludedSubdirectories());
+      if (parsedPattern.getType() == Type.TARGETS_BELOW_DIRECTORY) {
+        for (PathFragment blacklistedPackagePrefix : blacklistedPackagePrefixes.get()) {
+          PackageIdentifier pkgIdForBlacklistedDirectorPrefix = PackageIdentifier.create(
+              parsedPattern.getDirectory().getRepository(),
+              blacklistedPackagePrefix);
+          if (parsedPattern.containsBelowDirectory(pkgIdForBlacklistedDirectorPrefix)) {
+            excludedPathsBuilder.add(blacklistedPackagePrefix);
+          }
+        }
+      }
+      return excludedPathsBuilder.build();
     }
 
     @Override

@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.ResourceManager.ResourceHandle;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.Spawn;
+import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.RunfilesSupplierImpl;
 import com.google.devtools.build.lib.analysis.config.BinTools;
@@ -41,7 +42,6 @@ import com.google.devtools.build.lib.view.test.TestStatus.BlazeTestStatus;
 import com.google.devtools.build.lib.view.test.TestStatus.TestCase;
 import com.google.devtools.build.lib.view.test.TestStatus.TestResultData;
 import com.google.devtools.common.options.OptionsClassProvider;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.HashMap;
@@ -72,7 +72,11 @@ public class StandaloneTestStrategy extends TestStrategy {
     try {
       runfilesDir =
           TestStrategy.getLocalRunfilesDirectory(
-              action, actionExecutionContext, binTools, action.getShExecutable());
+              action,
+              actionExecutionContext,
+              binTools,
+              action.getLocalShellEnvironment(),
+              action.isEnableRunfiles());
     } catch (ExecException e) {
       throw new TestExecException(e.getMessage());
     }
@@ -84,7 +88,8 @@ public class StandaloneTestStrategy extends TestStrategy {
 
     Path execRoot = actionExecutionContext.getExecutor().getExecRoot();
     TestRunnerAction.ResolvedPaths resolvedPaths = action.resolve(execRoot);
-    Map<String, String> env = getEnv(action, runfilesDir, testTmpDir, resolvedPaths);
+    Map<String, String> env =
+        getEnv(action, execRoot, runfilesDir, testTmpDir, resolvedPaths.getXmlOutputPath());
 
     Map<String, String> info = new HashMap<>();
 
@@ -133,7 +138,7 @@ public class StandaloneTestStrategy extends TestStrategy {
           ResourceHandle handle = ResourceManager.instance().acquireResources(action, resources)) {
         TestResultData data =
             execute(actionExecutionContext.withFileOutErr(fileOutErr), spawn, action);
-        appendStderr(fileOutErr.getOutputFile(), fileOutErr.getErrorFile());
+        appendStderr(fileOutErr.getOutputPath(), fileOutErr.getErrorPath());
         finalizeTest(actionExecutionContext, action, data);
       }
     } catch (IOException e) {
@@ -143,37 +148,44 @@ public class StandaloneTestStrategy extends TestStrategy {
   }
 
   private Map<String, String> getEnv(
-      TestRunnerAction action,
-      Path runfilesDir,
-      Path tmpDir,
-      TestRunnerAction.ResolvedPaths resolvedPaths) {
+      TestRunnerAction action, Path execRoot, Path runfilesDir, Path tmpDir, Path xmlOutputPath) {
     Map<String, String> vars = getDefaultTestEnvironment(action);
     BuildConfiguration config = action.getConfiguration();
 
     vars.putAll(config.getLocalShellEnvironment());
     vars.putAll(action.getTestEnv());
 
-    /*
-     * TODO(bazel-team): the paths below are absolute,
-     * making test actions impossible to cache remotely.
-     */
-    vars.put("TEST_SRCDIR", runfilesDir.getPathString());
-    vars.put("TEST_TMPDIR", tmpDir.getPathString());
+    String tmpDirString;
+    if (tmpDir.startsWith(execRoot)) {
+      tmpDirString = tmpDir.relativeTo(execRoot).getPathString();
+    } else {
+      tmpDirString = tmpDir.getPathString();
+    }
+
+    String testSrcDir = runfilesDir.relativeTo(execRoot).getPathString();
+    vars.put("JAVA_RUNFILES", testSrcDir);
+    vars.put("PYTHON_RUNFILES", testSrcDir);
+    vars.put("TEST_SRCDIR", testSrcDir);
+    vars.put("TEST_TMPDIR", tmpDirString);
     vars.put("TEST_WORKSPACE", action.getRunfilesPrefix());
-    vars.put("XML_OUTPUT_FILE", resolvedPaths.getXmlOutputPath().getPathString());
+    vars.put("XML_OUTPUT_FILE", xmlOutputPath.relativeTo(execRoot).getPathString());
+    if (!action.isEnableRunfiles()) {
+      vars.put("RUNFILES_MANIFEST_ONLY", "1");
+    }
 
     return vars;
   }
 
   private TestResultData execute(
       ActionExecutionContext actionExecutionContext, Spawn spawn, TestRunnerAction action)
-      throws TestExecException, InterruptedException {
+      throws ExecException, InterruptedException {
     Executor executor = actionExecutionContext.getExecutor();
     Closeable streamed = null;
     Path testLogPath = action.getTestLog().getPath();
     TestResultData.Builder builder = TestResultData.newBuilder();
 
     long startTime = executor.getClock().currentTimeMillis();
+    SpawnActionContext spawnActionContext = executor.getSpawnActionContext(action.getMnemonic());
     try {
       try {
         if (executionOptions.testOutput.equals(TestOutputFormat.STREAMED)) {
@@ -181,7 +193,7 @@ public class StandaloneTestStrategy extends TestStrategy {
               Reporter.outErrForReporter(
                   actionExecutionContext.getExecutor().getEventHandler()), testLogPath);
         }
-        executor.getSpawnActionContext(action.getMnemonic()).exec(spawn, actionExecutionContext);
+        spawnActionContext.exec(spawn, actionExecutionContext);
 
         builder.setTestPassed(true)
             .setStatus(BlazeTestStatus.PASSED)
@@ -196,6 +208,9 @@ public class StandaloneTestStrategy extends TestStrategy {
             .setTestPassed(false)
             .setStatus(e.hasTimedOut() ? BlazeTestStatus.TIMEOUT : BlazeTestStatus.FAILED)
             .addFailedLogs(testLogPath.getPathString());
+        if (spawnActionContext.shouldPropagateExecException()) {
+          throw e;
+        }
       } finally {
         long duration = executor.getClock().currentTimeMillis() - startTime;
         builder.addTestTimes(duration);
@@ -232,15 +247,15 @@ public class StandaloneTestStrategy extends TestStrategy {
       }
     } finally {
       if (isPassed) {
-        executor.getEventHandler().handle(new Event(EventKind.PASS, null, result.getTestName()));
+        executor.getEventHandler().handle(Event.of(EventKind.PASS, null, result.getTestName()));
       } else {
         if (result.getData().getStatus() == BlazeTestStatus.TIMEOUT) {
           executor.getEventHandler().handle(
-              new Event(EventKind.TIMEOUT, null, result.getTestName()
+              Event.of(EventKind.TIMEOUT, null, result.getTestName()
                   + " (see " + testOutput + ")"));
         } else {
           executor.getEventHandler().handle(
-              new Event(EventKind.FAIL, null, result.getTestName() + " (see " + testOutput + ")"));
+              Event.of(EventKind.FAIL, null, result.getTestName() + " (see " + testOutput + ")"));
         }
       }
     }

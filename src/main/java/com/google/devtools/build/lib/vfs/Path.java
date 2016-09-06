@@ -163,7 +163,11 @@ public class Path implements Comparable<Path>, Serializable {
     this.name = name;
     this.parent = parent;
     this.depth = parent == null ? 0 : parent.depth + 1;
-    this.hashCode = Objects.hash(parent, name);
+    if (fileSystem == null || fileSystem.isFilePathCaseSensitive()) {
+      this.hashCode = Objects.hash(parent, name);
+    } else {
+      this.hashCode = Objects.hash(parent, name.toLowerCase());
+    }
   }
 
   /**
@@ -344,9 +348,23 @@ public class Path implements Comparable<Path>, Serializable {
     if (!(other instanceof Path)) {
       return false;
     }
+
     Path otherPath = (Path) other;
-    return fileSystem.equals(otherPath.fileSystem) && name.equals(otherPath.name)
-        && Objects.equals(parent, otherPath.parent);
+    if (hashCode != otherPath.hashCode) {
+      return false;
+    }
+
+    if (!fileSystem.equals(otherPath.fileSystem)) {
+      return false;
+    }
+
+    if (fileSystem.isFilePathCaseSensitive()) {
+      return name.equals(otherPath.name)
+          && Objects.equals(parent, otherPath.parent);
+    } else {
+      return name.toLowerCase().equals(otherPath.name.toLowerCase())
+          && Objects.equals(parent, otherPath.parent);
+    }
   }
 
   /**
@@ -640,7 +658,9 @@ public class Path implements Comparable<Path>, Serializable {
       return this;
     } else if (path.equals("..")) {
       return parent == null ? this : parent;
-    } else if ((path.indexOf('/') != -1)) {
+    } else if (path.indexOf('/') != -1) {
+      return getRelative(new PathFragment(path));
+    } else if (path.indexOf(PathFragment.EXTRA_SEPARATOR_CHAR) != -1) {
       return getRelative(new PathFragment(path));
     } else {
       return getCachedChildPath(path);

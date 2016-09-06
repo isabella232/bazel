@@ -15,6 +15,8 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.LoadStatement;
@@ -28,7 +30,6 @@ import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.io.IOException;
 import java.util.List;
 
@@ -52,22 +53,37 @@ public class WorkspaceASTFunction implements SkyFunction {
     }
 
     Path repoWorkspace = workspaceRoot.getRoot().getRelative(workspaceRoot.getRelativePath());
-    PathFragment pathFragment = new PathFragment("/DEFAULT.WORKSPACE");
     try {
       BuildFileAST ast = BuildFileAST.parseBuildFile(
-          ParserInputSource.create(ruleClassProvider.getDefaultWorkspaceFile(), pathFragment),
-          env.getListener(), false);
+          ParserInputSource.create(ruleClassProvider.getDefaultWorkspacePrefix(),
+              new PathFragment("/DEFAULT.WORKSPACE")),
+          env.getListener());
       if (ast.containsErrors()) {
         throw new WorkspaceASTFunctionException(
-            new IOException("Failed to parse default WORKSPACE file"), Transience.PERSISTENT);
+            new BuildFileContainsErrorsException(
+                Label.EXTERNAL_PACKAGE_IDENTIFIER, "Failed to parse default WORKSPACE file"),
+            Transience.PERSISTENT);
       }
       if (workspaceFileValue.exists()) {
         ast = BuildFileAST.parseBuildFile(
-            ParserInputSource.create(repoWorkspace), ast.getStatements(), env.getListener(), false);
+            ParserInputSource.create(repoWorkspace), ast.getStatements(), env.getListener());
         if (ast.containsErrors()) {
           throw new WorkspaceASTFunctionException(
-              new IOException("Failed to parse WORKSPACE file"), Transience.PERSISTENT);
+              new BuildFileContainsErrorsException(
+                  Label.EXTERNAL_PACKAGE_IDENTIFIER, "Failed to parse WORKSPACE file"),
+              Transience.PERSISTENT);
         }
+      }
+      ast = BuildFileAST.parseBuildFile(
+          ParserInputSource.create(ruleClassProvider.getDefaultWorkspaceSuffix(),
+              new PathFragment("/DEFAULT.WORKSPACE.SUFFIX")),
+          ast.getStatements(),
+          env.getListener());
+      if (ast.containsErrors()) {
+        throw new WorkspaceASTFunctionException(
+            new BuildFileContainsErrorsException(
+                Label.EXTERNAL_PACKAGE_IDENTIFIER, "Failed to parse default WORKSPACE file suffix"),
+            Transience.PERSISTENT);
       }
       return new WorkspaceASTValue(splitAST(ast));
     } catch (IOException ex) {

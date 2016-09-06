@@ -6,6 +6,11 @@ filegroup(
     visibility = ["//tools:__pkg__"],
 )
 
+exports_files(
+    ["README.md"],
+    visibility = ["//site:__pkg__"],
+)
+
 TEST_TARGETS = [
     "base_with_entrypoint",
     "base_with_volume",
@@ -24,6 +29,7 @@ TEST_TARGETS = [
     "with_double_env",
     "with_label",
     "with_double_label",
+    "with_user",
     "workdir_with_tar_base",
     "link_with_files_base",
 ]
@@ -56,13 +62,28 @@ sh_test(
     ],
 )
 
+sh_test(
+    name = "build_test_oci",
+    size = "medium",
+    srcs = [
+        "build_test_oci.sh",
+    ],
+    data = TEST_DATA + ["testenv.sh"],
+    deps = [
+        "//src/test/shell:bashunit",
+    ],
+)
+
 # Used by docker_build and friends
 
 py_binary(
     name = "rewrite_json",
     srcs = ["rewrite_json.py"],
     visibility = ["//visibility:public"],
-    deps = ["//third_party/py/gflags"],
+    deps = [
+        ":utils",
+        "//third_party/py/gflags",
+    ],
 )
 
 py_test(
@@ -70,6 +91,24 @@ py_test(
     srcs = ["rewrite_json_test.py"],
     deps = [
         ":rewrite_json",
+    ],
+)
+
+py_binary(
+    name = "create_image_config",
+    srcs = ["create_image_config.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":utils",
+        "//third_party/py/gflags",
+    ],
+)
+
+py_test(
+    name = "create_image_config_test",
+    srcs = ["create_image_config_test.py"],
+    deps = [
+        ":create_image_config",
     ],
 )
 
@@ -84,6 +123,7 @@ py_binary(
     srcs = ["create_image.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":utils",
         "//third_party/py/gflags",
         "//tools/build_defs/pkg:archive",
     ],
@@ -94,9 +134,15 @@ py_binary(
     srcs = ["join_layers.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":utils",
         "//third_party/py/gflags",
         "//tools/build_defs/pkg:archive",
     ],
+)
+
+py_library(
+    name = "utils",
+    srcs = ["utils.py"],
 )
 
 filegroup(

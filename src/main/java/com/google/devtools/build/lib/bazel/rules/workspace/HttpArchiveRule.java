@@ -39,7 +39,7 @@ public class HttpArchiveRule implements RuleDefinition {
          A URL referencing an archive file containing a Bazel repository.
 
          <p>Archives of type .zip, .jar, .war, .tar.gz or .tgz are supported. There is no support
-         for authentication. Redirections are followed.</p>
+         for authentication. Redirections are followed, but not from HTTP to HTTPS.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("url", STRING).mandatory())
         /* <!-- #BLAZE_RULE(http_archive).ATTRIBUTE(sha256) -->
@@ -100,7 +100,7 @@ public class HttpArchiveRule implements RuleDefinition {
 <p>Downloads a Bazel repository as a compressed archive file,
   decompresses it, and makes its targets available for binding. The
   repository should already contain a BUILD file. If it does not, use
-  <a href="#new_http_archive">new_http_archive</a> instead.</p>
+  <a href="${link new_http_archive}">new_http_archive</a> instead.</p>
 
 <p>It supports Zip-formatted archives (with the .zip extension) and
 tarballs (.tar.gz and .tgz extensions).</p>

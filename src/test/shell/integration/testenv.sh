@@ -27,16 +27,14 @@ function put_bazel_on_path() {
   put_blaze_on_path "$@"
 }
 
-function write_default_bazelrc() {
-  write_default_blazerc "$@"
-}
-
 function put_bazel_on_path() {
   # do nothing as test-setup already does that
   true
 }
 
 function write_default_bazelrc() {
+  # Our tests use the static crosstool, so make it the default.
+  EXTRA_BAZELRC="build --crosstool_top=@bazel_tools//tools/cpp:default-toolchain"
   setup_bazelrc
 }
 

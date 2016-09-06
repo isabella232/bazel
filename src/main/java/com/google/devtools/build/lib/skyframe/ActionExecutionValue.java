@@ -14,13 +14,14 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Action;
-import com.google.devtools.build.lib.actions.Action.MiddlemanType;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactFile;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -37,6 +38,15 @@ import javax.annotation.Nullable;
 @Immutable
 @ThreadSafe
 public class ActionExecutionValue implements SkyValue {
+
+  private static final Function<Action, SkyKey> TO_KEY =
+      new Function<Action, SkyKey>() {
+        @Override
+        public SkyKey apply(Action action) {
+          return key(action);
+        }
+      };
+
   /*
   Concerning the data in this class:
 
@@ -55,7 +65,7 @@ public class ActionExecutionValue implements SkyValue {
    * The FileValues of all files for this ActionExecutionValue. These FileValues can be
    * read and checked quickly from the filesystem, unlike FileArtifactValues.
    */
-  private final ImmutableMap<ArtifactFile, FileValue> artifactFileData;
+  private final ImmutableMap<Artifact, FileValue> artifactData;
 
   /** The TreeArtifactValue of all TreeArtifacts output by this Action. */
   private final ImmutableMap<Artifact, TreeArtifactValue> treeArtifactData;
@@ -67,7 +77,7 @@ public class ActionExecutionValue implements SkyValue {
   private final ImmutableMap<Artifact, FileArtifactValue> additionalOutputData;
 
   /**
-   * @param artifactFileData Map from Artifacts to corresponding FileValues.
+   * @param artifactData Map from Artifacts to corresponding FileValues.
    * @param treeArtifactData All tree artifact data.
    * @param additionalOutputData Map from Artifacts to values if the FileArtifactValue for this
    *     artifact cannot be derived from the corresponding FileValue (see {@link
@@ -76,10 +86,10 @@ public class ActionExecutionValue implements SkyValue {
    *     to invalidate ActionExecutionValues.
    */
   ActionExecutionValue(
-      Map<? extends ArtifactFile, FileValue> artifactFileData,
+      Map<Artifact, FileValue> artifactData,
       Map<Artifact, TreeArtifactValue> treeArtifactData,
       Map<Artifact, FileArtifactValue> additionalOutputData) {
-    this.artifactFileData = ImmutableMap.<ArtifactFile, FileValue>copyOf(artifactFileData);
+    this.artifactData = ImmutableMap.<Artifact, FileValue>copyOf(artifactData);
     this.additionalOutputData = ImmutableMap.copyOf(additionalOutputData);
     this.treeArtifactData = ImmutableMap.copyOf(treeArtifactData);
   }
@@ -98,10 +108,10 @@ public class ActionExecutionValue implements SkyValue {
    * @return The data for each non-middleman output of this action, in the form of the {@link
    * FileValue} that would be created for the file if it were to be read from disk.
    */
-  FileValue getData(ArtifactFile file) {
-    Preconditions.checkState(!additionalOutputData.containsKey(file),
-        "Should not be requesting data for already-constructed FileArtifactValue: %s", file);
-    return artifactFileData.get(file);
+  FileValue getData(Artifact artifact) {
+    Preconditions.checkState(!additionalOutputData.containsKey(artifact),
+        "Should not be requesting data for already-constructed FileArtifactValue: %s", artifact);
+    return artifactData.get(artifact);
   }
 
   TreeArtifactValue getTreeArtifactValue(Artifact artifact) {
@@ -110,11 +120,11 @@ public class ActionExecutionValue implements SkyValue {
   }
 
   /**
-   * @return The map from {@link ArtifactFile}s to the corresponding {@link FileValue}s that would
+   * @return The map from {@link Artifact}s to the corresponding {@link FileValue}s that would
    * be returned by {@link #getData}. Should only be needed by {@link FilesystemValueChecker}.
    */
-  ImmutableMap<ArtifactFile, FileValue> getAllFileValues() {
-    return artifactFileData;
+  ImmutableMap<Artifact, FileValue> getAllFileValues() {
+    return artifactData;
   }
 
   /**
@@ -130,6 +140,10 @@ public class ActionExecutionValue implements SkyValue {
   @VisibleForTesting
   public static SkyKey key(Action action) {
     return SkyKey.create(SkyFunctions.ACTION_EXECUTION, action);
+  }
+
+  static Iterable<SkyKey> keys(Iterable<Action> actions) {
+    return Iterables.transform(actions, TO_KEY);
   }
 
   /**
@@ -158,7 +172,7 @@ public class ActionExecutionValue implements SkyValue {
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
-        .add("artifactFileData", artifactFileData)
+        .add("artifactData", artifactData)
         .add("treeArtifactData", treeArtifactData)
         .add("additionalOutputData", additionalOutputData)
         .toString();
@@ -173,13 +187,13 @@ public class ActionExecutionValue implements SkyValue {
       return false;
     }
     ActionExecutionValue o = (ActionExecutionValue) obj;
-    return artifactFileData.equals(o.artifactFileData)
+    return artifactData.equals(o.artifactData)
         && treeArtifactData.equals(o.treeArtifactData)
         && additionalOutputData.equals(o.additionalOutputData);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(artifactFileData, treeArtifactData, additionalOutputData);
+    return Objects.hashCode(artifactData, treeArtifactData, additionalOutputData);
   }
 }

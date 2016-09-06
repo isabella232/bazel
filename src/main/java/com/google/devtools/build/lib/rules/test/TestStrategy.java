@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.exec.SymlinkTreeHelper;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
+import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.util.io.FileWatcher;
 import com.google.devtools.build.lib.util.io.OutErr;
@@ -41,7 +42,6 @@ import com.google.devtools.common.options.Converters.RangeConverter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.OptionsClassProvider;
 import com.google.devtools.common.options.OptionsParsingException;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,7 +52,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import javax.annotation.Nullable;
 
 /**
@@ -192,7 +191,13 @@ public abstract class TestStrategy implements TestActionContext {
    */
   protected List<String> getArgs(
       String testScript, String coverageScript, TestRunnerAction testAction) {
-    List<String> args = Lists.newArrayList(testScript);
+    List<String> args = Lists.newArrayList();
+    if (OS.getCurrent() == OS.WINDOWS) {
+      args.add(testAction.getShExecutable().getPathString());
+      args.add("-c");
+      args.add("$0 $*");
+    }
+    args.add(testScript);
     TestTargetExecutionSettings execSettings = testAction.getExecutionSettings();
 
     List<String> execArgs = new ArrayList<>();
@@ -349,7 +354,8 @@ public abstract class TestStrategy implements TestActionContext {
       TestRunnerAction testAction,
       ActionExecutionContext actionExecutionContext,
       BinTools binTools,
-      PathFragment shExecutable)
+      ImmutableMap<String, String> shellEnvironment,
+      boolean enableRunfiles)
       throws ExecException, InterruptedException {
     TestTargetExecutionSettings execSettings = testAction.getExecutionSettings();
 
@@ -373,7 +379,12 @@ public abstract class TestStrategy implements TestActionContext {
     synchronized (execSettings.getInputManifest()) {
       Profiler.instance().logSimpleTask(startTime, ProfilerTask.WAIT, testAction);
       updateLocalRunfilesDirectory(
-          testAction, runfilesDir, actionExecutionContext, binTools, shExecutable);
+          testAction,
+          runfilesDir,
+          actionExecutionContext,
+          binTools,
+          shellEnvironment,
+          enableRunfiles);
     }
 
     return runfilesDir;
@@ -390,7 +401,8 @@ public abstract class TestStrategy implements TestActionContext {
       Path runfilesDir,
       ActionExecutionContext actionExecutionContext,
       BinTools binTools,
-      PathFragment shExecutable)
+      ImmutableMap<String, String> shellEnvironment,
+      boolean enableRunfiles)
       throws ExecException, InterruptedException {
     Executor executor = actionExecutionContext.getExecutor();
 
@@ -410,10 +422,15 @@ public abstract class TestStrategy implements TestActionContext {
         "Building runfiles directory for '" + execSettings.getExecutable().prettyPrint() + "'."));
 
     new SymlinkTreeHelper(
-            execSettings.getInputManifest().getExecPath(),
-            runfilesDir.relativeTo(executor.getExecRoot()), /* filesetTree= */
+            execSettings.getInputManifest().getPath(),
+            runfilesDir,
             false)
-        .createSymlinks(testAction, actionExecutionContext, binTools, shExecutable);
+        .createSymlinks(
+            testAction,
+            actionExecutionContext,
+            binTools,
+            shellEnvironment,
+            enableRunfiles);
 
     executor.getEventHandler().handle(Event.progress(testAction.getProgressMessage()));
   }

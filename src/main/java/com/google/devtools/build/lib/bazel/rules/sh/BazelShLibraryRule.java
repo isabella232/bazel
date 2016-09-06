@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.bazel.rules.sh.BazelShRuleClasses.ShRule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
+import com.google.devtools.build.lib.util.FileTypeSet;
 
 /**
  * Rule definition for the sh_library rule.
@@ -37,7 +38,7 @@ public final class BazelShLibraryRule implements RuleDefinition {
           or <code>.</code> command.
         </p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .override(attr("srcs", LABEL_LIST).allowedFileTypes(BazelShRuleClasses.SH_FILES))
+        .override(attr("srcs", LABEL_LIST).allowedFileTypes(FileTypeSet.ANY_FILE))
         .build();
   }
 
@@ -64,7 +65,7 @@ public final class BazelShLibraryRule implements RuleDefinition {
 </p>
 
 <p>
-  You can use the <a href="general.html#filegroup"><code>filegroup</code></a> rule to aggregate data
+  You can use the <a href="${link filegroup}"><code>filegroup</code></a> rule to aggregate data
   files.
 </p>
 

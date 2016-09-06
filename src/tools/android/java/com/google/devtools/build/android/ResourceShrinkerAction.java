@@ -21,6 +21,7 @@ import com.google.devtools.build.android.AndroidResourceProcessor.FlagAaptOption
 import com.google.devtools.build.android.Converters.ExistingPathConverter;
 import com.google.devtools.build.android.Converters.PathConverter;
 import com.google.devtools.build.android.Converters.PathListConverter;
+import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
@@ -38,7 +39,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -78,6 +81,13 @@ public class ResourceShrinkerAction {
         help = "Path to the shrunk jar from a Proguard run with shrinking enabled.")
     public Path shrunkJar;
 
+    @Option(name = "proguardMapping",
+        defaultValue = "null",
+        category = "input",
+        converter = PathConverter.class,
+        help = "Path to the Proguard obfuscation mapping of shrunkJar.")
+    public Path proguardMapping;
+
     @Option(name = "resources",
         defaultValue = "null",
         category = "input",
@@ -106,6 +116,13 @@ public class ResourceShrinkerAction {
         help = "A list of paths to the manifests of the dependencies.")
     public List<Path> dependencyManifests;
 
+    @Option(name = "resourcePackages",
+        defaultValue = "",
+        category = "input",
+        converter = CommaSeparatedOptionListConverter.class,
+        help = "A list of packages that resources have been generated for.")
+    public List<String> resourcePackages;
+
     @Option(name = "shrunkResourceApk",
         defaultValue = "null",
         category = "output",
@@ -119,6 +136,13 @@ public class ResourceShrinkerAction {
         converter = PathConverter.class,
         help = "Path to where the shrunk resource.ap_ should be written.")
     public Path shrunkResources;
+
+    @Option(name = "log",
+        defaultValue = "null",
+        category = "output",
+        converter = PathConverter.class,
+        help = "Path to where the shrinker log should be written.")
+    public Path log;
   }
 
   private static AaptConfigOptions aaptConfigOptions;
@@ -130,14 +154,14 @@ public class ResourceShrinkerAction {
     return manifestData.getPackage();
   }
 
-  private static List<String> getManifestPackages(Path primaryManifest, List<Path> otherManifests)
+  private static Set<String> getManifestPackages(Path primaryManifest, List<Path> otherManifests)
           throws SAXException, IOException, StreamException, ParserConfigurationException {
-    ImmutableList.Builder<String> manifestPackages = ImmutableList.builder();
+    Set<String> manifestPackages = new HashSet<>();
     manifestPackages.add(getManifestPackage(primaryManifest));
     for (Path manifest : otherManifests) {
       manifestPackages.add(getManifestPackage(manifest));
     }
-    return manifestPackages.build();
+    return manifestPackages;
   }
 
   public static void main(String[] args) throws Exception {
@@ -150,18 +174,18 @@ public class ResourceShrinkerAction {
     options = optionsParser.getOptions(Options.class);
 
     AndroidResourceProcessor resourceProcessor = new AndroidResourceProcessor(stdLogger);
-    try {
-      // Setup temporary working directories.
-      Path working = Files.createTempDirectory("resource_shrinker_tmp");
-      working.toFile().deleteOnExit();
-
+    // Setup temporary working directories.
+    try (ScopedTemporaryDirectory scopedTmp =
+        new ScopedTemporaryDirectory("resource_shrinker_tmp")) {
+      Path working = scopedTmp.getPath();
       final Path resourceFiles = working.resolve("resource_files");
 
       final Path shrunkResources = working.resolve("shrunk_resources");
 
       // Gather package list from manifests.
-      List<String> resourcePackages = getManifestPackages(
+      Set<String> resourcePackages = getManifestPackages(
           options.primaryManifest, options.dependencyManifests);
+      resourcePackages.addAll(options.resourcePackages);
 
       // Expand resource files zip into working directory.
       try (ZipInputStream zin = new ZipInputStream(
@@ -184,7 +208,9 @@ public class ResourceShrinkerAction {
           options.rTxt,
           options.shrunkJar,
           options.primaryManifest,
-          resourceFiles.resolve("res"));
+          options.proguardMapping,
+          resourceFiles.resolve("res"),
+          options.log);
 
       resourceShrinker.shrink(shrunkResources);
       logger.fine(String.format("Shrinking resources finished at %sms",
@@ -200,12 +226,14 @@ public class ResourceShrinkerAction {
           null /* packageForR */,
           new FlagAaptOptions(aaptConfigOptions),
           aaptConfigOptions.resourceConfigs,
+          ImmutableList.<String>of() /* splits */,
           new MergedAndroidData(
               shrunkResources, resourceFiles.resolve("assets"), options.primaryManifest),
           ImmutableList.<DependencyAndroidData>of() /* libraries */,
           null /* sourceOutputDir */,
           options.shrunkApk,
           null /* proguardOutput */,
+          null /* mainDexProguardOutput */,
           null /* publicResourcesOut */);
       if (options.shrunkResources != null) {
         resourceProcessor.createResourcesZip(shrunkResources, resourceFiles.resolve("assets"),

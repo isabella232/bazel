@@ -169,6 +169,13 @@ public class LexerTest {
   }
 
   @Test
+  public void testCrLf() throws Exception {
+    assertEquals("NEWLINE EOF", names(tokens("\r\n\r\n")));
+    assertEquals("NEWLINE INT NEWLINE EOF", names(tokens("\r\n\r1\r\r\n")));
+    assertEquals("COMMENT NEWLINE COMMENT NEWLINE EOF", names(tokens("# foo\r\n# bar\r\n")));
+  }
+
+  @Test
   public void testIntegers() throws Exception {
     // Detection of MINUS immediately following integer constant proves we
     // don't consume too many chars.
@@ -251,6 +258,24 @@ public class LexerTest {
                  values(tokens("\"ab\\ucd\"")));
     assertEquals("/some/path.txt:1: escape sequence not implemented: \\u",
                  lastError.toString());
+  }
+
+  @Test
+  public void testEscapedCrlfInString() throws Exception {
+    assertEquals("STRING(ab) NEWLINE EOF",
+                 values(tokens("'a\\\r\nb'")));
+    assertEquals("STRING(ab) NEWLINE EOF",
+                 values(tokens("\"a\\\r\nb\"")));
+    assertEquals("STRING(ab) NEWLINE EOF",
+                 values(tokens("\"\"\"a\\\r\nb\"\"\"")));
+    assertEquals("STRING(ab) NEWLINE EOF",
+                 values(tokens("'''a\\\r\nb'''")));
+    assertEquals("STRING(a\\\nb) NEWLINE EOF",
+                 values(tokens("r'a\\\r\nb'")));
+    assertEquals("STRING(a\\\nb) NEWLINE EOF",
+                 values(tokens("r\"a\\\r\nb\"")));
+    assertEquals("STRING(a\\\n\\\nb) NEWLINE EOF",
+                 values(tokens("r\"a\\\r\n\\\nb\"")));
   }
 
   @Test
@@ -338,6 +363,20 @@ public class LexerTest {
   }
 
   @Test
+  public void testIndentationWithCrLf() throws Exception {
+    assertEquals("INT(1) NEWLINE INDENT INT(2) NEWLINE OUTDENT NEWLINE EOF",
+        values(tokens("1\r\n  2\r\n")));
+    assertEquals("INT(1) NEWLINE INDENT INT(2) NEWLINE OUTDENT NEWLINE EOF",
+        values(tokens("1\r\n  2\r\n\r\n")));
+    assertEquals("INT(1) NEWLINE INDENT INT(2) NEWLINE INDENT INT(3) NEWLINE OUTDENT INT(4) "
+        + "NEWLINE OUTDENT INT(5) NEWLINE EOF",
+        values(tokens("1\r\n  2\r\n    3\r\n  4\r\n5")));
+    assertEquals(
+        "INT(1) NEWLINE INDENT INT(2) NEWLINE INT(3) NEWLINE OUTDENT INT(4) NEWLINE EOF",
+        values(tokens("1\r\n  2\r\n\r\n  3\r\n4")));
+  }
+
+  @Test
   public void testIndentationInsideParens() throws Exception {
     // Indentation is ignored inside parens:
     assertEquals("INT(1) LPAREN INT(2) INT(3) INT(4) INT(5) NEWLINE EOF",
@@ -393,6 +432,7 @@ public class LexerTest {
   public void testBackslash() throws Exception {
     assertEquals("IDENTIFIER IDENTIFIER NEWLINE EOF",
                  names(tokens("a\\\nb")));
+    assertEquals("IDENTIFIER IDENTIFIER NEWLINE EOF", names(tokens("a\\\r\nb")));
     assertEquals("IDENTIFIER ILLEGAL IDENTIFIER NEWLINE EOF",
                  names(tokens("a\\ b")));
     assertEquals("IDENTIFIER LPAREN INT RPAREN NEWLINE EOF",

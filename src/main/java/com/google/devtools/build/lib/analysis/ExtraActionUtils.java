@@ -16,7 +16,7 @@ package com.google.devtools.build.lib.analysis;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Multimap;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ExtraActionArtifactsProvider.ExtraArtifactSet;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
@@ -44,7 +44,7 @@ class ExtraActionUtils {
    * bookkeeping.
    */
   static ExtraActionArtifactsProvider createExtraActionProvider(
-      Set<Action> actionsWithoutExtraAction, RuleContext ruleContext) {
+      Set<ActionAnalysisMetadata> actionsWithoutExtraAction, RuleContext ruleContext) {
     BuildConfiguration configuration = ruleContext.getConfiguration();
     if (configuration.isHostConfiguration()) {
       return ExtraActionArtifactsProvider.EMPTY;
@@ -59,12 +59,12 @@ class ExtraActionUtils {
       ExtraActionsVisitor visitor =
           new ExtraActionsVisitor(ruleContext, computeMnemonicsToExtraActionMap(ruleContext));
 
-      // The action list is modified within the body of the loop by the addExtraAction() call,
+      // The action list is modified within the body of the loop by the maybeAddExtraAction() call,
       // thus the copy
-      for (Action action : ImmutableList.copyOf(
-          ruleContext.getAnalysisEnvironment().getRegisteredActions())) {
+      for (ActionAnalysisMetadata action :
+          ImmutableList.copyOf(ruleContext.getAnalysisEnvironment().getRegisteredActions())) {
         if (!actionsWithoutExtraAction.contains(action)) {
-          visitor.addExtraAction(action);
+          visitor.maybeAddExtraAction(action);
         }
       }
 

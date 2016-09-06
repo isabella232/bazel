@@ -16,9 +16,14 @@ package com.google.devtools.build.workspace.maven;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.devtools.build.lib.events.StoredEventHandler;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.Mockito;
+
+import java.util.Collection;
 
 /**
  * Tests for {@link Resolver}.
@@ -37,5 +42,30 @@ public class ResolverTest {
   public void testGetSha1UrlOnlyAtEOL() throws Exception {
     assertThat(Resolver.getSha1Url("http://example.pom/foo.pom", "jar"))
         .isEqualTo("http://example.pom/foo.jar.sha1");
+  }
+
+  @Test
+  public void testArtifactResolution() throws Exception {
+    StoredEventHandler handler = new StoredEventHandler();
+    DefaultModelResolver modelResolver = Mockito.mock(DefaultModelResolver.class);
+    Resolver resolver = new Resolver(handler, modelResolver);
+    resolver.resolveArtifact("x:y:1.2.3");
+    Collection<Rule> rules = resolver.getRules();
+    assertThat(rules).hasSize(1);
+    Rule rule = rules.iterator().next();
+    assertThat(rule.name()).isEqualTo("x_y");
+  }
+
+  @Test
+  public void testExtractSha1() {
+    assertThat(Resolver.extractSha1("5fe28b9518e58819180a43a850fbc0dd24b7c050"))
+        .isEqualTo("5fe28b9518e58819180a43a850fbc0dd24b7c050");
+
+    assertThat(Resolver.extractSha1("5fe28b9518e58819180a43a850fbc0dd24b7c050\n"))
+        .isEqualTo("5fe28b9518e58819180a43a850fbc0dd24b7c050");
+
+    assertThat(Resolver.extractSha1(
+         "83cd2cd674a217ade95a4bb83a8a14f351f48bd0  /home/maven/repository-staging/to-ibiblio/maven2/antlr/antlr/2.7.7/antlr-2.7.7.jar"))
+        .isEqualTo("83cd2cd674a217ade95a4bb83a8a14f351f48bd0");
   }
 }

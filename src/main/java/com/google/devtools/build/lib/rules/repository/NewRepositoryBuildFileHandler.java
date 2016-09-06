@@ -14,12 +14,16 @@
 
 package com.google.devtools.build.lib.rules.repository;
 
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.cmdline.LabelValidator;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
 import com.google.devtools.build.lib.skyframe.FileSymlinkException;
 import com.google.devtools.build.lib.skyframe.FileValue;
 import com.google.devtools.build.lib.skyframe.InconsistentFilesystemException;
+import com.google.devtools.build.lib.skyframe.PackageLookupValue;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.Path;
@@ -28,7 +32,6 @@ import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
-
 import java.io.IOException;
 
 /**
@@ -55,7 +58,7 @@ public class NewRepositoryBuildFileHandler {
    *     retrieved, written, or symlinked.
    */
   public boolean prepareBuildFile(Rule rule, Environment env)
-      throws RepositoryFunctionException {
+      throws RepositoryFunctionException, InterruptedException {
 
     AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
     boolean hasBuildFile = mapper.isAttributeValueExplicitlySpecified("build_file");
@@ -111,24 +114,55 @@ public class NewRepositoryBuildFileHandler {
   }
 
   private FileValue getBuildFileValue(Rule rule, Environment env)
-      throws RepositoryFunctionException {
+      throws RepositoryFunctionException, InterruptedException {
     AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
-    PathFragment buildFile = new PathFragment(mapper.get("build_file", Type.STRING));
-    Path buildFileTarget = workspacePath.getRelative(buildFile);
-    if (!buildFileTarget.exists()) {
-      throw new RepositoryFunctionException(
-          new EvalException(rule.getLocation(),
-              String.format("In %s the 'build_file' attribute does not specify an existing file "
-                  + "(%s does not exist)", rule, buildFileTarget)),
-          Transience.PERSISTENT);
-    }
-
+    String buildFileAttribute = mapper.get("build_file", Type.STRING);
     RootedPath rootedBuild;
-    if (buildFile.isAbsolute()) {
-      rootedBuild = RootedPath.toRootedPath(
-          buildFileTarget.getParentDirectory(), new PathFragment(buildFileTarget.getBaseName()));
+
+    if (LabelValidator.isAbsolute(buildFileAttribute)) {
+      try {
+        // Parse a label
+        Label label = Label.parseAbsolute(buildFileAttribute);
+        SkyKey pkgSkyKey = PackageLookupValue.key(label.getPackageIdentifier());
+        PackageLookupValue pkgLookupValue = (PackageLookupValue) env.getValue(pkgSkyKey);
+        if (pkgLookupValue == null) {
+          return null;
+        }
+        if (!pkgLookupValue.packageExists()) {
+          throw new RepositoryFunctionException(
+              new EvalException(rule.getLocation(),
+                  "Unable to load package for " + buildFileAttribute + ": not found."),
+              Transience.PERSISTENT);
+        }
+
+        // And now for the file
+        Path packageRoot = pkgLookupValue.getRoot();
+        rootedBuild = RootedPath.toRootedPath(packageRoot, label.toPathFragment());
+      } catch (LabelSyntaxException ex) {
+        throw new RepositoryFunctionException(
+            new EvalException(rule.getLocation(),
+                String.format("In %s the 'build_file' attribute does not specify a valid label: %s",
+                    rule, ex.getMessage())),
+            Transience.PERSISTENT);
+      }
     } else {
-      rootedBuild = RootedPath.toRootedPath(workspacePath, buildFile);
+      // TODO(dmarting): deprecate using a path for the build_file attribute.
+      PathFragment buildFile = new PathFragment(buildFileAttribute);
+      Path buildFileTarget = workspacePath.getRelative(buildFile);
+      if (!buildFileTarget.exists()) {
+        throw new RepositoryFunctionException(
+            new EvalException(rule.getLocation(),
+                String.format("In %s the 'build_file' attribute does not specify an existing file "
+                    + "(%s does not exist)", rule, buildFileTarget)),
+            Transience.PERSISTENT);
+      }
+
+      if (buildFile.isAbsolute()) {
+        rootedBuild = RootedPath.toRootedPath(
+            buildFileTarget.getParentDirectory(), new PathFragment(buildFileTarget.getBaseName()));
+      } else {
+        rootedBuild = RootedPath.toRootedPath(workspacePath, buildFile);
+      }
     }
     SkyKey buildFileKey = FileValue.key(rootedBuild);
     FileValue buildFileValue;
@@ -146,7 +180,7 @@ public class NewRepositoryBuildFileHandler {
       }
     } catch (IOException | FileSymlinkException | InconsistentFilesystemException e) {
       throw new RepositoryFunctionException(
-          new IOException("Cannot lookup " + buildFile + ": " + e.getMessage()),
+          new IOException("Cannot lookup " + buildFileAttribute + ": " + e.getMessage()),
           Transience.TRANSIENT);
     }
 

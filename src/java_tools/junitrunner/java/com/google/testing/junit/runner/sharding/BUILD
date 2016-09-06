@@ -14,8 +14,8 @@ java_library(
     deps = [
         "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/sharding/api",
         "//third_party:guava",
-        "//third_party:guice",
         "//third_party:jsr305",
+        "//third_party:jsr330_inject",
         "//third_party:junit4",
     ],
 )

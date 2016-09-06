@@ -14,19 +14,15 @@
 
 package com.google.testing.junit.runner.sharding;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-
-import org.junit.runner.Description;
-import org.junit.runner.manipulation.Filter;
-
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.runner.Description;
+import org.junit.runner.manipulation.Filter;
 
 /**
  * Implements the round-robin sharding strategy.
@@ -40,18 +36,18 @@ import java.util.Map;
  * sharding, but are done so that this filter can be compared in tests.
  */
 public final class RoundRobinShardingFilter extends Filter {
-
-  @VisibleForTesting
+  // VisibleForTesting
   final Map<Description, Integer> testToShardMap;
-  @VisibleForTesting
+  // VisibleForTesting
   final int shardIndex;
-  @VisibleForTesting
+  // VisibleForTesting
   final int totalShards;
 
   public RoundRobinShardingFilter(Collection<Description> testDescriptions,
       int shardIndex, int totalShards) {
-    Preconditions.checkArgument(shardIndex >= 0);
-    Preconditions.checkArgument(totalShards > shardIndex);
+    if (shardIndex < 0 || totalShards <= shardIndex) {
+      throw new IllegalArgumentException();
+    }
     this.testToShardMap = buildTestToShardMap(testDescriptions);
     this.shardIndex = shardIndex;
     this.totalShards = totalShards;
@@ -63,11 +59,11 @@ public final class RoundRobinShardingFilter extends Filter {
    */
   private static Map<Description, Integer> buildTestToShardMap(
       Collection<Description> testDescriptions) {
-    Map<Description, Integer> map = Maps.newHashMap();
+    Map<Description, Integer> map = new HashMap<>();
 
     // Sorting this list is incredibly important to correctness. Otherwise,
     // "shuffled" suites would break the sharding protocol.
-    List<Description> sortedDescriptions = Lists.newArrayList(testDescriptions);
+    List<Description> sortedDescriptions = new ArrayList<>(testDescriptions);
     Collections.sort(sortedDescriptions, new DescriptionComparator());
 
     // If we get two descriptions that are equal, the shard number for the second
@@ -75,9 +71,10 @@ public final class RoundRobinShardingFilter extends Filter {
     // same shard.
     int index = 0;
     for (Description description : sortedDescriptions) {
-      Preconditions.checkArgument(description.isTest(),
-          "Test suite should not be included in the set of tests to shard: %s",
-          description.getDisplayName());
+      if (!description.isTest()) {
+        throw new IllegalArgumentException("Test suite should not be included in the set of tests "
+            + "to shard: " + description.getDisplayName());
+      }
       map.put(description, index);
       index++;
     }
@@ -103,12 +100,11 @@ public final class RoundRobinShardingFilter extends Filter {
     return "round robin sharding filter";
   }
 
-  @VisibleForTesting
+  // VisibleForTesting
   static class DescriptionComparator implements Comparator<Description> {
     @Override
     public int compare(Description d1, Description d2) {
       return d1.getDisplayName().compareTo(d2.getDisplayName());
     }
   }
-
 }

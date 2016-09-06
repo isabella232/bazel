@@ -6,10 +6,10 @@ title: Macros
 
 ## Macro creation
 
-A macro is a function called from the BUILD file. It can instantiate native
-or Skylark rules. Macros don't give additional power, they are just used for
-encapsulation and code reuse. By the end of the loading phase, macros don't
-exist anymore, and Bazel sees only the set of rules they created.
+A macro is a function called from the BUILD file that can instantiate rules.
+Macros don't give additional power, they are just used for encapsulation and
+code reuse. By the end of the loading phase, macros don't exist anymore, and
+Bazel sees only the set of rules they created.
 
 Native rules can be instantiated from the `native` module, e.g.
 
@@ -27,9 +27,11 @@ macro), use the constant [PACKAGE_NAME](lib/globals.html#PACKAGE_NAME).
 
 ## Examples
 
+* [Macro creating rules](cookbook.md#macro).
+
 * [Macro creating native rules](cookbook.md#macro_native).
 
-* [Macro creating Skylark rules](cookbook.md#macro_skylark).
+* [Macro combining multiple rules](cookbook.md#macro_compound).
 
 ## Debugging
 
@@ -71,7 +73,7 @@ optional (don't give a default value).
 
 * In most cases, optional parameters should have a default value of `None`.
   `None` can be passed directly to native rules, which treat it the same as if
-  you had not passing any argument. Thus, there is no need to replace it with
+  you had not passed in any argument. Thus, there is no need to replace it with
   `0`, `False`, or `[]` for this purpose. Instead, the macro should defer to the
   rules it creates, as their defaults may be complex or may change over time.
   Additionally, a parameter that is explicitly set to its default value looks
@@ -99,7 +101,7 @@ extract this code to a function.
 The BUILD file will become simply:
 
 ```
-load("/path/generator", "file_generator")
+load("//path:generator.bzl", "file_generator")
 
 file_generator(
     name = "file",

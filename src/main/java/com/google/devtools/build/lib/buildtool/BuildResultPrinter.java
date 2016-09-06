@@ -30,7 +30,6 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.util.io.OutErr;
@@ -43,11 +42,9 @@ import java.util.Collection;
  */
 class BuildResultPrinter {
   private final CommandEnvironment env;
-  private final BlazeRuntime runtime;
 
   BuildResultPrinter(CommandEnvironment env) {
     this.env = env;
-    this.runtime = env.getRuntime();
   }
 
   /**
@@ -133,14 +130,16 @@ class BuildResultPrinter {
       // (ie, preprocessed and assembler files).
       OutputGroupProvider topLevelProvider =
           target.getProvider(OutputGroupProvider.class);
+      String productName = env.getRuntime().getProductName();
       if (topLevelProvider != null) {
         for (Artifact temp : topLevelProvider.getOutputGroup(OutputGroupProvider.TEMP_FILES)) {
           if (temp.getPath().exists()) {
             outErr.printErrLn("  See temp at "
                 + OutputDirectoryLinksUtils.getPrettyPath(temp.getPath(),
-                runtime.getWorkspaceName(),
-                runtime.getWorkspace(),
-                request.getBuildOptions().getSymlinkPrefix()));
+                    env.getWorkspaceName(),
+                    env.getWorkspace(),
+                    request.getBuildOptions().getSymlinkPrefix(productName),
+                    productName));
           }
         }
       }
@@ -155,9 +154,10 @@ class BuildResultPrinter {
   }
 
   private String formatArtifactForShowResults(Artifact artifact, BuildRequest request) {
+    String productName = env.getRuntime().getProductName();
     return "  " + OutputDirectoryLinksUtils.getPrettyPath(artifact.getPath(),
-        runtime.getWorkspaceName(), runtime.getWorkspace(),
-        request.getBuildOptions().getSymlinkPrefix());
+        env.getWorkspaceName(), env.getWorkspace(),
+        request.getBuildOptions().getSymlinkPrefix(productName), productName);
   }
 
   /**
@@ -224,7 +224,7 @@ class BuildResultPrinter {
         // files), OR when a user explicitly requests an output file but not
         // its rule.
         TransitiveInfoCollection generatingRule =
-            env.getView().getGeneratingRule((OutputFileConfiguredTarget) target);
+            ((OutputFileConfiguredTarget) target).getGeneratingRule();
         if (CollectionUtils.containsAll(
             generatingRule.getProvider(FileProvider.class).getFilesToBuild(),
             target.getProvider(FileProvider.class).getFilesToBuild())

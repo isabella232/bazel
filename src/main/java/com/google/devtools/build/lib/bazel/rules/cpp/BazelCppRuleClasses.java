@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.bazel.rules.cpp;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
-import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST_DICT;
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromFunctions;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromTemplates;
@@ -48,7 +47,6 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundLabel;
-import com.google.devtools.build.lib.packages.Attribute.Transition;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
@@ -60,11 +58,12 @@ import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.TriState;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain.RequiresXcodeConfigRule;
+import com.google.devtools.build.lib.rules.cpp.CcIncLibraryRule;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
 import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
+import com.google.devtools.build.lib.rules.cpp.CppRuleClasses.LipoTransition;
 import com.google.devtools.build.lib.util.FileTypeSet;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
 
 /**
  * Rule class definitions for C++ rules.
@@ -91,31 +90,12 @@ public class BazelCppRuleClasses {
       OBJECT_FILE,
       PIC_OBJECT_FILE);
 
-  static final String[] DEPS_ALLOWED_RULES = new String[] {
-      "cc_library",
-  };
-
-  /**
-   * Miscellaneous configuration transitions. It would be better not to have this - please don't add
-   * to it.
-   */
-  public static enum CppTransition implements Transition {
-    /**
-     * The configuration for LIPO information collection. Requesting this from a configuration that
-     * does not have lipo optimization enabled may result in an exception.
-     */
-    LIPO_COLLECTOR,
-
-    /**
-     * The corresponding (target) configuration.
-     */
-    TARGET_CONFIG_FOR_LIPO;
-
-    @Override
-    public boolean defaultsToSelf() {
-      return false;
-    }
-  }
+  static final String[] DEPS_ALLOWED_RULES =
+      new String[] {
+        "cc_inc_library",
+        "cc_library",
+        "objc_library",
+      };
 
   private static final RuleClass.Configurator<BuildConfiguration, Rule> LIPO_ON_DEMAND =
       new RuleClass.Configurator<BuildConfiguration, Rule>() {
@@ -129,7 +109,7 @@ public class BazelCppRuleClasses {
         return configuration;
       }
       BuildConfiguration toplevelConfig =
-          configuration.getConfiguration(CppTransition.TARGET_CONFIG_FOR_LIPO);
+          configuration.getConfiguration(LipoTransition.TARGET_CONFIG_FOR_LIPO);
       // If LIPO is enabled, override the default configuration.
       if (toplevelConfig != null
           && toplevelConfig.getFragment(CppConfiguration.class).isLipoOptimization()
@@ -159,7 +139,7 @@ public class BazelCppRuleClasses {
   public static final LateBoundLabel<BuildConfiguration> CC_TOOLCHAIN =
       new LateBoundLabel<BuildConfiguration>(CROSSTOOL_LABEL) {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return configuration.getFragment(CppConfiguration.class).getCcToolchainRuleLabel();
         }
@@ -168,7 +148,7 @@ public class BazelCppRuleClasses {
   public static final LateBoundLabel<BuildConfiguration> DEFAULT_MALLOC =
       new LateBoundLabel<BuildConfiguration>() {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return configuration.getFragment(CppConfiguration.class).customMalloc();
         }
@@ -177,28 +157,11 @@ public class BazelCppRuleClasses {
   public static final LateBoundLabel<BuildConfiguration> STL =
       new LateBoundLabel<BuildConfiguration>() {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return getStl(rule, configuration);
         }
       };
-
-  /**
-   * Implementation for the :lipo_context_collector attribute.
-   */
-  public static final LateBoundLabel<BuildConfiguration> LIPO_CONTEXT_COLLECTOR =
-      new LateBoundLabel<BuildConfiguration>() {
-    @Override
-    public Label getDefault(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
-      // This attribute connects a target to the LIPO context target configured with the
-      // lipo input collector configuration.
-      CppConfiguration cppConfiguration = configuration.getFragment(CppConfiguration.class);
-      return !cppConfiguration.isLipoContextCollector()
-          && (cppConfiguration.getLipoMode() == LipoMode.BINARY)
-          ? cppConfiguration.getLipoContextLabel()
-          : null;
-    }
-  };
 
   /**
    * Returns the STL prerequisite of the rule.
@@ -287,73 +250,6 @@ public class BazelCppRuleClasses {
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
-          /*<!-- #BLAZE_RULE($cc_decl_rule).ATTRIBUTE(abi)[DEPRECATED] -->
-           Platform-specific information string which is used in combination
-            with <code>abi_deps</code>.
-            Subject to <a href="make-variables.html">"Make" variable</a> substitution.
-            <p>
-              This string typically includes references to one or more "Make" variables of the form
-              <code>"$(VAR)"</code>. The default value is <code>"$(ABI)"</code>.
-            </p>
-            <p>
-              With <code>abi_deps</code>, the regular expression <code>patterns</code> will be
-              matched against this string.
-            </p>
-          <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-          // Deprecated in favor of configurable attributes.
-          .add(attr("abi", STRING).value("$(ABI)"))
-          /*<!-- #BLAZE_RULE($cc_decl_rule).ATTRIBUTE(abi_deps)[DEPRECATED] -->
-          The list of architecture-specific dependencies that are processed to create the target.
-          <i>(Dictionary mapping strings to lists of
-             <a href="../build-ref.html#labels">labels</a>; optional)</i>
-          <p><i><a href="common-definitions.html#configurable-attributes">
-            Configurable attributes</a> is a generalization
-            of the same concept that works for most rules and attributes. It deprecates
-            <code>abi_deps</code>, which we intend to ultimately remove. Use configurable
-            attributes over <code>abi_deps</code> whenever possible. When not possible, let
-            us know why.</i>
-          </p>
-          <p>Each entry in this dictionary follows the form of
-             <code>'pattern' : ['label1', 'label2', ...]</code>.  If the library's
-             <code>abi</code> attribute is an unanchored match for the regular
-             expression defined in <code>pattern</code>, the corresponding
-             labels are used as dependencies as if they had appeared in the
-             <code>deps</code> list.
-          </p>
-          <p>All pairs with a matching <code>pattern</code> will have their labels
-             used.  If no matches are found, no dependencies will be used.  The
-             ordering is irrelevant.
-          </p>
-          <p>If you want a <code>pattern</code> to not match a particular
-             <code>abi</code>, for example adding a dep on all non-k8 platforms, you
-             can use a negative lookahead pattern.  This would look like
-             <code>(?!k8).*</code>.
-          </p>
-          <p>If using <code>abi_deps</code>, do not provide <code>deps</code>.
-             Instead, use an entry with a <code>pattern</code> of <code>'.*'</code>
-             because that matches everything.  This is also how to share
-             dependencies across multiple different <code>abi</code> values.
-          </p>
-          <p>Typically, this mechanism is used to specify the appropriate set of
-             paths to pre-compiled libraries for the target architecture of the
-             current build.  Such paths are parameterized over "Make" variables
-             such as <code>$(ABI)</code>, <code>$(TARGET_CPU)</code>,
-             <code>$(C_COMPILER)</code>, etc, but since "Make" variables are not
-             allowed in <a href="../build-ref.html#labels">labels</a>, the
-             architecture-specific files cannot be specified via the normal
-             <code>srcs</code> attribute. Instead, this mechanism can be used
-             to declare architecture-specific dependent rules for the current
-             target that can specify the correct libraries in their own
-             <code>srcs</code>.
-          </p>
-          <p>This mechanism is also used to specify the appropriate set of
-             dependencies when some targets can't compile for the target architecture
-             of the current build.  In most cases, uses an <code>#ifdef</code>.
-             Only use <code>abi_deps</code> for more significant dependency changes.
-          </p>
-          <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-          // Deprecated in favor of configurable attributes.
-          .add(attr("abi_deps", LABEL_LIST_DICT))
           /*<!-- #BLAZE_RULE($cc_decl_rule).ATTRIBUTE(defines) -->
           List of defines to add to the compile line.
           Subject to <a href="make-variables.html">"Make" variable</a> substitution and
@@ -377,15 +273,11 @@ public class BazelCppRuleClasses {
              very careful, since this may have far-reaching effects.  When in doubt, add
              "-I" flags to <a href="#cc_binary.copts">COPTS</a> instead.
           </p>
-          <p>To use <code>-iquote</code> instead of <code>-isystem</code>, specify
-             <code>--use_isystem_for_includes=false</code> (the flag is undocumented and defaults
-             to <code>true</code>).
-          </p>
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
           .add(attr("includes", STRING_LIST))
           .add(attr(":lipo_context_collector", LABEL)
-              .cfg(CppTransition.LIPO_COLLECTOR)
-              .value(LIPO_CONTEXT_COLLECTOR)
+              .cfg(LipoTransition.LIPO_COLLECTOR)
+              .value(CppRuleClasses.LIPO_CONTEXT_COLLECTOR)
               .skipPrereqValidatorCheck())
           .build();
     }
@@ -464,7 +356,8 @@ public class BazelCppRuleClasses {
                   .allowedFileTypes(ALLOWED_SRC_FILES))
           /*<!-- #BLAZE_RULE($cc_rule).ATTRIBUTE(deps) -->
           The list of other libraries to be linked in to the binary target.
-          <p>These are always <code>cc_library</code> rules.</p>
+          <p>These can be <code>cc_library</code>, <code>cc_inc_library</code>, or
+          <code>objc_library</code> targets.</p>
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
           .override(
               attr("deps", LABEL_LIST)
@@ -677,7 +570,7 @@ public class BazelCppRuleClasses {
   private static final LateBoundLabel<BuildConfiguration> LIPO_CONTEXT =
       new LateBoundLabel<BuildConfiguration>() {
     @Override
-    public Label getDefault(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+    public Label resolve(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
       Label result = configuration.getFragment(CppConfiguration.class).getLipoContextLabel();
       return (rule == null || rule.getLabel().equals(result)) ? null : result;
     }
@@ -785,6 +678,29 @@ public class BazelCppRuleClasses {
           .build();
     }
   }
+  
+  /**
+   * Rule definition for the cc_inc_library class.
+   */
+  public static final class BazelCcIncLibraryRule implements RuleDefinition {
+    @Override
+    public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+      return builder
+        .requiresConfigurationFragments(CppConfiguration.class)
+        .add(attr(":cc_toolchain", LABEL).value(BazelCppRuleClasses.CC_TOOLCHAIN))
+        .add(attr(":stl", LABEL).value(BazelCppRuleClasses.STL))
+        .build();
+    }
+
+    @Override
+    public Metadata getMetadata() {
+      return RuleDefinition.Metadata.builder()
+          .name("cc_inc_library")
+          .ancestors(BaseRuleClasses.RuleBase.class, CcIncLibraryRule.class)
+          .factoryClass(BazelCcIncLibrary.class)
+          .build();
+    }
+  }  
 }
 
 /*<!-- #BLAZE_RULE (NAME = cc_binary, TYPE = BINARY, FAMILY = C / C++) -->
@@ -904,7 +820,56 @@ cc_library(
 
 <!-- #END_BLAZE_RULE -->*/
 
-
 /*<!-- #BLAZE_RULE (NAME = cc_test, TYPE = TEST, FAMILY = C / C++) -->
+
+<!-- #END_BLAZE_RULE -->*/
+
+/*<!-- #BLAZE_RULE (NAME = cc_inc_library, TYPE = LIBRARY, FAMILY = C / C++) -->
+
+<p>
+Bazel creates a subdirectory below
+<code>includes</code> (relative to WORKSPACE) for each such rule, and makes sure that all
+dependent rules have a corresponding <code>-I</code> directive to add this
+directory into the compiler's header file search path for all compilations. Note
+that if a rule has multiple <code>cc_inc_library</code> rules from the same
+package in its dependencies, the first such rule will take precedence.
+</p>
+
+<p>
+One use case for the <code>cc_inc_library</code> rule is to allow C++
+<code>#include</code> directives to work with external
+libraries that are placed in a version-specific subdirectory, without the
+version number. For example, it allows including a header file in
+<code>/library/v1/a.h</code> using the path
+<code>/library/a.h</code>. This is useful to avoid changing a lot of
+code when upgrading to a newer version. In this case, there should be one
+<code>cc_inc_library</code> rule per public target. Note that only files that are declared in the
+hdrs attribute are available with the rewritten path.
+</p>
+
+<p>
+In this case, the <code>cc_inc_library</code> represents the interface of the package, and should be
+the public top-level rule so that strict header inclusion checks can be performed.
+</p>
+
+<pre class="code">
+# This rule makes the header file v1/library.h available for inclusion via the
+# path /library/library.h.
+cc_inc_library(
+    name = "library",
+    hdrs = ["v1/library.h"],
+    prefix = "v1",
+    deps = [":library_impl"],
+)
+
+cc_library(
+    name = "library_impl",
+    srcs = [
+        "v1/library.c",
+        "v1/library.h",
+    ],
+    visibility = ["//visibility:private"],
+)
+</pre>
 
 <!-- #END_BLAZE_RULE -->*/

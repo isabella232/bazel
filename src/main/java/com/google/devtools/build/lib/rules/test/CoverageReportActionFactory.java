@@ -16,11 +16,13 @@ package com.google.devtools.build.lib.rules.test;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.events.EventHandler;
 
 import java.util.Collection;
 
@@ -41,16 +43,16 @@ public interface CoverageReportActionFactory {
    */
 
   public static final class CoverageReportActionsWrapper {
-    private final Action lcovWriteAction;
-    private final Action coverageReportAction;
+    private final ActionAnalysisMetadata lcovWriteAction;
+    private final ActionAnalysisMetadata coverageReportAction;
 
     public CoverageReportActionsWrapper (
-        Action lcovWriteAction, Action coverageReportAction) {
+        ActionAnalysisMetadata lcovWriteAction, ActionAnalysisMetadata coverageReportAction) {
       this.lcovWriteAction = lcovWriteAction;
       this.coverageReportAction = coverageReportAction;
     }
 
-    public ImmutableList<Action> getActions() {
+    public ImmutableList<ActionAnalysisMetadata> getActions() {
       return ImmutableList.of(lcovWriteAction, coverageReportAction);
     }
 
@@ -66,6 +68,8 @@ public interface CoverageReportActionFactory {
    */
   @Nullable
   CoverageReportActionsWrapper createCoverageReportActionsWrapper(
+      EventHandler eventHandler,
+      BlazeDirectories directories,
       Collection<ConfiguredTarget> targetsToTest,
       Iterable<Artifact> baselineCoverageArtifacts,
       ArtifactFactory artifactFactory, ArtifactOwner artifactOwner);

@@ -16,10 +16,10 @@ package com.google.devtools.build.lib.server;
 
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.LockingMode;
+import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.ShutdownMethod;
 import com.google.devtools.build.lib.server.RPCService.UnknownCommandException;
 import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.util.io.RecordingOutErr;
@@ -40,14 +40,15 @@ public class RPCServiceTest {
 
   private ServerCommand helloWorldCommand = new ServerCommand() {
     @Override
-    public int exec(List<String> args, OutErr outErr, long firstContactTime) throws Exception {
+    public int exec(List<String> args, OutErr outErr, LockingMode lockingMode,
+        String clientDescription, long firstContactTime) {
       outErr.printOut("Heelllloo....");
       outErr.printErr("...world!");
       return 42;
     }
     @Override
-    public boolean shutdown() {
-      return false;
+    public ShutdownMethod shutdown() {
+      return ShutdownMethod.NONE;
     }
   };
 
@@ -83,14 +84,14 @@ public class RPCServiceTest {
     RPCService service =
         new RPCService(new ServerCommand() {
             @Override
-            public int exec(List<String> args, OutErr outErr, long firstContactTime)
-                throws Exception {
+            public int exec(List<String> args, OutErr outErr, LockingMode lockingMode,
+                String clientDescription, long firstContactTime) {
               savedArgs.addAll(args);
               return 0;
             }
             @Override
-            public boolean shutdown() {
-              return false;
+            public ShutdownMethod shutdown() {
+              return ShutdownMethod.NONE;
             }
           });
 
@@ -102,17 +103,24 @@ public class RPCServiceTest {
 
   @Test
   public void testShutdownState() throws Exception {
-    assertFalse(service.isShutdown());
-    service.shutdown();
-    assertTrue(service.isShutdown());
-    service.shutdown();
-    assertTrue(service.isShutdown());
+    assertEquals(ShutdownMethod.NONE, service.getShutdown());
+    service.shutdown(ShutdownMethod.CLEAN);
+    assertEquals(ShutdownMethod.CLEAN, service.getShutdown());
+    service.shutdown(ShutdownMethod.EXPUNGE);
+    assertEquals(ShutdownMethod.CLEAN, service.getShutdown());
+  }
+
+  @Test
+  public void testExpungeShutdown() throws Exception {
+    assertEquals(ShutdownMethod.NONE, service.getShutdown());
+    service.shutdown(ShutdownMethod.EXPUNGE);
+    assertEquals(ShutdownMethod.EXPUNGE, service.getShutdown());
   }
 
   @Test
   public void testCommandFailsAfterShutdown() throws Exception {
     RecordingOutErr outErr = new RecordingOutErr();
-    service.shutdown();
+    service.shutdown(ShutdownMethod.CLEAN);
     try {
       service.executeRequest(Arrays.asList("blaze"), outErr, 0);
       fail();

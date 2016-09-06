@@ -15,6 +15,9 @@
 #include <errno.h>  // errno, ENAMETOOLONG
 #include <limits.h>
 #include <pwd.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>  // strerror
 #include <sys/socket.h>
 #include <sys/statfs.h>
@@ -34,6 +37,7 @@ namespace blaze {
 using blaze_util::die;
 using blaze_util::pdie;
 using std::string;
+using std::vector;
 
 string GetOutputRoot() {
   char buf[2048];
@@ -178,6 +182,91 @@ string GetDefaultHostJavabase() {
 
   // dirname dirname
   return blaze_util::Dirname(blaze_util::Dirname(javac_dir));
+}
+
+// Called from a signal handler!
+static bool GetStartTime(const string& pid, string* start_time) {
+  string statfile = "/proc/" + pid + "/stat";
+  string statline;
+
+  if (!ReadFile(statfile, &statline)) {
+    return false;
+  }
+
+  vector<string> stat_entries = blaze_util::Split(statline, ' ');
+  if (stat_entries.size() < 22) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "Format of stat file at %s is unknown", statfile.c_str());
+  }
+
+  // Start time since startup in jiffies. This combined with the PID should be
+  // unique.
+  *start_time = stat_entries[21];
+  return true;
+}
+
+void WriteSystemSpecificProcessIdentifier(const string& server_dir) {
+  string pid = ToString(getpid());
+
+  string start_time;
+  if (!GetStartTime(pid, &start_time)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "Cannot get start time of process %s", pid.c_str());
+  }
+
+  string start_time_file = blaze_util::JoinPath(server_dir, "server.starttime");
+  if (!WriteFile(start_time, start_time_file)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "Cannot write start time in server dir %s", server_dir.c_str());
+  }
+}
+
+// On Linux we use a combination of PID and start time to identify the server
+// process. That is supposed to be unique unless one can start more processes
+// than there are PIDs available within a single jiffy.
+//
+// This looks complicated, but all it does is an open(), then read(), then
+// close(), all of which are safe to call from signal handlers.
+bool KillServerProcess(
+    int pid, const string& output_base, const string& install_base) {
+  string start_time;
+  if (!GetStartTime(ToString(pid), &start_time)) {
+    // Cannot read PID file from /proc . Process died in the meantime?
+    fprintf(stderr, "Found stale PID file (pid=%d). "
+            "Server probably died abruptly, continuing...\n", pid);
+    return false;
+  }
+
+  string recorded_start_time;
+  bool file_present = ReadFile(
+      blaze_util::JoinPath(output_base, "server/server.starttime"),
+      &recorded_start_time);
+
+  // start time file got deleted, but PID file didn't. This is strange.
+  // Assume that this is an old Blaze process that doesn't know how to  write
+  // start time files yet.
+  if (file_present && recorded_start_time != start_time) {
+    // This is a different process.
+    return false;
+  }
+
+  // Kill the process and make sure it's dead before proceeding.
+  killpg(pid, SIGKILL);
+  int check_killed_retries = 10;
+  while (killpg(pid, 0) == 0) {
+    if (check_killed_retries-- > 0) {
+      sleep(1);
+    } else {
+      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+          "Attempted to kill stale blaze server process (pid=%d) using "
+          "SIGKILL, but it did not die in a timely fashion.", pid);
+    }
+  }
+  return true;
+}
+
+// Not supported.
+void ExcludePathFromBackup(const string &path) {
 }
 
 }  // namespace blaze

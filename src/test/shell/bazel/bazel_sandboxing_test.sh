@@ -164,7 +164,7 @@ EOF
 #!/bin/sh
 
 set -e
-cp $(dirname $0)/tool.runfiles/examples/genrule/datafile $1
+cp $(dirname $0)/tool.runfiles/__main__/examples/genrule/datafile $1
 echo "Tools work!"
 EOF
   chmod +x examples/genrule/tool.sh
@@ -416,6 +416,35 @@ function test_sandbox_add_path_workspace_child() {
     && fail "Non-hermetic genrule succeeded: examples/genrule:works (with additional path: WORKSPACE:/examples)" || true
 
   expect_log "Mounting subdirectory of WORKSPACE or OUTPUTBASE to sandbox is not allowed"
+}
+
+function test_sandbox_fail_command() {
+  mkdir -p "javatests/orange"
+  echo "java_test(name = 'Orange', srcs = ['Orange.java'])" > javatests/orange/BUILD
+  cat > javatests/orange/Orange.java <<EOF
+package orange;
+import junit.framework.TestCase;
+public class Orange extends TestCase {
+  public void testFails() { fail("juice"); }
+}
+EOF
+  bazel test --sandbox_debug --verbose_failures //javatests/orange:Orange >& $TEST_log \
+    && fail "Expected failure" || true
+
+  expect_log "Sandboxed execution failed, which may be legitimate"
+}
+
+function test_sandbox_different_nobody_uid() {
+  cat /etc/passwd | sed 's/\(^nobody:[^:]*:\)[0-9]*:[0-9]*/\15000:16000/g' > \
+      "${TEST_TMPDIR}/passwd"
+  unshare --user --mount --map-root-user -- bash - \
+      << EOF || fail "Hermetic genrule with different UID for nobody failed" \
+set -e
+set -u
+
+mount --bind ${TEST_TMPDIR}/passwd /etc/passwd
+bazel build examples/genrule:works &> ${TEST_log}
+EOF
 }
 
 # The test shouldn't fail if the environment doesn't support running it.

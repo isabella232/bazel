@@ -20,15 +20,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests for SkylarkNestedSet.
@@ -154,11 +152,6 @@ public class SkylarkNestedSetTest extends EvaluationTestCase {
   }
 
   @Test
-  public void testNsetBadCompositeItem() throws Exception {
-    checkEvalError("sets cannot contain items of type 'struct'", "set([struct(a='a')])");
-  }
-
-  @Test
   public void testNsetToString() throws Exception {
     eval("s = set() + [2, 4, 6] + [3, 4, 5]",
         "x = str(s)");
@@ -175,38 +168,6 @@ public class SkylarkNestedSetTest extends EvaluationTestCase {
   @SuppressWarnings("unchecked")
   private SkylarkNestedSet get(String varname) throws Exception {
     return (SkylarkNestedSet) lookup(varname);
-  }
-
-  @Test
-  public void testSetOuterOrderWins() throws Exception {
-    // The order of the outer set should define the final iteration order,
-    // no matter what the order of nested sets is
-    /*
-     * Set:     {4, 44, {1, 11, {2, 22}}}
-     * PRE:     4, 44, 1, 11, 2, 22     (Link)
-     * POST:    2, 22, 1, 11, 4, 44     (Stable)
-     *
-     */
-    Order[] orders = {Order.STABLE_ORDER, Order.LINK_ORDER};
-    String[] expected = {
-        "set([\"2\", \"22\", \"1\", \"11\", \"4\", \"44\"])",
-        "set([\"4\", \"44\", \"1\", \"11\", \"2\", \"22\"], order = \"link\")"};
-
-    for (int i = 0; i < 2; ++i) {
-      Order outerOrder = orders[i];
-      Order innerOrder = orders[1 - i];
-
-      SkylarkNestedSet inner1 =
-          new SkylarkNestedSet(innerOrder, Tuple.of("1", "11"), null);
-      SkylarkNestedSet inner2 =
-          new SkylarkNestedSet(innerOrder, Tuple.of("2", "22"), null);
-      SkylarkNestedSet innerUnion = new SkylarkNestedSet(inner1, inner2, null);
-      SkylarkNestedSet result =
-          new SkylarkNestedSet(outerOrder, Tuple.of("4", "44"), null);
-      result = new SkylarkNestedSet(result, innerUnion, null);
-
-      assertThat(result.toString()).isEqualTo(expected[i]);
-    }
   }
 
   @Test

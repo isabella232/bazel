@@ -16,6 +16,8 @@ package com.google.devtools.build.java.turbine.javac;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.buildjar.javac.plugins.dependency.StrictJavaDepsPlugin;
+import com.google.devtools.build.java.turbine.javac.JavacTurbineCompileRequest.Prune;
+import com.google.devtools.build.java.turbine.javac.JavacTurbineCompileResult.Status;
 import com.google.devtools.build.java.turbine.javac.ZipOutputFileManager.OutputFileObject;
 
 import com.sun.tools.javac.file.CacheFSInfo;
@@ -43,13 +45,13 @@ public class JavacTurbineCompiler {
   static JavacTurbineCompileResult compile(JavacTurbineCompileRequest request) throws IOException {
 
     Map<String, OutputFileObject> files = new LinkedHashMap<>();
-    boolean success;
+    Status status;
     StringWriter sw = new StringWriter();
     Context context = new Context();
 
     try (PrintWriter pw = new PrintWriter(sw)) {
       ZipOutputFileManager.preRegister(context, files);
-      setupContext(context, request.strictJavaDepsPlugin());
+      setupContext(context, request.strictJavaDepsPlugin(), request.prune());
       CacheFSInfo.preRegister(context);
 
       context.put(Log.outKey, pw);
@@ -70,6 +72,11 @@ public class JavacTurbineCompiler {
       fm.setContext(context);
       fm.handleOptions(args.getDeferredFileManagerOptions());
 
+      if (!args.validate()) {
+        return new JavacTurbineCompileResult(
+            ImmutableMap.<String, OutputFileObject>of(), Status.ERROR, sw, context);
+      }
+
       JavaCompiler comp = JavaCompiler.instance(context);
       if (request.strictJavaDepsPlugin() != null) {
         request.strictJavaDepsPlugin().init(context, Log.instance(context), comp);
@@ -77,17 +84,17 @@ public class JavacTurbineCompiler {
 
       try {
         comp.compile(args.getFileObjects(), args.getClassNames(), null);
-        success = comp.errorCount() == 0;
+        status = comp.errorCount() == 0 ? Status.OK : Status.ERROR;
       } catch (Throwable t) {
         t.printStackTrace(pw);
-        success = false;
+        status = Status.ERROR;
       }
     }
 
-    return new JavacTurbineCompileResult(ImmutableMap.copyOf(files), success, sw, context);
+    return new JavacTurbineCompileResult(ImmutableMap.copyOf(files), status, sw, context);
   }
 
-  static void setupContext(Context context, @Nullable StrictJavaDepsPlugin sjd) {
-    JavacTurbineJavaCompiler.preRegister(context, sjd);
+  static void setupContext(Context context, @Nullable StrictJavaDepsPlugin sjd, Prune prune) {
+    JavacTurbineJavaCompiler.preRegister(context, sjd, prune);
   }
 }

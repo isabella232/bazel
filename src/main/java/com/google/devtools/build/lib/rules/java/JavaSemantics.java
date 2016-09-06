@@ -14,11 +14,11 @@
 
 package com.google.devtools.build.lib.rules.java;
 
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromTemplates;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.LanguageDependentFragment.LibraryLanguage;
 import com.google.devtools.build.lib.analysis.OutputGroupProvider;
@@ -39,10 +39,8 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Compression;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.Collection;
 import java.util.List;
-
 import javax.annotation.Nullable;
 
 /**
@@ -70,6 +68,10 @@ public interface JavaSemantics {
       fromTemplates("%{name}_deploy.jar.unstripped");
   SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_MAP =
       fromTemplates("%{name}_proguard.map");
+  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_PROTO_MAP =
+      fromTemplates("%{name}_proguard.pbmap");
+  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_CONFIG =
+      fromTemplates("%{name}_proguard.config");
 
   SafeImplicitOutputsFunction JAVA_BINARY_DEPLOY_SOURCE_JAR =
       fromTemplates("%{name}_deploy-src.jar");
@@ -86,10 +88,13 @@ public interface JavaSemantics {
    */
   String JAVA_TOOLCHAIN_LABEL = "//tools/defaults:java_toolchain";
 
+  /** The java_toolchain.compatible_javacopts key for Java 7 javacopts */
+  public static final String JAVA7_JAVACOPTS_KEY = "java7";
+
   LateBoundLabel<BuildConfiguration> JAVA_TOOLCHAIN =
       new LateBoundLabel<BuildConfiguration>(JAVA_TOOLCHAIN_LABEL, JavaConfiguration.class) {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return configuration.getFragment(JavaConfiguration.class).getToolchainLabel();
         }
@@ -108,38 +113,6 @@ public interface JavaSemantics {
   String GENERATED_JARS_OUTPUT_GROUP =
       OutputGroupProvider.HIDDEN_OUTPUT_GROUP_PREFIX + "gen_jars";
 
-  /**
-   * Label of a pseudo-filegroup that contains the boot-classpath entries.
-   */
-  String JAVAC_BOOTCLASSPATH_LABEL = "//tools/defaults:javac_bootclasspath";
-
-  /**
-   * Label of the javac extdir used for compiling Java source code.
-   */
-  String JAVAC_EXTDIR_LABEL = "//tools/defaults:javac_extdir";
-
-  /**
-   * Label of the JavaBuilder JAR used for compiling Java source code.
-   */
-  String JAVABUILDER_LABEL = "//tools/defaults:javabuilder";
-
-  /**
-   * Label of the SingleJar JAR used for creating deploy jars.
-   */
-  String SINGLEJAR_LABEL = "//tools/defaults:singlejar";
-
-  /**
-   * Label of the GenClass JAR used for creating the jar for classes from sources generated from
-   * annotation processors.
-   */
-  String GENCLASS_LABEL = "//tools/defaults:genclass";
-
-  /**
-   * Label of pseudo-cc_binary that tells Blaze a java target's JAVABIN is never to be replaced by
-   * the contents of --java_launcher; only the JDK's launcher will ever be used.
-   */
-  Label JDK_LAUNCHER_LABEL = Label.parseAbsoluteUnchecked(
-      Constants.TOOLS_REPOSITORY + "//third_party/java/jdk:jdk_launcher");
 
   /**
    * Implementation for the :jvm attribute.
@@ -147,7 +120,7 @@ public interface JavaSemantics {
   LateBoundLabel<BuildConfiguration> JVM =
       new LateBoundLabel<BuildConfiguration>(JavaImplicitAttributes.JDK_LABEL, Jvm.class) {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return configuration.getFragment(Jvm.class).getJvmLabel();
         }
@@ -164,7 +137,7 @@ public interface JavaSemantics {
         }
 
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return configuration.getFragment(Jvm.class).getJvmLabel();
         }
@@ -177,8 +150,11 @@ public interface JavaSemantics {
   LateBoundLabel<BuildConfiguration> JAVA_LAUNCHER =
       new LateBoundLabel<BuildConfiguration>(JavaConfiguration.class) {
         @Override
-        public Label getDefault(Rule rule, AttributeMap attributes,
-            BuildConfiguration configuration) {
+        public Label resolve(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+          // don't read --java_launcher if this target overrides via a launcher attribute
+          if (attributes != null && attributes.isAttributeValueExplicitlySpecified("launcher")) {
+            return attributes.get("launcher", LABEL);
+          }
           return configuration.getFragment(JavaConfiguration.class).getJavaLauncherLabel();
         }
       };
@@ -186,7 +162,7 @@ public interface JavaSemantics {
   LateBoundLabelList<BuildConfiguration> JAVA_PLUGINS =
       new LateBoundLabelList<BuildConfiguration>() {
         @Override
-        public List<Label> getDefault(Rule rule, AttributeMap attributes,
+        public List<Label> resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return ImmutableList.copyOf(configuration.getPlugins());
         }
@@ -198,7 +174,7 @@ public interface JavaSemantics {
   LateBoundLabel<BuildConfiguration> PROGUARD =
       new LateBoundLabel<BuildConfiguration>(JavaConfiguration.class) {
         @Override
-        public Label getDefault(Rule rule,  AttributeMap attributes,
+        public Label resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return configuration.getFragment(JavaConfiguration.class).getProguardBinary();
         }
@@ -207,7 +183,7 @@ public interface JavaSemantics {
   LateBoundLabelList<BuildConfiguration> EXTRA_PROGUARD_SPECS =
       new LateBoundLabelList<BuildConfiguration>() {
         @Override
-        public List<Label> getDefault(Rule rule, AttributeMap attributes,
+        public List<Label> resolve(Rule rule, AttributeMap attributes,
             BuildConfiguration configuration) {
           return ImmutableList.copyOf(
               configuration.getFragment(JavaConfiguration.class).getExtraProguardSpecs());
@@ -217,11 +193,19 @@ public interface JavaSemantics {
   String IJAR_LABEL = "//tools/defaults:ijar";
 
   /**
-   * Verifies if the rule contains and errors.
+   * Verifies if the rule contains any errors.
    *
    * <p>Errors should be signaled through {@link RuleContext}.
    */
   void checkRule(RuleContext ruleContext, JavaCommon javaCommon);
+
+  /**
+   * Verifies there are no conflicts in protos.
+   *
+   * <p>Errors should be signaled through {@link RuleContext}.
+   */
+  void checkForProtoLibraryAndJavaProtoLibraryOnSameProto(
+      RuleContext ruleContext, JavaCommon javaCommon);
 
   /**
    * Returns the main class of a Java binary.
@@ -250,7 +234,7 @@ public interface JavaSemantics {
    * May add extra command line options to the Java compile command line.
    */
   void buildJavaCommandLine(Collection<Artifact> outputs, BuildConfiguration configuration,
-      CustomCommandLine.Builder result);
+      CustomCommandLine.Builder result, Label targetLabel);
 
 
   /**
@@ -298,10 +282,14 @@ public interface JavaSemantics {
    *
    * @return new main class
    */
-  String addCoverageSupport(JavaCompilationHelper helper,
+  String addCoverageSupport(
+      JavaCompilationHelper helper,
       JavaTargetAttributes.Builder attributes,
-      Artifact executable, Artifact instrumentationMetadata,
-      JavaCompilationArtifacts.Builder javaArtifactsBuilder, String mainClass);
+      Artifact executable,
+      Artifact instrumentationMetadata,
+      JavaCompilationArtifacts.Builder javaArtifactsBuilder,
+      String mainClass)
+      throws InterruptedException;
 
   /**
    * Return the JVM flags to be used in a Java binary.
@@ -354,12 +342,6 @@ public interface JavaSemantics {
   void addDependenciesForRunfiles(RuleContext ruleContext, Builder builder);
 
   /**
-   * Determines if we should enforce the use of the :java_launcher target to determine the java
-   * launcher artifact even if the --java_launcher option was not specified.
-   */
-  boolean forceUseJavaLauncherTarget(RuleContext ruleContext);
-
-  /**
    * Add a source artifact to a {@link JavaTargetAttributes.Builder}. It is called when a source
    * artifact is processed but is not matched by default patterns in the
    * {@link JavaTargetAttributes.Builder#addSourceArtifacts(Iterable)} method. The semantics can
@@ -396,4 +378,11 @@ public interface JavaSemantics {
    * @return main class (entry point) for the Java compiler.
    */
   String getJavaBuilderMainClass();
+
+
+  /**
+   * @return An artifact representing the protobuf-format version of the
+   * proguard mapping, or null if the proguard version doesn't support this.
+   */
+  Artifact getProtoMapping(RuleContext ruleContext) throws InterruptedException;
 }

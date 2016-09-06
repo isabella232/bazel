@@ -28,6 +28,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
@@ -37,7 +38,6 @@ import com.google.devtools.build.lib.syntax.GlobList;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.BinaryPredicate;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -71,7 +71,6 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   private final RuleClass ruleClass;
 
   private final AttributeContainer attributes;
-  private final RawAttributeMapper attributeMap;
 
   private RuleVisibility visibility;
 
@@ -79,22 +78,41 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
 
   private final Location location;
 
-  private final String workspaceName;
+  private final ImplicitOutputsFunction implicitOutputsFunction;
 
   // Initialized in the call to populateOutputFiles.
   private List<OutputFile> outputFiles;
   private ListMultimap<String, OutputFile> outputFileMap;
 
-  Rule(Package pkg, Label label, RuleClass ruleClass, Location location,
+  Rule(
+      Package pkg,
+      Label label,
+      RuleClass ruleClass,
+      Location location,
       AttributeContainer attributeContainer) {
+    this(
+        pkg,
+        label,
+        ruleClass,
+        location,
+        attributeContainer,
+        ruleClass.getDefaultImplicitOutputsFunction());
+  }
+
+  Rule(
+      Package pkg,
+      Label label,
+      RuleClass ruleClass,
+      Location location,
+      AttributeContainer attributeContainer,
+      ImplicitOutputsFunction implicitOutputsFunction) {
     this.pkg = Preconditions.checkNotNull(pkg);
     this.label = label;
     this.ruleClass = Preconditions.checkNotNull(ruleClass);
     this.location = Preconditions.checkNotNull(location);
     this.attributes = attributeContainer;
-    this.attributeMap = new RawAttributeMapper(pkg, ruleClass, label, attributes);
+    this.implicitOutputsFunction = implicitOutputsFunction;
     this.containsErrors = false;
-    this.workspaceName = pkg.getWorkspaceName();
   }
 
   void setVisibility(RuleVisibility visibility) {
@@ -115,13 +133,6 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
 
   void setContainsErrors() {
     this.containsErrors = true;
-  }
-
-  /**
-   * Returns the name of the workspace that this rule is in.
-   */
-  public String getWorkspaceName() {
-    return workspaceName;
   }
 
   @Override
@@ -205,7 +216,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    */
   public boolean hasConfigurableAttributes() {
     for (Attribute attribute : getAttributes()) {
-      if (attributeMap.isConfigurable(attribute.getName(), attribute.getType())) {
+      if (AbstractAttributeMapper.isConfigurable(this, attribute.getName(), attribute.getType())) {
         return true;
       }
     }
@@ -216,7 +227,10 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    * Returns true if the given attribute is configurable.
    */
   public boolean isConfigurableAttribute(String attributeName) {
-    return attributeMap.isConfigurable(attributeName, attributeMap.getAttributeType(attributeName));
+    Attribute attribute = ruleClass.getAttributeByNameMaybe(attributeName);
+    return attribute != null
+        ? AbstractAttributeMapper.isConfigurable(this, attributeName, attribute.getType())
+        : false;
   }
 
   /**
@@ -227,7 +241,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    */
   @Deprecated
   public Attribute getAttributeDefinition(String attrName) {
-    return attributeMap.getAttributeDefinition(attrName);
+    return ruleClass.getAttributeByNameMaybe(attrName);
   }
 
   /**
@@ -260,6 +274,10 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   @Override
   public Location getLocation() {
     return location;
+  }
+
+  public ImplicitOutputsFunction getImplicitOutputsFunction() {
+    return implicitOutputsFunction;
   }
 
   @Override
@@ -318,14 +336,14 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    * with the given name.
    */
   public boolean isAttributeValueExplicitlySpecified(String attrName) {
-    return attributeMap.isAttributeValueExplicitlySpecified(attrName);
+    return attributes.isAttributeValueExplicitlySpecified(attrName);
   }
 
   /**
    * Returns the location of the attribute definition for this rule, if known;
    * or the location of the whole rule otherwise. "attrName" need not be a
    * valid attribute name for this rule.
-   * 
+   *
    * <p>This method ignores whether the present rule was created by a macro or not.
    */
   public Location getAttributeLocationWithoutMacro(String attrName) {
@@ -380,37 +398,43 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     return false;
   }
 
-  /**
-   * Returns a new List instance containing all direct dependencies (all types).
-   */
-  public Collection<Label> getLabels() {
-    return getLabels(DependencyFilter.ALL_DEPS);
+  /** Returns a new List instance containing all direct dependencies (all types). */
+  public Collection<Label> getLabels() throws InterruptedException {
+    final List<Label> labels = Lists.newArrayList();
+    AggregatingAttributeMapper.of(this).visitLabels(new AttributeMap.AcceptsLabelAttribute() {
+      @Override
+      public void acceptLabelAttribute(Label label, Attribute attribute) {
+        labels.add(label);
+      }
+    });
+    return labels;
   }
 
   /**
-   * Returns a new Collection containing all Labels that match a given Predicate,
-   * not including outputs.
+   * Returns a new Collection containing all Labels that match a given Predicate, not including
+   * outputs.
    *
-   * @param predicate A binary predicate that determines if a label should be
-   *     included in the result. The predicate is evaluated with this rule and
-   *     the attribute that contains the label. The label will be contained in the
-   *     result iff (the predicate returned {@code true} and the labels are not outputs)
+   * @param predicate A binary predicate that determines if a label should be included in the
+   *     result. The predicate is evaluated with this rule and the attribute that contains the
+   *     label. The label will be contained in the result iff (the predicate returned {@code true}
+   *     and the labels are not outputs)
    */
-  public Collection<Label> getLabels(BinaryPredicate<? super Rule, Attribute> predicate) {
+  public Collection<Label> getLabels(BinaryPredicate<? super Rule, Attribute> predicate)
+      throws InterruptedException {
     return ImmutableSortedSet.copyOf(getTransitions(predicate).values());
   }
 
   /**
-   * Returns a new Multimap containing all attributes that match a given Predicate and
-   * corresponding labels, not including outputs.
+   * Returns a new Multimap containing all attributes that match a given Predicate and corresponding
+   * labels, not including outputs.
    *
-   * @param predicate A binary predicate that determines if a label should be
-   *     included in the result. The predicate is evaluated with this rule and
-   *     the attribute that contains the label. The label will be contained in the
-   *     result iff (the predicate returned {@code true} and the labels are not outputs)
+   * @param predicate A binary predicate that determines if a label should be included in the
+   *     result. The predicate is evaluated with this rule and the attribute that contains the
+   *     label. The label will be contained in the result iff (the predicate returned {@code true}
+   *     and the labels are not outputs)
    */
   public Multimap<Attribute, Label> getTransitions(
-      final BinaryPredicate<? super Rule, Attribute> predicate) {
+      final BinaryPredicate<? super Rule, Attribute> predicate) throws InterruptedException {
     final Multimap<Attribute, Label> transitions = HashMultimap.create();
     // TODO(bazel-team): move this to AttributeMap, too. Just like visitLabels, which labels should
     // be visited may depend on the calling context. We shouldn't implicitly decide this for
@@ -480,7 +504,8 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   private void populateImplicitOutputFiles(EventHandler eventHandler, Package.Builder pkgBuilder)
       throws InterruptedException {
     try {
-      for (String out : ruleClass.getImplicitOutputsFunction().getImplicitOutputs(attributeMap)) {
+      RawAttributeMapper attributeMap = RawAttributeMapper.of(this);
+      for (String out : implicitOutputsFunction.getImplicitOutputs(attributeMap)) {
         try {
           addOutputFile(pkgBuilder.createLabel(out), eventHandler);
         } catch (LabelSyntaxException e) {
@@ -625,7 +650,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   // null-valued, with a packageFragment that is null...). The bug that prompted
   // the introduction of this code is #2210848 (NullPointerException in
   // Package.checkForConflicts() ).
-  void checkForNullLabels() {
+  void checkForNullLabels() throws InterruptedException {
     AggregatingAttributeMapper.of(this).visitLabels(
         new AttributeMap.AcceptsLabelAttribute() {
           @Override
@@ -668,5 +693,12 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
       }
     }
     return labels.values();
+  }
+
+  /**
+   * @return The repository name.
+   */
+  public RepositoryName getRepository() {
+    return getLabel().getPackageIdentifier().getRepository();
   }
 }

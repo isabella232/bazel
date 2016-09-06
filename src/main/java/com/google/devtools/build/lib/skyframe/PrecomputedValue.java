@@ -18,9 +18,8 @@ import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
@@ -33,10 +32,8 @@ import com.google.devtools.build.skyframe.Injectable;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.util.Map;
 import java.util.UUID;
-
 import javax.annotation.Nullable;
 
 /**
@@ -89,19 +86,19 @@ public final class PrecomputedValue implements SkyValue {
   static final Precomputed<WorkspaceStatusAction> WORKSPACE_STATUS_KEY =
       new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "workspace_status_action"));
 
-  static final Precomputed<ImmutableList<Action>> COVERAGE_REPORT_KEY =
+  static final Precomputed<ImmutableList<ActionAnalysisMetadata>> COVERAGE_REPORT_KEY =
       new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "coverage_report_actions"));
-
-  static final Precomputed<TopLevelArtifactContext> TOP_LEVEL_CONTEXT =
-      new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "top_level_context"));
 
   public static final Precomputed<Map<BuildInfoKey, BuildInfoFactory>> BUILD_INFO_FACTORIES =
       new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "build_info_factories"));
 
-  static final Precomputed<BlazeDirectories> BLAZE_DIRECTORIES =
+  public static final Precomputed<BlazeDirectories> BLAZE_DIRECTORIES =
       new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "blaze_directories"));
 
-  static final Precomputed<ImmutableMap<Action, ConflictException>> BAD_ACTIONS =
+  public static final Precomputed<String> PRODUCT_NAME =
+      new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "product_name"));
+
+  static final Precomputed<ImmutableMap<ActionAnalysisMetadata, ConflictException>> BAD_ACTIONS =
       new Precomputed<>(SkyKey.create(SkyFunctions.PRECOMPUTED, "bad_actions"));
 
   public static final Precomputed<PathPackageLocator> PATH_PACKAGE_LOCATOR =
@@ -139,7 +136,7 @@ public final class PrecomputedValue implements SkyValue {
     return "<BuildVariable " + value + ">";
   }
 
-  public static final void dependOnBuildId(SkyFunction.Environment env) {
+  public static void dependOnBuildId(SkyFunction.Environment env) throws InterruptedException {
     BUILD_ID.get(env);
   }
 
@@ -167,7 +164,7 @@ public final class PrecomputedValue implements SkyValue {
      */
     @Nullable
     @SuppressWarnings("unchecked")
-    public T get(SkyFunction.Environment env) {
+    public T get(SkyFunction.Environment env) throws InterruptedException {
       PrecomputedValue value = (PrecomputedValue) env.getValue(key);
       if (value == null) {
         return null;

@@ -19,24 +19,23 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
-import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction.Builder;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.rules.android.AndroidResourcesProvider.ResourceContainer;
 import com.google.devtools.build.lib.rules.android.AndroidResourcesProvider.ResourceType;
-import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+
+import javax.annotation.Nullable;
 
 /**
  * Helper class to generate Android aapt actions.
@@ -68,15 +67,6 @@ public final class AndroidAaptActionHelper {
    */
   private Iterable<Artifact> getInputs() {
     if (inputs.isEmpty()) {
-      FilesToRunProvider toolRunner =
-          ruleContext.getExecutablePrerequisite("$android_tool_runner", Mode.HOST);
-      // TODO(bazel-team): When using getFilesToRun(), the middleman is
-      // not expanded. Fix by providing code to expand and use getFilesToRun here.
-      RunfilesSupport aaptRunnerRunfiles = toolRunner.getRunfilesSupport();
-      Preconditions.checkState(aaptRunnerRunfiles != null, toolRunner.getLabel());
-      // Note the below may be an overapproximation of the actual runfiles, due to "conditional
-      // artifacts" (see Runfiles.PruningManifest).
-      Iterables.addAll(inputs, aaptRunnerRunfiles.getRunfilesArtifactsWithoutMiddlemen());
       inputs.add(AndroidSdkProvider.fromRuleContext(ruleContext).getAndroidJar());
       inputs.add(manifest);
       Iterables.addAll(inputs, Iterables.concat(Iterables.transform(resourceContainers,
@@ -173,15 +163,19 @@ public final class AndroidAaptActionHelper {
 
   private List<String> createAaptCommand(String actionKind, Artifact output,
       Artifact rTxtOutput, boolean inlineConstants, String... outputArgs) {
+    return createAaptCommand(
+        actionKind, output, rTxtOutput, inlineConstants, Arrays.asList(outputArgs));
+  }
+
+  private List<String> createAaptCommand(String actionKind, Artifact output,
+      Artifact rTxtOutput, boolean inlineConstants, Collection<String> outputArgs) {
     List<String> args = new ArrayList<>();
     args.addAll(getArgs(output, actionKind, ResourceType.RESOURCES));
     args.addAll(getArgs(output, actionKind, ResourceType.ASSETS));
-    args.add(ruleContext.getExecutablePrerequisite("$android_tool_runner", Mode.HOST)
-        .getExecutable().getExecPathString());
     args.add(
         AndroidSdkProvider.fromRuleContext(ruleContext).getAapt().getExecutable().getExecPathString());
     args.add("package");
-    Collections.addAll(args, outputArgs);
+    args.addAll(outputArgs);
     // Allow overlay in case the same resource appears in more than one target,
     // giving precedence to the order in which they are found. This is needed
     // in order to support android library projects.
@@ -266,13 +260,25 @@ public final class AndroidAaptActionHelper {
         "_" + resourceType.getAttribute() + "_" + actionKind));
   }
 
-  public void createGenerateProguardAction(Artifact outputSpec) {
-    List<String> aaptCommand = createAaptCommand("proguard", outputSpec, null, true,
-        "-G", outputSpec.getExecPathString());
+  public void createGenerateProguardAction(
+      Artifact outputSpec, @Nullable Artifact outputMainDexSpec) {
+    ImmutableList.Builder<Artifact> outputs = ImmutableList.builder();
+    ImmutableList.Builder<String> aaptArgs = ImmutableList.builder();
+
+    outputs.add(outputSpec);
+    aaptArgs.add("-G").add(outputSpec.getExecPathString());
+
+    if (outputMainDexSpec != null) {
+      aaptArgs.add("-D").add(outputMainDexSpec.getExecPathString());
+      outputs.add(outputMainDexSpec);
+    }
+
+    List<String> aaptCommand =
+        createAaptCommand("proguard", outputSpec, null, true, aaptArgs.build());
     ruleContext.registerAction(new SpawnAction.Builder()
         .addInputs(getInputs())
         .addTool(AndroidSdkProvider.fromRuleContext(ruleContext).getAapt())
-        .addOutput(outputSpec)
+        .addOutputs(outputs.build())
         .setExecutable(
             ruleContext.getExecutablePrerequisite("$android_aapt_apk_generator", Mode.HOST))
         .setCommandLine(CommandLine.of(aaptCommand, false))

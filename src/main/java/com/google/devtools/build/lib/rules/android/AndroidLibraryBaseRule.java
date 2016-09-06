@@ -35,6 +35,15 @@ import com.google.devtools.build.lib.rules.java.ProguardLibraryRule;
  * Rule definition for the android_library rule.
  */
 public final class AndroidLibraryBaseRule implements RuleDefinition {
+  private final AndroidNeverlinkAspect androidNeverlinkAspect;
+  private final JackAspect jackAspect;
+
+  public AndroidLibraryBaseRule(AndroidNeverlinkAspect androidNeverlinkAspect,
+      JackAspect jackAspect) {
+    this.androidNeverlinkAspect = androidNeverlinkAspect;
+    this.jackAspect = jackAspect;
+  }
+
   @Override
   public RuleClass build(RuleClass.Builder builder, final RuleDefinitionEnvironment env) {
     return builder
@@ -55,7 +64,7 @@ public final class AndroidLibraryBaseRule implements RuleDefinition {
         </p>
         <p>If <code>srcs</code> is omitted, then any dependency specified in
         <code>deps</code> is exported from this rule (see
-        <a href="java.html#java_library.exports">java_library's exports</a> for more
+        <a href="${link java_library.exports}">java_library's exports</a> for more
         information about exporting dependencies). However, this behavior will be
         deprecated soon; try not to rely on it.
         </p>
@@ -73,10 +82,10 @@ public final class AndroidLibraryBaseRule implements RuleDefinition {
         .override(builder.copy("deps")
             .allowedRuleClasses(AndroidRuleClasses.ALLOWED_DEPENDENCIES)
             .allowedFileTypes()
-            .aspect(JackAspect.class)
-            .aspect(AndroidNeverlinkAspect.class))
+            .aspect(jackAspect)
+            .aspect(androidNeverlinkAspect))
         /* <!-- #BLAZE_RULE(android_library).ATTRIBUTE(exports) -->
-        The transitive closure of all rules reached via <code>exports</code> attributes
+        The closure of all rules reached via <code>exports</code> attributes
         are considered direct dependencies of any rule that directly depends on the
         target with <code>exports</code>.
         <p>The <code>exports</code> are not direct deps of the rule they belong to.</p>
@@ -84,8 +93,13 @@ public final class AndroidLibraryBaseRule implements RuleDefinition {
         .add(attr("exports", LABEL_LIST)
             .allowedRuleClasses(AndroidRuleClasses.ALLOWED_DEPENDENCIES)
             .allowedFileTypes(/*May not have files in exports!*/)
-            .aspect(JackAspect.class)
-            .aspect(AndroidNeverlinkAspect.class))
+            .aspect(jackAspect)
+            .aspect(androidNeverlinkAspect))
+        /* <!-- #BLAZE_RULE(android_library).ATTRIBUTE(exports_manifest) -->
+        Whether to export manifest entries to <code>android_binary</code> targets
+        that depend on this target. <code>uses-permissions</code> attributes are never exported.
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(attr("exports_manifest", BOOLEAN).value(false))
         .add(attr("alwayslink", BOOLEAN).undocumented("purely informational for now"))
         /* <!-- #BLAZE_RULE(android_library).ATTRIBUTE(neverlink) -->
         Only use this library for compilation and not at runtime.
@@ -104,7 +118,8 @@ public final class AndroidLibraryBaseRule implements RuleDefinition {
         they represent under <code>idl_import_root</code>. When <code>idl_import_root</code> is
         not specified, both <code>idl_parcelables</code> and <code>idl_srcs</code> must be at the
         path specified by their package under a Java root.</p>
-        <p>See <a href="#android_library_examples.idl_import_root">examples</a>.</p>
+        <p>See <a href="${link android_library#android_library_examples.idl_import_root}">
+        examples</a>.</p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("idl_import_root", STRING))
         /* <!-- #BLAZE_RULE(android_library).ATTRIBUTE(idl_srcs) -->
@@ -115,7 +130,7 @@ public final class AndroidLibraryBaseRule implements RuleDefinition {
         <code>android_library</code> target that depends on this library, directly
         or via its transitive closure.</p>
         <p>These files must be placed appropriately for the aidl compiler to find them.
-        See <a href="#android_library.idl_import_root">the description of idl_import_root</a>
+        See <a href="${link android_library.idl_import_root}">the description of idl_import_root</a>
         for information about what this means.</p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("idl_srcs", LABEL_LIST).direct_compile_time_input()
@@ -131,7 +146,7 @@ public final class AndroidLibraryBaseRule implements RuleDefinition {
         implementations of Parcelable), otherwise <code>idl_srcs</code> should be
         used.</p>
         <p>These files must be placed appropriately for the aidl compiler to find them.
-        See <a href="#android_library.idl_import_root">the description of idl_import_root</a>
+        See <a href="${link android_library.idl_import_root}">the description of idl_import_root</a>
         for information about what this means.</p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("idl_parcelables", LABEL_LIST).direct_compile_time_input()

@@ -15,14 +15,13 @@ package com.google.devtools.build.skyframe;
 
 import com.google.common.base.Function;
 import com.google.devtools.build.lib.concurrent.AbstractQueueVisitor;
+import com.google.devtools.build.lib.concurrent.ErrorHandler;
 import com.google.devtools.build.lib.concurrent.ExecutorParams;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DeletingNodeVisitor;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DirtyingNodeVisitor;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.InvalidationState;
-
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
-
 import javax.annotation.Nullable;
 
 /**
@@ -42,9 +41,14 @@ public final class EagerInvalidator {
    * long as the full upward transitive closure of the nodes is specified for deletion, the graph
    * remains consistent.
    */
-  public static void delete(DirtiableGraph graph, Iterable<SkyKey> diff,
-      EvaluationProgressReceiver invalidationReceiver, InvalidationState state,
-      boolean traverseGraph, DirtyKeyTracker dirtyKeyTracker) throws InterruptedException {
+  public static void delete(
+      InMemoryGraph graph,
+      Iterable<SkyKey> diff,
+      EvaluationProgressReceiver invalidationReceiver,
+      InvalidationState state,
+      boolean traverseGraph,
+      DirtyKeyTracker dirtyKeyTracker)
+      throws InterruptedException {
     DeletingNodeVisitor visitor =
         createDeletingVisitorIfNeeded(
             graph, diff, invalidationReceiver, state, traverseGraph, dirtyKeyTracker);
@@ -55,7 +59,7 @@ public final class EagerInvalidator {
 
   @Nullable
   static DeletingNodeVisitor createDeletingVisitorIfNeeded(
-      DirtiableGraph graph,
+      InMemoryGraph graph,
       Iterable<SkyKey> diff,
       EvaluationProgressReceiver invalidationReceiver,
       InvalidationState state,
@@ -69,7 +73,7 @@ public final class EagerInvalidator {
 
   @Nullable
   static DirtyingNodeVisitor createInvalidatingVisitorIfNeeded(
-      ThinNodeQueryableGraph graph,
+      QueryableGraph graph,
       Iterable<SkyKey> diff,
       EvaluationProgressReceiver invalidationReceiver,
       InvalidationState state,
@@ -83,13 +87,14 @@ public final class EagerInvalidator {
 
   @Nullable
   private static DirtyingNodeVisitor createInvalidatingVisitorIfNeeded(
-      ThinNodeQueryableGraph graph,
+      QueryableGraph graph,
       Iterable<SkyKey> diff,
       EvaluationProgressReceiver invalidationReceiver,
       InvalidationState state,
       DirtyKeyTracker dirtyKeyTracker,
       ForkJoinPool forkJoinPool,
-      boolean supportInterruptions) {
+      boolean supportInterruptions,
+      ErrorHandler errorHandler) {
     state.update(diff);
     return state.isEmpty()
         ? null
@@ -107,7 +112,7 @@ public final class EagerInvalidator {
    * an executor constructed with the provided factory.
    */
   public static void invalidate(
-      ThinNodeQueryableGraph graph,
+      QueryableGraph graph,
       Iterable<SkyKey> diff,
       EvaluationProgressReceiver invalidationReceiver,
       InvalidationState state,
@@ -127,7 +132,7 @@ public final class EagerInvalidator {
    * the provided {@link ForkJoinPool}.
    */
   public static void invalidate(
-      ThinNodeQueryableGraph graph,
+      QueryableGraph graph,
       Iterable<SkyKey> diff,
       EvaluationProgressReceiver invalidationReceiver,
       InvalidationState state,
@@ -143,17 +148,16 @@ public final class EagerInvalidator {
             state,
             dirtyKeyTracker,
             forkJoinPool,
-            supportInterruptions);
+            supportInterruptions,
+            ErrorHandler.NullHandler.INSTANCE);
     if (visitor != null) {
       visitor.run();
     }
   }
 
-  /**
-   * Invalidates given values and their upward transitive closure in the graph.
-   */
+  /** Invalidates given values and their upward transitive closure in the graph. */
   public static void invalidate(
-      DirtiableGraph graph,
+      QueryableGraph graph,
       Iterable<SkyKey> diff,
       EvaluationProgressReceiver invalidationReceiver,
       InvalidationState state,

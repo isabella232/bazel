@@ -42,13 +42,20 @@ import java.util.Stack;
  */
 public final class Lexer {
 
+  // Characters that can come immediately prior to an '=' character to generate
+  // a different token
   private static final Map<Character, TokenKind> EQUAL_TOKENS =
-      ImmutableMap.<Character, TokenKind>of(
-          '=', TokenKind.EQUALS_EQUALS,
-          '!', TokenKind.NOT_EQUALS,
-          '>', TokenKind.GREATER_EQUALS,
-          '<', TokenKind.LESS_EQUALS,
-          '+', TokenKind.PLUS_EQUALS);
+      ImmutableMap.<Character, TokenKind>builder()
+          .put('=', TokenKind.EQUALS_EQUALS)
+          .put('!', TokenKind.NOT_EQUALS)
+          .put('>', TokenKind.GREATER_EQUALS)
+          .put('<', TokenKind.LESS_EQUALS)
+          .put('+', TokenKind.PLUS_EQUALS)
+          .put('-', TokenKind.MINUS_EQUALS)
+          .put('*', TokenKind.STAR_EQUALS)
+          .put('/', TokenKind.SLASH_EQUALS)
+          .put('%', TokenKind.PERCENT_EQUALS)
+          .build();
 
   private final EventHandler eventHandler;
 
@@ -251,6 +258,8 @@ public final class Lexer {
       if (c == ' ') {
         indentLen++;
         pos++;
+      } else if (c == '\r') {
+        pos++;
       } else if (c == '\t') {
         indentLen += 8 - indentLen % 8;
         pos++;
@@ -340,13 +349,28 @@ public final class Lexer {
             // Insert \ and the following character.
             // As in Python, it means that a raw string can never end with a single \.
             literal.append('\\');
-            literal.append(buffer[pos]);
-            pos++;
+            if (pos + 1 < buffer.length && buffer[pos] == '\r' && buffer[pos + 1] == '\n') {
+              literal.append("\n");
+              pos += 2;
+            } else if (buffer[pos] == '\r' || buffer[pos] == '\n') {
+              literal.append("\n");
+              pos += 1;
+            } else {
+              literal.append(buffer[pos]);
+              pos += 1;
+            }
             break;
           }
           c = buffer[pos];
           pos++;
           switch (c) {
+            case '\r':
+              if (pos < buffer.length && buffer[pos] == '\n') {
+                pos += 1;
+                break;
+              } else {
+                break;
+              }
             case '\n':
               // ignore end of line character
               break;
@@ -451,9 +475,15 @@ public final class Lexer {
           return t;
         case '\\':
           if (isRaw) {
-            // skip the next character
-            pos++;
-            break;
+            if (pos + 1 < buffer.length && buffer[pos] == '\r' && buffer[pos + 1] == '\n') {
+              // There was a CRLF after the newline. No shortcut possible, since it needs to be
+              // transformed into a single LF.
+              pos = oldPos + 1;
+              return escapedStringLiteral(quot, true);
+            } else {
+              pos++;
+              break;
+            }
           }
           // oops, hit an escape, need to start over & build a new string buffer
           pos = oldPos + 1;
@@ -748,7 +778,9 @@ public final class Lexer {
       case '\\': {
         // Backslash character is valid only at the end of a line (or in a string)
         if (pos + 1 < buffer.length && buffer[pos] == '\n') {
-          pos++; // skip the end of line character
+          pos += 1;  // skip the end of line character
+        } else if (pos + 2 < buffer.length && buffer[pos] == '\r' && buffer[pos + 1] == '\n') {
+          pos += 2;  // skip the CRLF at the end of line
         } else {
           addToken(new Token(TokenKind.ILLEGAL, pos - 1, pos, Character.toString(c)));
         }

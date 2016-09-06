@@ -12,16 +12,8 @@ genrule(
     name = "javac-bootclasspath-locations",
     srcs = ["@bazel_tools//tools/jdk:bootclasspath"],
     outs = ["JavacBootclasspathLocations.java"],
-    cmd = """
-declare -a paths=($(SRCS)) && paths=($${paths[@]#$(GENDIR)/}) &&
-IFS=: &&
-cat > $@ <<EOF
-package com.google.devtools.build.java.bazel;
-public class JavacBootclasspathLocations {
-  public static final String BOOTCLASSPATH = "$${paths[*]}";
-}
-EOF
-""",
+    cmd = "$(location javac-bootclasspath-locations.sh) $@ $(GENDIR) '' $(SRCS)",
+    tools = ["javac-bootclasspath-locations.sh"],
 )
 
 # Provides java-level access to the canonical javac bootclasspath
@@ -43,15 +35,8 @@ genrule(
     name = "java-langtools-location",
     srcs = ["//third_party/java/jdk/langtools:javac_jar"],
     outs = ["JavaLangtoolsLocation.java"],
-    cmd = """
-path=$(SRCS) && path=$${path#$(GENDIR)/} &&
-cat > $@ <<EOF
-package com.google.devtools.build.java.bazel;
-public class JavaLangtoolsLocation {
-  public static final String FILE = "$${path}";
-}
-EOF
-""",
+    cmd = "$(location java-langtools-location.sh) $@ $(GENDIR) io_bazel/ $(SRCS)",
+    tools = ["java-langtools-location.sh"],
 )
 
 # Provides java-level access to the canonical javac jar
@@ -106,7 +91,11 @@ java_library(
     name = "JavaBuilderConfig",
     srcs = ["JavaBuilderConfig.java"],
     data = ["@bazel_tools//tools/jdk:JavaBuilder_deploy.jar"],
-    deps = [":javabuilder-javacopts-lib"],
+    deps = [
+        ":javabuilder-javacopts-lib",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:javac_options",
+        "//third_party:guava",
+    ],
 )
 
 # Provides programmatic access to a bazel compatible javac.
@@ -123,6 +112,7 @@ java_library(
         ":JavaBuilderConfig",
         ":JavaLangtools",
         ":JavacBootclasspath",
+        "//third_party:guava",
     ],
 )
 

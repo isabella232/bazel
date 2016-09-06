@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParams;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParamsProvider;
@@ -48,7 +49,8 @@ public class JavaImport implements RuleConfiguredTargetFactory {
   }
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext) throws InterruptedException {
+  public ConfiguredTarget create(RuleContext ruleContext)
+      throws InterruptedException, RuleErrorException {
     ImmutableList<Artifact> srcJars = ImmutableList.of();
     ImmutableList<Artifact> jars = collectJars(ruleContext);
     Artifact srcJar = ruleContext.getPrerequisiteArtifact("srcjar", Mode.TARGET);
@@ -80,10 +82,10 @@ public class JavaImport implements RuleConfiguredTargetFactory {
     NestedSet<LinkerInput> transitiveJavaNativeLibraries =
         common.collectTransitiveJavaNativeLibraries();
     boolean neverLink = JavaCommon.isNeverLink(ruleContext);
-    JavaCompilationArgs javaCompilationArgs = common.collectJavaCompilationArgs(
-        false, neverLink, compilationArgsFromSources(), false);
-    JavaCompilationArgs recursiveJavaCompilationArgs = common.collectJavaCompilationArgs(
-        true, neverLink, compilationArgsFromSources(), false);
+    JavaCompilationArgs javaCompilationArgs =
+        common.collectJavaCompilationArgs(false, neverLink, false);
+    JavaCompilationArgs recursiveJavaCompilationArgs =
+        common.collectJavaCompilationArgs(true, neverLink, false);
     NestedSet<Artifact> transitiveJavaSourceJars =
         collectTransitiveJavaSourceJars(ruleContext, srcJar);
     if (srcJar != null) {
@@ -94,7 +96,9 @@ public class JavaImport implements RuleConfiguredTargetFactory {
     // runfiles from this target or its dependencies.
     Runfiles runfiles = neverLink ?
         Runfiles.EMPTY :
-        new Runfiles.Builder(ruleContext.getWorkspaceName())
+        new Runfiles.Builder(
+            ruleContext.getWorkspaceName(),
+            ruleContext.getConfiguration().legacyExternalRunfiles())
             // add the jars to the runfiles
             .addArtifacts(javaArtifacts.getRuntimeJars())
             .addTargets(targets, RunfilesProvider.DEFAULT_RUNFILES)
@@ -222,9 +226,5 @@ public class JavaImport implements RuleConfiguredTargetFactory {
       compilationToRuntimeJarMap.put(ijar, jar);
     }
     return interfaceJarsBuilder.build();
-  }
-
-  private Iterable<SourcesJavaCompilationArgsProvider> compilationArgsFromSources() {
-    return ImmutableList.of();
   }
 }

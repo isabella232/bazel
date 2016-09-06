@@ -24,6 +24,10 @@
 #include "src/main/cpp/util/numbers.h"
 #include "src/main/cpp/util/strings.h"
 
+#ifndef PRODUCT_NAME
+#define PRODUCT_NAME "Bazel"
+#endif
+
 namespace blaze {
 
 void BlazeStartupOptions::Init() {
@@ -34,11 +38,12 @@ void BlazeStartupOptions::Init() {
     output_root = GetOutputRoot();
   }
 
-  string product = GetProductName();
-  blaze_util::ToLower(&product);
+  product_name = PRODUCT_NAME;
+  string product_name_lower = PRODUCT_NAME;
+  blaze_util::ToLower(&product_name_lower);
   output_user_root = blaze_util::JoinPath(
-      output_root, "_" + product + "_" + GetUserName());
-  deep_execroot = false;
+      output_root, "_" + product_name_lower + "_" + GetUserName());
+  deep_execroot = true;
   block_for_lock = true;
   host_jvm_debug = false;
   host_javabase = "";
@@ -47,9 +52,10 @@ void BlazeStartupOptions::Init() {
   allow_configurable_attributes = false;
   fatal_event_bus_exceptions = false;
   io_nice_level = -1;
-  // 3 hours (but only 5 seconds if used within a test)
-  max_idle_secs = testing ? 5 : (3 * 3600);
-  webstatus_port = 0;
+  // 3 hours (but only 15 seconds if used within a test)
+  max_idle_secs = testing ? 15 : (3 * 3600);
+  oom_more_eagerly_threshold = 100;
+  command_port = 0;
   oom_more_eagerly = false;
   watchfs = false;
   invocation_policy = NULL;
@@ -66,6 +72,7 @@ void BlazeStartupOptions::Copy(
     const BlazeStartupOptions &rhs, BlazeStartupOptions *lhs) {
   assert(lhs);
 
+  lhs->product_name = rhs.product_name;
   lhs->output_base = rhs.output_base;
   lhs->install_base = rhs.install_base;
   lhs->output_root = rhs.output_root;
@@ -80,8 +87,9 @@ void BlazeStartupOptions::Copy(
   lhs->batch_cpu_scheduling = rhs.batch_cpu_scheduling;
   lhs->io_nice_level = rhs.io_nice_level;
   lhs->max_idle_secs = rhs.max_idle_secs;
-  lhs->webstatus_port = rhs.webstatus_port;
+  lhs->command_port = rhs.command_port;
   lhs->oom_more_eagerly = rhs.oom_more_eagerly;
+  lhs->oom_more_eagerly_threshold = rhs.oom_more_eagerly_threshold;
   lhs->watchfs = rhs.watchfs;
   lhs->allow_configurable_attributes = rhs.allow_configurable_attributes;
   lhs->fatal_event_bus_exceptions = rhs.fatal_event_bus_exceptions;
@@ -212,6 +220,19 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
   } else if (GetNullaryOption(arg, "--noexperimental_oom_more_eagerly")) {
     oom_more_eagerly = false;
     option_sources["experimental_oom_more_eagerly"] = rcfile;
+  } else if ((value = GetUnaryOption(
+                  arg, next_arg,
+                  "--experimental_oom_more_eagerly_threshold")) != NULL) {
+    if (!blaze_util::safe_strto32(value, &oom_more_eagerly_threshold) ||
+        oom_more_eagerly_threshold < 0) {
+      blaze_util::StringPrintf(error,
+                               "Invalid argument to "
+                               "--experimental_oom_more_eagerly_threshold: "
+                               "'%s'.",
+                               value);
+      return blaze_exit_code::BAD_ARGV;
+    }
+    option_sources["experimental_oom_more_eagerly_threshold"] = rcfile;
   } else if (GetNullaryOption(arg, "--watchfs")) {
     watchfs = true;
     option_sources["watchfs"] = rcfile;
@@ -219,12 +240,13 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
     watchfs = false;
     option_sources["watchfs"] = rcfile;
   } else if ((value = GetUnaryOption(
-      arg, next_arg, "--use_webstatusserver")) != NULL) {
-    if (!blaze_util::safe_strto32(value, &webstatus_port) ||
-        webstatus_port < 0 || webstatus_port > 65535) {
+      arg, next_arg, "--command_port")) != NULL) {
+    if (!blaze_util::safe_strto32(value, &command_port) ||
+        command_port < -1 || command_port > 65535) {
       blaze_util::StringPrintf(error,
-          "Invalid argument to --use_webstatusserver: '%s'. "
-          "Must be a valid port number or 0 if server disabled.\n", value);
+          "Invalid argument to --command_port: '%s'. "
+          "Must be a valid port number or -1 to disable the gRPC server.\n",
+          value);
       return blaze_exit_code::BAD_ARGV;
     }
     option_sources["webstatusserver"] = rcfile;
@@ -250,7 +272,7 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
           error,
           "Unknown %s startup option: '%s'.\n"
           "  For more info, run '%s help startup_options'.",
-          GetProductName().c_str(), arg, GetProductName().c_str());
+          product_name.c_str(), arg, product_name.c_str());
       return blaze_exit_code::BAD_ARGV;
     }
   }

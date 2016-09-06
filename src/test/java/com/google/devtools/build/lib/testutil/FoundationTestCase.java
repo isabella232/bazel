@@ -24,38 +24,38 @@ import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
-
+import java.util.Set;
 import org.junit.After;
 import org.junit.Before;
-
-import java.util.Set;
 
 /**
  * A helper class for implementing tests of the "foundation" library.
  */
 public abstract class FoundationTestCase {
-
   protected Path rootDirectory;
-
   protected Path outputBase;
-
-  protected Path actionOutputBase;
 
   // May be overridden by subclasses:
   protected Reporter reporter;
   protected EventCollector eventCollector;
   protected Scratch scratch;
 
+  /** Returns the Scratch instance for this test case. */
+  public Scratch getScratch() {
+    return scratch;
+  }
+
   // Individual tests can opt-out of this handler if they expect an error, by
   // calling reporter.removeHandler(failFastHandler).
-  protected static final EventHandler failFastHandler = new EventHandler() {
-      @Override
-      public void handle(Event event) {
-        if (EventKind.ERRORS.contains(event.getKind())) {
-          fail(event.toString());
+  protected static final EventHandler failFastHandler =
+      new EventHandler() {
+        @Override
+        public void handle(Event event) {
+          if (EventKind.ERRORS.contains(event.getKind())) {
+            fail(event.toString());
+          }
         }
-      }
-    };
+      };
 
   protected static final EventHandler printHandler = new EventHandler() {
       @Override
@@ -70,7 +70,6 @@ public abstract class FoundationTestCase {
     outputBase = scratch.dir("/usr/local/google/_blaze_jrluser/FAKEMD5/");
     rootDirectory = scratch.dir("/workspace");
     scratch.file(rootDirectory.getRelative("WORKSPACE").getPathString());
-    actionOutputBase = scratch.dir("/usr/local/google/_blaze_jrluser/FAKEMD5/action_out/");
   }
 
   @Before
@@ -84,11 +83,6 @@ public abstract class FoundationTestCase {
   public final void clearInterrupts() throws Exception {
     Thread.interrupted(); // Clear any interrupt pending against this thread,
                           // so that we don't cause later tests to fail.
-  }
-
-  // To be overriden by sub classes if they want to disable loading.
-  protected boolean isLoadingEnabled() {
-    return true;
   }
 
   /**

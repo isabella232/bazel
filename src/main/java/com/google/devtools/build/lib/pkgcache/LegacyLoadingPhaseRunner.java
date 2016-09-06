@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.events.DelegatingEventHandler;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
@@ -35,7 +36,6 @@ import com.google.devtools.build.lib.packages.TestTargetUtils;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -43,7 +43,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
-
 import javax.annotation.Nullable;
 
 /**
@@ -213,7 +212,7 @@ public final class LegacyLoadingPhaseRunner extends LoadingPhaseRunner {
    */
   private LoadingResult doSimpleLoadingPhase(EventHandler eventHandler, EventBus eventBus,
       ResolvedTargets<Target> targets, ImmutableSet<Target> testsToRun, boolean keepGoing)
-          throws LoadingFailedException {
+          throws InterruptedException, LoadingFailedException {
     Stopwatch timer = preLoadingLogging(eventHandler);
 
     ImmutableSet<Target> targetsToLoad = targets.getTargets();
@@ -226,7 +225,7 @@ public final class LegacyLoadingPhaseRunner extends LoadingPhaseRunner {
 
     postLoadingLogging(eventBus, targetsToLoad, expandedResult.getTargets(), timer);
     return new LoadingResult(targets.hasError(), expandedResult.hasError(),
-        expandedResult.getTargets(), testsToRun);
+        expandedResult.getTargets(), testsToRun, getWorkspaceName(eventHandler));
   }
 
   /**
@@ -254,10 +253,9 @@ public final class LegacyLoadingPhaseRunner extends LoadingPhaseRunner {
     freeMemoryAfterLoading(callback, pkgLoader.getVisitedPackageNames());
 
     postLoadingLogging(eventBus, baseResult.getTargets(), expandedResult.getTargets(), timer);
-    LoadingResult loadingResult = new LoadingResult(targets.hasError(),
+    return new LoadingResult(targets.hasError(),
         !baseResult.isSuccesful() || expandedResult.hasError(),
-        expandedResult.getTargets(), testsToRun);
-    return loadingResult;
+        expandedResult.getTargets(), testsToRun, getWorkspaceName(eventHandler));
   }
 
   private Stopwatch preLoadingLogging(EventHandler eventHandler) {
@@ -349,8 +347,9 @@ public final class LegacyLoadingPhaseRunner extends LoadingPhaseRunner {
     }
   }
 
-  private Set<Target> getTargetsForLabels(
-      LoadedPackageProvider loadedPackageProvider, Collection<Label> labels) {
+  private static Set<Target> getTargetsForLabels(
+      LoadedPackageProvider loadedPackageProvider, Collection<Label> labels)
+      throws InterruptedException {
     Set<Target> result = new HashSet<>();
     for (Label label : labels) {
       try {
@@ -362,9 +361,13 @@ public final class LegacyLoadingPhaseRunner extends LoadingPhaseRunner {
     return result;
   }
 
-  private ImmutableSet<Target> filterErrorFreeTargets(EventHandler eventHandler,
-      EventBus eventBus, TransitivePackageLoader pkgLoader, Collection<Target> targetsToLoad,
-      ListMultimap<String, Label> labelsToLoadUnconditionally) throws LoadingFailedException {
+  private ImmutableSet<Target> filterErrorFreeTargets(
+      EventHandler eventHandler,
+      EventBus eventBus,
+      TransitivePackageLoader pkgLoader,
+      Collection<Target> targetsToLoad,
+      ListMultimap<String, Label> labelsToLoadUnconditionally)
+      throws LoadingFailedException, InterruptedException {
     // Error out if any of the labels needed for the configuration could not be loaded.
     Multimap<Label, Label> rootCauses = pkgLoader.getRootCauses();
     for (Map.Entry<String, Label> entry : labelsToLoadUnconditionally.entries()) {
@@ -443,6 +446,16 @@ public final class LegacyLoadingPhaseRunner extends LoadingPhaseRunner {
             "target '%s' is deprecated: %s", rule.getLabel(),
             NonconfigurableAttributeMapper.of(rule).get("deprecation", Type.STRING))));
       }
+    }
+  }
+
+  private String getWorkspaceName(EventHandler eventHandler)
+      throws InterruptedException, LoadingFailedException {
+    try {
+      return packageManager.getPackage(eventHandler, Label.EXTERNAL_PACKAGE_IDENTIFIER)
+          .getWorkspaceName();
+    } catch (NoSuchPackageException e) {
+      throw new LoadingFailedException("Failed to load //external package", e);
     }
   }
 }

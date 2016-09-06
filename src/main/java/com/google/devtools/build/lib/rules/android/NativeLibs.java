@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -26,23 +27,23 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParams;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
 import com.google.devtools.build.lib.rules.cpp.LinkerInput;
 import com.google.devtools.build.lib.rules.nativedeps.NativeDepsHelper;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /** Represents the collection of native libraries (.so) to be installed in the APK. */
+@Immutable
 public final class NativeLibs {
   public static final NativeLibs EMPTY =
       new NativeLibs(ImmutableMap.<String, Iterable<Artifact>>of(), null);
@@ -64,12 +65,16 @@ public final class NativeLibs {
       String nativeDepsFileName,
       Multimap<String, TransitiveInfoCollection> depsByArchitecture,
       Map<String, CcToolchainProvider> toolchainMap,
-      Map<String, BuildConfiguration> configurationMap) {
+      Map<String, BuildConfiguration> configurationMap)
+      throws InterruptedException {
     Map<String, Iterable<Artifact>> result = new LinkedHashMap<>();
     for (Map.Entry<String, Collection<TransitiveInfoCollection>> entry :
         depsByArchitecture.asMap().entrySet()) {
-      CcLinkParams linkParams = AndroidCommon.getCcLinkParamsStore(entry.getValue())
-          .get(/* linkingStatically */ true, /* linkShared */ true);
+      CcLinkParams linkParams =
+          AndroidCommon.getCcLinkParamsStore(
+                  entry.getValue(),
+                  ImmutableList.of("-Wl,-soname=lib" + ruleContext.getLabel().getName()))
+              .get(/* linkingStatically */ true, /* linkShared */ true);
 
       Artifact nativeDepsLibrary = NativeDepsHelper.maybeCreateAndroidNativeDepsAction(
           ruleContext, linkParams, configurationMap.get(entry.getKey()),
@@ -105,10 +110,12 @@ public final class NativeLibs {
   }
 
   // Map from architecture (CPU folder to place the library in) to libraries for that CPU
-  private final Map<String, Iterable<Artifact>> nativeLibs;
-  private final Artifact nativeLibsName;
+  private final ImmutableMap<String, Iterable<Artifact>> nativeLibs;
+  @Nullable private final Artifact nativeLibsName;
 
-  private NativeLibs(Map<String, Iterable<Artifact>> nativeLibs, Artifact nativeLibsName) {
+  @VisibleForTesting
+  NativeLibs(ImmutableMap<String, Iterable<Artifact>> nativeLibs,
+      @Nullable Artifact nativeLibsName) {
     this.nativeLibs = nativeLibs;
     this.nativeLibsName = nativeLibsName;
   }
@@ -147,14 +154,15 @@ public final class NativeLibs {
     Artifact inputManifest = AndroidBinary.getDxArtifact(ruleContext, "native_symlinks.manifest");
     ruleContext.registerAction(new SourceManifestAction.Builder(
         ruleContext.getWorkspaceName(), ManifestType.SOURCE_SYMLINKS, ruleContext.getActionOwner(),
-        inputManifest)
+        inputManifest, ruleContext.getConfiguration().legacyExternalRunfiles())
             .addRootSymlinks(symlinks)
             .build());
     Artifact outputManifest = AndroidBinary.getDxArtifact(ruleContext, "native_symlinks/MANIFEST");
     Artifact nativeLibsMiddleman =
         ruleContext.getAnalysisEnvironment().getMiddlemanFactory().createRunfilesMiddleman(
             ruleContext.getActionOwner(), null, symlinks.values(),
-            ruleContext.getConfiguration().getMiddlemanDirectory(), "android_native_libs");
+            ruleContext.getConfiguration().getMiddlemanDirectory(
+                ruleContext.getRule().getRepository()), "android_native_libs");
 
     ruleContext.registerAction(
         new SymlinkTreeAction(
@@ -163,7 +171,8 @@ public final class NativeLibs {
             nativeLibsMiddleman,
             outputManifest,
             false,
-            ruleContext.getConfiguration().getShExecutable()));
+            ruleContext.getConfiguration().getLocalShellEnvironment(),
+            ruleContext.getConfiguration().runfilesEnabled()));
     return outputManifest;
   }
 

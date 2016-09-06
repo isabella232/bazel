@@ -35,7 +35,6 @@ import java.util.UUID;
  * about rules to extra_actions.
  */
 public class PseudoAction<InfoType extends MessageLite> extends AbstractAction {
-
   private final UUID uuid;
   private final String mnemonic;
   private final GeneratedExtension<ExtraActionInfo, InfoType> infoExtension;
@@ -85,6 +84,7 @@ public class PseudoAction<InfoType extends MessageLite> extends AbstractAction {
   public static Artifact getDummyOutput(RuleContext ruleContext) {
     return ruleContext.getPackageRelativeArtifact(
         ruleContext.getLabel().getName() + ".extra_action_dummy",
-        ruleContext.getConfiguration().getGenfilesDirectory());
+        ruleContext.getConfiguration().getGenfilesDirectory(
+            ruleContext.getRule().getRepository()));
   }
 }

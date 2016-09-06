@@ -27,7 +27,6 @@ import com.google.common.escape.Escapers;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.syntax.ClassObject;
-import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkCallbackFunction;
@@ -35,7 +34,6 @@ import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -44,7 +42,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -97,7 +94,9 @@ public abstract class ImplicitOutputsFunction {
           attrValues.put(attrName, value == null ? Runtime.NONE : value);
         }
       }
-      ClassObject attrs = new SkylarkClassObject(attrValues, "Attribute '%s' either doesn't exist "
+      ClassObject attrs = SkylarkClassObjectConstructor.STRUCT.create(
+          attrValues,
+          "Attribute '%s' either doesn't exist "
           + "or uses a select() (i.e. could have multiple values)");
       try {
         ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();

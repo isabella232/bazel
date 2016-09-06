@@ -15,7 +15,6 @@ package com.google.devtools.build.skyframe;
 
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import javax.annotation.Nullable;
 
 /**
@@ -30,40 +29,6 @@ public interface ThinNodeEntry {
   /** Returns whether the entry has been built and is finished evaluating. */
   @ThreadSafe
   boolean isDone();
-
-  /**
-   * Returns an immutable iterable of the direct deps of this node. This method may only be called
-   * after the evaluation of this node is complete.
-   *
-   * <p>This method is not very efficient, but is only be called in limited circumstances --
-   * when the node is about to be deleted, or when the node is expected to have no direct deps (in
-   * which case the overhead is not so bad). It should not be called repeatedly for the same node,
-   * since each call takes time proportional to the number of direct deps of the node.
-   */
-  @ThreadSafe
-  Iterable<SkyKey> getDirectDeps();
-
-  /**
-   * Removes a reverse dependency.
-   */
-  @ThreadSafe
-  void removeReverseDep(SkyKey reverseDep);
-
-  /**
-   * Removes a reverse dependency.
-   *
-   * <p>May only be called if this entry is not done (i.e. {@link #isDone} is false) and
-   * {@param reverseDep} is present in {@link #getReverseDeps}
-   */
-  @ThreadSafe
-  void removeInProgressReverseDep(SkyKey reverseDep);
-
-  /**
-   * Returns a copy of the set of reverse dependencies. Note that this introduces a potential
-   * check-then-act race; {@link #removeReverseDep} may fail for a key that is returned here.
-   */
-  @ThreadSafe
-  Iterable<SkyKey> getReverseDeps();
 
   /**
    * Returns true if the entry is marked dirty, meaning that at least one of its transitive
@@ -81,23 +46,23 @@ public interface ThinNodeEntry {
 
   /**
    * Marks this node dirty, or changed if {@code isChanged} is true. The node is put in the
-   * just-created state. It will be re-evaluated if necessary during the evaluation phase,
-   * but if it has not changed, it will not force a re-evaluation of its parents.
+   * just-created state. It will be re-evaluated if necessary during the evaluation phase, but if it
+   * has not changed, it will not force a re-evaluation of its parents.
    *
-   * <p>{@code markDirty(b)} must not be called on an undone node if {@code isChanged() == b}.
-   * It is the caller's responsibility to ensure that this does not happen.  Calling
-   * {@code markDirty(false)} when {@code isChanged() == true} has no effect. The idea here is that
-   * the caller will only ever want to call {@code markDirty()} a second time if a transition from a
+   * <p>{@code markDirty(b)} must not be called on an undone node if {@code isChanged() == b}. It is
+   * the caller's responsibility to ensure that this does not happen. Calling {@code
+   * markDirty(false)} when {@code isChanged() == true} has no effect. The idea here is that the
+   * caller will only ever want to call {@code markDirty()} a second time if a transition from a
    * dirty-unchanged state to a dirty-changed state is required.
    *
-   * @return A {@link ThinNodeEntry.MarkedDirtyResult} if the node was previously clean, and
-   * {@code null} if it was already dirty. If it was already dirty, the caller should abort its
-   * handling of this node, since another thread is already dealing with it. Note the warning on
-   * {@link ThinNodeEntry.MarkedDirtyResult} regarding the collection it provides.
+   * @return A {@link ThinNodeEntry.MarkedDirtyResult} if the node was previously clean, and {@code
+   *     null} if it was already dirty. If it was already dirty, the caller should abort its
+   *     handling of this node, since another thread is already dealing with it. Note the warning on
+   *     {@link ThinNodeEntry.MarkedDirtyResult} regarding the collection it provides.
    */
   @Nullable
   @ThreadSafe
-  MarkedDirtyResult markDirty(boolean isChanged);
+  MarkedDirtyResult markDirty(boolean isChanged) throws InterruptedException;
 
   /**
    * Returned by {@link #markDirty} if that call changed the node from clean to dirty. Contains an

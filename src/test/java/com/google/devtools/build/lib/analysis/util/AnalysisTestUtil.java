@@ -20,6 +20,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionOwner;
@@ -44,11 +45,13 @@ import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.Key;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -58,6 +61,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Utilities for analysis phase tests.
@@ -76,7 +80,7 @@ public final class AnalysisTestUtil {
    * An {@link AnalysisEnvironment} implementation that collects the actions registered.
    */
   public static class CollectingAnalysisEnvironment implements AnalysisEnvironment {
-    private final List<Action> actions = new ArrayList<>();
+    private final List<ActionAnalysisMetadata> actions = new ArrayList<>();
     private final AnalysisEnvironment original;
 
     public CollectingAnalysisEnvironment(AnalysisEnvironment original) {
@@ -88,14 +92,14 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public void registerAction(Action... actions) {
+    public void registerAction(ActionAnalysisMetadata... actions) {
       Collections.addAll(this.actions, actions);
       original.registerAction(actions);
     }
 
     /** Calls {@link MutableActionGraph#registerAction} for all collected actions. */
     public void registerWith(MutableActionGraph actionGraph) {
-      for (Action action : actions) {
+      for (ActionAnalysisMetadata action : actions) {
         try {
           actionGraph.registerAction(action);
         } catch (ActionConflictException e) {
@@ -145,12 +149,12 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Action getLocalGeneratingAction(Artifact artifact) {
+    public ActionAnalysisMetadata getLocalGeneratingAction(Artifact artifact) {
       return original.getLocalGeneratingAction(artifact);
     }
 
     @Override
-    public Iterable<Action> getRegisteredActions() {
+    public Iterable<ActionAnalysisMetadata> getRegisteredActions() {
       return original.getRegisteredActions();
     }
 
@@ -160,18 +164,20 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Artifact getStableWorkspaceStatusArtifact() {
+    public Artifact getStableWorkspaceStatusArtifact() throws InterruptedException {
       return original.getStableWorkspaceStatusArtifact();
     }
 
     @Override
-    public Artifact getVolatileWorkspaceStatusArtifact() {
+    public Artifact getVolatileWorkspaceStatusArtifact() throws InterruptedException {
       return original.getVolatileWorkspaceStatusArtifact();
     }
 
     @Override
-    public ImmutableList<Artifact> getBuildInfo(RuleContext ruleContext, BuildInfoKey key) {
-      return original.getBuildInfo(ruleContext, key);
+    public ImmutableList<Artifact> getBuildInfo(
+        RuleContext ruleContext, BuildInfoKey key, BuildConfiguration config)
+        throws InterruptedException {
+      return original.getBuildInfo(ruleContext, key, config);
     }
 
     @Override
@@ -185,7 +191,8 @@ public final class AnalysisTestUtil {
     }
   }
 
-  public static class DummyWorkspaceStatusAction extends WorkspaceStatusAction {
+  @Immutable
+  public static final class DummyWorkspaceStatusAction extends WorkspaceStatusAction {
     private final String key;
     private final Artifact stableStatus;
     private final Artifact volatileStatus;
@@ -299,7 +306,7 @@ public final class AnalysisTestUtil {
 
   public static class StubAnalysisEnvironment implements AnalysisEnvironment {
     @Override
-    public void registerAction(Action... action) {
+    public void registerAction(ActionAnalysisMetadata... action) {
     }
 
     @Override
@@ -338,7 +345,7 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Iterable<Action> getRegisteredActions() {
+    public Iterable<ActionAnalysisMetadata> getRegisteredActions() {
       return ImmutableList.of();
     }
 
@@ -368,7 +375,8 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public ImmutableList<Artifact> getBuildInfo(RuleContext ruleContext, BuildInfoKey key) {
+    public ImmutableList<Artifact> getBuildInfo(RuleContext ruleContext, BuildInfoKey key,
+        BuildConfiguration config) {
       return ImmutableList.of();
     }
 
@@ -384,6 +392,12 @@ public final class AnalysisTestUtil {
   };
 
   /**
+   * Matches the output path prefix contributed by a C++ configuration fragment.
+   */
+  public static final Pattern OUTPUT_PATH_CPP_PREFIX_PATTERN =
+      Pattern.compile("(?<=" + TestConstants.PRODUCT_NAME + "-out/)gcc[^/]*-grte-\\w+-");
+
+  /**
    * Given a collection of Artifacts, returns a corresponding set of strings of
    * the form "{root} {relpath}", such as "bin x/libx.a".  Such strings make
    * assertions easier to write.
@@ -392,17 +406,44 @@ public final class AnalysisTestUtil {
    */
   public static Set<String> artifactsToStrings(BuildConfigurationCollection configurations,
       Iterable<Artifact> artifacts) {
-    Map<Root, String> rootMap = new HashMap<>();
+    Map<String, String> rootMap = new HashMap<>();
     BuildConfiguration targetConfiguration =
         Iterables.getOnlyElement(configurations.getTargetConfigurations());
-    rootMap.put(targetConfiguration.getBinDirectory(), "bin");
-    rootMap.put(targetConfiguration.getGenfilesDirectory(), "genfiles");
-    rootMap.put(targetConfiguration.getMiddlemanDirectory(), "internal");
+    rootMap.put(
+        targetConfiguration.getBinDirectory(RepositoryName.MAIN).getPath().toString(),
+        "bin");
+    rootMap.put(
+        targetConfiguration.getGenfilesDirectory(RepositoryName.MAIN).getPath().toString(),
+        "genfiles");
+    rootMap.put(
+        targetConfiguration.getMiddlemanDirectory(RepositoryName.MAIN).getPath().toString(),
+        "internal");
 
     BuildConfiguration hostConfiguration = configurations.getHostConfiguration();
-    rootMap.put(hostConfiguration.getBinDirectory(), "bin(host)");
-    rootMap.put(hostConfiguration.getGenfilesDirectory(), "genfiles(host)");
-    rootMap.put(hostConfiguration.getMiddlemanDirectory(), "internal(host)");
+    rootMap.put(
+        hostConfiguration.getBinDirectory(RepositoryName.MAIN).getPath().toString(),
+        "bin(host)");
+    rootMap.put(
+        hostConfiguration.getGenfilesDirectory(RepositoryName.MAIN).getPath().toString(),
+        "genfiles(host)");
+    rootMap.put(
+        hostConfiguration.getMiddlemanDirectory(RepositoryName.MAIN).getPath().toString(),
+        "internal(host)");
+
+    if (targetConfiguration.useDynamicConfigurations()) {
+      // With dynamic configurations, the output paths that bin, genfiles, etc. refer to may
+      // or may not include the C++-contributed pieces. e.g. they may be
+      // bazel-out/gcc-X-glibc-Y-k8-fastbuild/ or they may be bazel-out/fastbuild/. This code
+      // adds support for the non-C++ case, too.
+      Map<String, String> prunedRootMap = new HashMap<>();
+      for (Map.Entry<String, String> root : rootMap.entrySet()) {
+        prunedRootMap.put(
+            OUTPUT_PATH_CPP_PREFIX_PATTERN.matcher(root.getKey()).replaceFirst(""),
+            root.getValue()
+        );
+      }
+      rootMap.putAll(prunedRootMap);
+    }
 
     Set<String> files = new LinkedHashSet<>();
     for (Artifact artifact : artifacts) {
@@ -410,7 +451,7 @@ public final class AnalysisTestUtil {
       if (root.isSourceRoot()) {
         files.add("src " + artifact.getRootRelativePath());
       } else {
-        String name = rootMap.get(root);
+        String name = rootMap.get(root.getPath().toString());
         if (name == null) {
           name = "/";
         }

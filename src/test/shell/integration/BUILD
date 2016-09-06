@@ -1,6 +1,12 @@
 package(default_visibility = ["//visibility:private"])
 
 filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//src/test/shell:__pkg__"],
+)
+
+filegroup(
     name = "test-deps",
     testonly = 1,
     srcs = [
@@ -28,6 +34,21 @@ sh_test(
     name = "experimental_ui_test",
     size = "medium",
     srcs = ["experimental_ui_test.sh"],
+    data = [":test-deps"],
+    shard_count = 6,
+)
+
+sh_test(
+    name = "ui_test",
+    size = "medium",
+    srcs = ["ui_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "rc_options_test",
+    size = "medium",
+    srcs = ["rc_options_test.sh"],
     data = [":test-deps"],
 )
 

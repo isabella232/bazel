@@ -19,7 +19,6 @@ import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.syntax.Type;
-
 import javax.annotation.Nullable;
 
 /**
@@ -137,7 +136,7 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
   }
 
   @Override
-  public void visitLabels(AcceptsLabelAttribute observer) {
+  public void visitLabels(AcceptsLabelAttribute observer) throws InterruptedException {
     for (Attribute attribute : ruleClass.getAttributes()) {
       Type<?> type = attribute.getType();
       // TODO(bazel-team): clean up the typing / visitation interface so we don't have to
@@ -149,10 +148,9 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
     }
   }
 
-  /**
-   * Visits all labels reachable from the given attribute.
-   */
-  protected void visitLabels(Attribute attribute, AcceptsLabelAttribute observer) {
+  /** Visits all labels reachable from the given attribute. */
+  protected void visitLabels(Attribute attribute, AcceptsLabelAttribute observer)
+      throws InterruptedException {
     Type<?> type = attribute.getType();
     Object value = get(attribute.getName(), type);
     if (value != null) { // null values are particularly possible for computed defaults.
@@ -164,8 +162,18 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
   }
 
   @Override
-  public <T> boolean isConfigurable(String attributeName, Type<T> type) {
+  public final <T> boolean isConfigurable(String attributeName, Type<T> type) {
     return getSelectorList(attributeName, type) != null;
+  }
+
+  public static <T> boolean isConfigurable(Rule rule, String attributeName, Type<T> type) {
+    SelectorList<T> selectorMaybe = getSelectorList(
+        rule.getRuleClassObject(),
+        rule.getLabel(),
+        rule.getAttributeContainer(),
+        attributeName,
+        type);
+    return selectorMaybe != null;
   }
 
   /**
@@ -178,8 +186,18 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
    * @throws IllegalArgumentException if the attribute is configurable but of the wrong type
    */
   @Nullable
+  protected final <T> SelectorList<T> getSelectorList(String attributeName, Type<T> type) {
+    return getSelectorList(ruleClass, ruleLabel, attributes, attributeName, type);
+  }
+
+  @Nullable
   @SuppressWarnings("unchecked")
-  protected <T> SelectorList<T> getSelectorList(String attributeName, Type<T> type) {
+  protected static <T> SelectorList<T> getSelectorList(
+      RuleClass ruleClass,
+      Label ruleLabel,
+      AttributeContainer attributes,
+      String attributeName,
+      Type<T> type) {
     Integer index = ruleClass.getAttributeIndex(attributeName);
     if (index == null) {
       return null;
@@ -228,6 +246,8 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
   }
 
   protected static Iterable<Label> extractLabels(Type type, Object value) {
-    return Iterables.filter(type.flatten(value), Label.class);
+    return value == null
+        ? ImmutableList.<Label>of()
+        : Iterables.filter(type.flatten(value), Label.class);
   }
 }

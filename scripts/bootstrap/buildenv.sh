@@ -18,6 +18,19 @@
 
 set -o errexit
 
+# If BAZEL_WRKDIR is set, default all variables to point into
+# that directory
+
+if [ -n "${BAZEL_WRKDIR}" ] ; then
+ mkdir -p "${BAZEL_WRKDIR}/tmp"
+ mkdir -p "${BAZEL_WRKDIR}/user_root"
+ : ${TMPDIR:=${BAZEL_WRKDIR}/tmp}
+ export TMPDIR
+ : ${BAZEL_DIR_STARTUP_OPTIONS:="--output_user_root=${BAZEL_WRKDIR}/user_root"}
+fi
+
+
+# Set standard variables
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORKSPACE_DIR="$(dirname $(dirname ${DIR}))"
 
@@ -42,6 +55,13 @@ case "${PLATFORM}" in
 msys*|mingw*)
   EXE_EXT=".exe"
 esac
+
+# Fix TMPDIR on msys
+case "${PLATFORM}" in
+msys*|mingw*)
+  TMPDIR=${TMPDIR:-$(cygpath -m $TMP)}
+esac
+
 
 # Whether we display build messages or not.  We set this conditionally because
 # the file including us or the user may already have defined VERBOSE to their
@@ -90,28 +110,23 @@ function run_atexit_handlers() {
 
 function tempdir() {
   local tmp=${TMPDIR:-/tmp}
-  local DIR="$(mktemp -d ${tmp%%/}/bazel.XXXXXXXX)"
+  local DIR="$(mktemp -d ${tmp%%/}/bazel_XXXXXXXX)"
   mkdir -p "${DIR}"
-  eval "cleanup_tempdir() { rm -rf '${DIR}'; }"
-  atexit cleanup_tempdir
+  local DIRBASE=$(basename "${DIR}")
+  eval "cleanup_tempdir_${DIRBASE}() { rm -rf '${DIR}'; }"
+  atexit cleanup_tempdir_${DIRBASE}
   NEW_TMPDIR="${DIR}"
 }
 tempdir
 OUTPUT_DIR=${NEW_TMPDIR}
-errfile=${OUTPUT_DIR}/errors
-eval "cleanup_errfile() {
-        if [ -f '${errfile}' ]; then
-          cat '${errfile}' 1>&2;
-        fi;
-      }"
-atexit cleanup_errfile
 phasefile=${OUTPUT_DIR}/phase
-eval "cleanup_phasefile() {
-        if [ -f '${phasefile}' ]; then
-          echo 1>&2;
-          cat '${phasefile}' 1>&2;
-        fi;
-      }"
+function cleanup_phasefile() {
+  if [ -f "${phasefile}" ]; then
+    echo 1>&2;
+    cat "${phasefile}" 1>&2;
+  fi;
+}
+
 atexit cleanup_phasefile
 
 # Excutes a command respecting the current verbosity settings.
@@ -125,12 +140,14 @@ function run() {
     echo "${@}"
     "${@}" || exit $?
   else
+    local errfile="${OUTPUT_DIR}/errors"
+
     echo "${@}" >"${errfile}"
-    # The exit here is needed because "set -e" on the shell does not cause
-    # errors in functions to exit in all cases.  We should probably disable
-    # "set -e" altogether and add explicit error handling where necessary.
-    "${@}" >>"${errfile}" 2>&1 || exit $?
-    rm "${errfile}"
+    if ! "${@}" >>"${errfile}" 2>&1; then
+      local exitcode=$?
+      cat "${errfile}" 1>&2
+      exit $exitcode
+    fi
   fi
 }
 
@@ -237,6 +254,6 @@ function get_java_version() {
 
 # Return the target that a bind point to, using Bazel query.
 function get_bind_target() {
-  $BAZEL --bazelrc=${BAZELRC} --nomaster_bazelrc \
+  $BAZEL --bazelrc=${BAZELRC} --nomaster_bazelrc ${BAZEL_DIR_STARTUP_OPTIONS} \
     query "deps($1, 1) - $1"
 }

@@ -18,9 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.DefaultLabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
@@ -33,11 +31,9 @@ import com.google.devtools.build.lib.util.OptionsUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
 import com.google.devtools.common.options.Converter;
-import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsParsingException;
-
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -47,30 +43,6 @@ import java.util.Set;
  * Command-line options for C++.
  */
 public class CppOptions extends FragmentOptions {
-  /** Custom converter for {@code --crosstool_top}. */
-  public static class CrosstoolTopConverter extends DefaultLabelConverter {
-    public CrosstoolTopConverter() {
-      super(Constants.TOOLS_REPOSITORY + "//tools/cpp:toolchain");
-    }
-  }
-
-  /**
-   * Converter for --cwarn flag
-   */
-  public static class GccWarnConverter implements Converter<String> {
-    @Override
-    public String convert(String input) throws OptionsParsingException {
-      if (input.startsWith("no-") || input.startsWith("-W")) {
-        throw new OptionsParsingException("Not a valid gcc warning to enable");
-      }
-      return input;
-    }
-
-    @Override
-    public String getTypeDescription() {
-      return "A gcc warning to enable";
-    }
-  }
 
   /**
    * Converts a comma-separated list of compilation mode settings to a properly typed List.
@@ -133,6 +105,13 @@ public class CppOptions extends FragmentOptions {
   public static class LibcTopConverter implements Converter<LibcTop> {
     @Override
     public LibcTop convert(String input) throws OptionsParsingException {
+      if (input.equals("default")) {
+        // This is needed for defining config_setting() values, the syntactic form
+        // of which must be a String, to match absence of a --grte_top option.
+        // "--grte_top=default" works on the command-line too,
+        // but that's an inconsequential side-effect, not the intended purpose.
+        return null;
+      }
       if (!input.startsWith("//")) {
         throw new OptionsParsingException("Not a label");
       }
@@ -169,9 +148,9 @@ public class CppOptions extends FragmentOptions {
 
   @Option(
     name = "crosstool_top",
-    defaultValue = "",
+    defaultValue = "@bazel_tools//tools/cpp:toolchain",
     category = "version",
-    converter = CrosstoolTopConverter.class,
+    converter = LabelConverter.class,
     help = "The label of the crosstool package to be used for compiling C++ code."
   )
   public Label crosstoolTop;
@@ -291,6 +270,15 @@ public class CppOptions extends FragmentOptions {
   )
   public boolean skipStaticOutputs;
 
+  // TODO(djasper): Remove once it has been removed from the global blazerc.
+  @Option(
+    name = "send_transitive_header_module_srcs",
+    defaultValue = "true",
+    category = "semantics",
+    help = "Obsolete. Don't use."
+  )
+  public boolean sendTransitiveHeaderModuleSrcs;
+
   @Option(
     name = "process_headers_in_dependencies",
     defaultValue = "false",
@@ -309,16 +297,6 @@ public class CppOptions extends FragmentOptions {
     help = "Additional options to pass to gcc."
   )
   public List<String> coptList;
-
-  @Option(
-    name = "cwarn",
-    converter = GccWarnConverter.class,
-    defaultValue = "",
-    category = "flags",
-    allowMultiple = true,
-    help = "Additional warnings to enable when compiling C or C++ source files."
-  )
-  public List<String> cWarns;
 
   @Option(
     name = "cxxopt",
@@ -399,8 +377,9 @@ public class CppOptions extends FragmentOptions {
     implicitRequirements = {"--copt=-Wno-error"},
     help =
         "Generate binaries with FDO instrumentation. Specify the relative "
-            + "directory name for the .gcda files at runtime. It also accepts "
-            + "an LLVM profile output file path."
+            + "directory name for the .gcda files at runtime with GCC compiler. "
+            + "With Clang/LLVM compiler, it also accepts the directory name under"
+            + "which the raw profile file(s) will be dumped at runtime."
   )
   public PathFragment fdoInstrument;
 
@@ -516,16 +495,6 @@ public class CppOptions extends FragmentOptions {
   public List<String> hostCoptList;
 
   @Option(
-    name = "define",
-    converter = Converters.AssignmentConverter.class,
-    defaultValue = "",
-    category = "semantics",
-    allowMultiple = true,
-    help = "Each --define option specifies an assignment for a build variable."
-  )
-  public List<Map.Entry<String, String>> commandLineDefinedVariables;
-
-  @Option(
     name = "grte_top",
     defaultValue = "null", // The default value is chosen by the toolchain.
     category = "version",
@@ -568,16 +537,6 @@ public class CppOptions extends FragmentOptions {
   public boolean inmemoryDotdFiles;
 
   @Option(
-    name = "use_isystem_for_includes",
-    defaultValue = "true",
-    category = "undocumented",
-    help =
-        "Instruct C and C++ compilations to treat 'includes' paths as system header "
-            + "paths, by translating it into -isystem instead of -I."
-  )
-  public boolean useIsystemForIncludes;
-
-  @Option(
     name = "experimental_omitfp",
     defaultValue = "false",
     category = "semantics",
@@ -600,8 +559,6 @@ public class CppOptions extends FragmentOptions {
   @Override
   public FragmentOptions getHost(boolean fallback) {
     CppOptions host = (CppOptions) getDefault();
-
-    host.commandLineDefinedVariables = commandLineDefinedVariables;
 
     // The crosstool options are partially copied from the target configuration.
     if (!fallback) {
@@ -643,6 +600,12 @@ public class CppOptions extends FragmentOptions {
 
     if (libcTop != null) {
       Label libcLabel = libcTop.getLabel();
+      if (libcLabel != null) {
+        labelMap.put("crosstool", libcLabel);
+      }
+    }
+    if (hostLibcTop != null) {
+      Label libcLabel = hostLibcTop.getLabel();
       if (libcLabel != null) {
         labelMap.put("crosstool", libcLabel);
       }

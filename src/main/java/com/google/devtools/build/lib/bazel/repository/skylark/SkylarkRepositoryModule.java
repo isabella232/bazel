@@ -17,9 +17,12 @@ package com.google.devtools.build.lib.bazel.repository.skylark;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.syntax.SkylarkType.castMap;
 import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
 
+import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.AttributeValueSource;
 import com.google.devtools.build.lib.packages.Package.NameConflictException;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.PackageContext;
@@ -28,9 +31,8 @@ import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.RuleFactory.InvalidRuleException;
 import com.google.devtools.build.lib.rules.SkylarkAttr.Descriptor;
-import com.google.devtools.build.lib.rules.SkylarkRuleClassFunctions;
+import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature.Param;
 import com.google.devtools.build.lib.syntax.BaseFunction;
 import com.google.devtools.build.lib.syntax.BuiltinFunction;
 import com.google.devtools.build.lib.syntax.EvalException;
@@ -54,17 +56,15 @@ public class SkylarkRepositoryModule {
         "Creates a new repository rule. Store it in a global value, so that it can be loaded and "
             + "called from the WORKSPACE file.",
     returnType = BaseFunction.class,
-    mandatoryPositionals = {
+    parameters = {
       @Param(
         name = "implementation",
         type = BaseFunction.class,
         doc =
             "the function implementing this rule, has to have exactly one parameter: "
-                + "<code>repository_ctx</code>. The function is called during analysis phase for "
-                + "each instance of the rule."
-      )
-    },
-    optionalNamedOnly = {
+                + "<code><a href=\"repository_ctx.html\">repository_ctx</a></code>. The function "
+                + "is called during loading phase for each instance of the rule."
+      ),
       @Param(
         name = "attrs",
         type = SkylarkDict.class,
@@ -72,11 +72,13 @@ public class SkylarkRepositoryModule {
         defaultValue = "None",
         doc =
             "dictionary to declare all the attributes of the rule. It maps from an attribute "
-                + "name to an attribute object (see <a href=\"#modules.attr\">attr</a> "
+                + "name to an attribute object (see <a href=\"attr.html\">attr</a> "
                 + "module). Attributes starting with <code>_</code> are private, and can be "
                 + "used to add an implicit dependency on a label to a file (a repository "
                 + "rule cannot depend on a generated artifact). The attribute "
-                + "<code>name</code> is implicitly added and must not be specified."
+                + "<code>name</code> is implicitly added and must not be specified.",
+        named = true,
+        positional = false
       ),
       @Param(
         name = "local",
@@ -84,7 +86,9 @@ public class SkylarkRepositoryModule {
         defaultValue = "False",
         doc =
             "Indicate that this rule fetches everything from the local system and should be "
-                + "reevaluated at every fetch."
+                + "reevaluated at every fetch.",
+        named = true,
+        positional = false
       )
     },
     useAst = true,
@@ -101,7 +105,7 @@ public class SkylarkRepositoryModule {
             FuncallExpression ast,
             com.google.devtools.build.lib.syntax.Environment funcallEnv)
             throws EvalException {
-          funcallEnv.checkLoadingPhase("repository_rule", ast.getLocation());
+          funcallEnv.checkLoadingOrWorkspacePhase("repository_rule", ast.getLocation());
           // We'll set the name later, pass the empty string for now.
           Builder builder = new Builder("", RuleClassType.WORKSPACE, true);
 
@@ -109,16 +113,15 @@ public class SkylarkRepositoryModule {
             for (Map.Entry<String, Descriptor> attr :
                 castMap(attrs, String.class, Descriptor.class, "attrs").entrySet()) {
               Descriptor attrDescriptor = attr.getValue();
-              String attrName =
-                  SkylarkRuleClassFunctions.attributeToNative(
-                      attr.getKey(),
-                      ast.getLocation(),
-                      attrDescriptor.getAttributeBuilder().hasLateBoundValue());
+              AttributeValueSource source = attrDescriptor.getAttributeBuilder().getValueSource();
+              String attrName = source.convertToNativeName(attr.getKey(), ast.getLocation());
               Attribute.Builder<?> attrBuilder = attrDescriptor.getAttributeBuilder();
               builder.addOrOverrideAttribute(attrBuilder.build(attrName));
             }
           }
           builder.addOrOverrideAttribute(attr("$local", BOOLEAN).defaultValue(local).build());
+          BaseRuleClasses.commonCoreAndSkylarkAttributes(builder);
+          builder.add(attr("expect_failure", STRING));
           builder.setConfiguredTargetFunction(implementation);
           builder.setRuleDefinitionEnvironment(funcallEnv);
           builder.setWorkspaceOnly();
@@ -140,11 +143,6 @@ public class SkylarkRepositoryModule {
         throws EvalException, InterruptedException {
       String ruleClassName = ast.getFunction().getName();
       try {
-        if (ruleClassName.startsWith("_")) {
-          throw new EvalException(
-              ast.getLocation(),
-              "Invalid rule class name '" + ruleClassName + "', cannot be private");
-        }
         RuleClass ruleClass = builder.build(ruleClassName);
         PackageContext context = PackageFactory.getContext(env, ast);
         @SuppressWarnings("unchecked")

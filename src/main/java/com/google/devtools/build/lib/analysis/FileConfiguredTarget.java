@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.analysis;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMap.Builder;
-import com.google.common.collect.UnmodifiableIterator;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -45,9 +44,8 @@ public abstract class FileConfiguredTarget extends AbstractConfiguredTarget
         .<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider>builder()
         .put(VisibilityProvider.class, this)
         .put(LicensesProvider.class, this)
-        .put(FileProvider.class, new FileProvider(targetContext.getLabel(), filesToBuild))
-        .put(FilesToRunProvider.class, FilesToRunProvider.fromSingleArtifact(
-            targetContext.getLabel(), artifact));
+        .put(FileProvider.class, new FileProvider(filesToBuild))
+        .put(FilesToRunProvider.class, FilesToRunProvider.fromSingleExecutableArtifact(artifact));
     if (this instanceof FilesetProvider) {
       builder.put(FilesetProvider.class, this);
     }
@@ -83,10 +81,5 @@ public abstract class FileConfiguredTarget extends AbstractConfiguredTarget
   @Override
   public Object get(String providerKey) {
     return null;
-  }
-
-  @Override
-  public UnmodifiableIterator<TransitiveInfoProvider> iterator() {
-    return providers.values().iterator();
   }
 }

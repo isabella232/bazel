@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -42,12 +43,13 @@ import java.util.List;
  * Generates baseline (empty) coverage for the given non-test target.
  */
 @VisibleForTesting
+@Immutable
 public final class BaselineCoverageAction extends AbstractFileWriteAction
     implements NotifyOnActionCacheHit {
-  private final Iterable<Artifact> instrumentedFiles;
+  private final NestedSet<Artifact> instrumentedFiles;
 
   private BaselineCoverageAction(
-      ActionOwner owner, Iterable<Artifact> instrumentedFiles, Artifact output) {
+      ActionOwner owner, NestedSet<Artifact> instrumentedFiles, Artifact output) {
     super(owner, ImmutableList.<Artifact>of(), output, false);
     this.instrumentedFiles = instrumentedFiles;
   }
@@ -110,11 +112,13 @@ public final class BaselineCoverageAction extends AbstractFileWriteAction
    * Returns collection of baseline coverage artifacts associated with the given target.
    * Will always return 0 or 1 elements.
    */
-  static NestedSet<Artifact> create(RuleContext ruleContext, Iterable<Artifact> instrumentedFiles) {
+  static NestedSet<Artifact> create(
+      RuleContext ruleContext, NestedSet<Artifact> instrumentedFiles) {
     // Baseline coverage artifacts will still go into "testlogs" directory.
     Artifact coverageData = ruleContext.getPackageRelativeArtifact(
         new PathFragment(ruleContext.getTarget().getName()).getChild("baseline_coverage.dat"),
-        ruleContext.getConfiguration().getTestLogsDirectory());
+        ruleContext.getConfiguration().getTestLogsDirectory(
+            ruleContext.getRule().getRepository()));
     ruleContext.registerAction(new BaselineCoverageAction(
         ruleContext.getActionOwner(), instrumentedFiles, coverageData));
     return NestedSetBuilder.create(Order.STABLE_ORDER, coverageData);

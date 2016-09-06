@@ -31,7 +31,7 @@ using std::vector;
 namespace blaze {
 
 // The reason for a blaze server restart.
-// Keep in sync with logging.proto
+// Keep in sync with logging.proto.
 enum RestartReason {
   NO_RESTART = 0,
   NO_DAEMON,
@@ -42,7 +42,6 @@ enum RestartReason {
 struct GlobalVariables {
   // Used to make concurrent invocations of this program safe.
   string lockfile;  // = <output_base>/lock
-  int lockfd;
 
   string jvm_log_file;  // = <output_base>/_bazel_server/jvm.out
 
@@ -56,6 +55,9 @@ struct GlobalVariables {
   // the argument list passed on to the server.
   OptionProcessor option_processor;
 
+  // The path of the JVM executable that should be used to launch Blaze.
+  string jvm_path;
+
   pid_t server_pid;
 
   volatile sig_atomic_t sigint_count;
@@ -66,26 +68,28 @@ struct GlobalVariables {
   volatile sig_atomic_t received_signal;
 
   // Contains the relative paths of all the files in the attached zip, and is
-  // populated during GetInstallDir().
+  // populated during GetInstallBase().
   vector<string> extracted_binaries;
 
-  // Parsed startup options
+  // Parsed startup options.
   BlazeStartupOptions options;
 
-  // The time in ms the launcher spends before sending the request to the Blaze
+  // The time in ms the launcher spends before sending the request to the blaze
+  // server.
   uint64_t startup_time;
 
-  // The time spent on extracting the new blaze version
-  // This is part of startup_time
+  // The time in ms spent on extracting the new blaze version.
+  // This is part of startup_time.
   uint64_t extract_data_time;
 
-  // The time in ms if a command had to wait on a busy Blaze server process
-  // This is part of startup_time
+  // The time in ms a command had to wait on a busy Blaze server process.
+  // This is part of startup_time.
   uint64_t command_wait_time;
 
+  // The reason for the server restart.
   RestartReason restart_reason;
 
-  // Absolute path of the blaze binary
+  // The absolute path of the blaze binary.
   string binary_path;
 
   // MD5 hash of the Blaze binary (includes deploy.jar, extracted binaries, and

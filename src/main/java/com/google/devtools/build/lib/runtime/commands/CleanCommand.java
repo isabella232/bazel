@@ -14,12 +14,13 @@
 package com.google.devtools.build.lib.runtime.commands;
 
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.analysis.NoBuildEvent;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.OutputDirectoryLinksUtils;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.runtime.BlazeCommand;
 import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.ShutdownBlazeServerException;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
+import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.ShutdownMethod;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.shell.CommandException;
@@ -48,7 +49,6 @@ import java.util.logging.Logger;
          // TODO(bazel-team): Remove this - we inherit a huge number of unused options.
          inherits = { BuildCommand.class })
 public final class CleanCommand implements BlazeCommand {
-
   /**
    * An interface for special options for the clean command.
    */
@@ -85,10 +85,11 @@ public final class CleanCommand implements BlazeCommand {
   @Override
   public ExitCode exec(CommandEnvironment env, OptionsProvider options)
       throws ShutdownBlazeServerException {
-    BlazeRuntime runtime = env.getRuntime();
     Options cleanOptions = options.getOptions(Options.class);
     cleanOptions.expunge_async = cleanOptions.cleanStyle.equals("expunge_async");
     cleanOptions.expunge = cleanOptions.cleanStyle.equals("expunge");
+
+    env.getEventBus().post(new NoBuildEvent());
 
     if (!cleanOptions.expunge && !cleanOptions.expunge_async
         && !cleanOptions.cleanStyle.isEmpty()) {
@@ -104,9 +105,9 @@ public final class CleanCommand implements BlazeCommand {
 
     env.getReporter().handle(Event.info(null/*location*/, cleanBanner));
     try {
-      String symlinkPrefix =
-          options.getOptions(BuildRequest.BuildRequestOptions.class).getSymlinkPrefix();
-      actuallyClean(env, runtime.getOutputBase(), cleanOptions, symlinkPrefix);
+      String symlinkPrefix = options.getOptions(BuildRequest.BuildRequestOptions.class)
+          .getSymlinkPrefix(env.getRuntime().getProductName());
+      actuallyClean(env, env.getOutputBase(), cleanOptions, symlinkPrefix);
       return ExitCode.SUCCESS;
     } catch (IOException e) {
       env.getReporter().handle(Event.error(e.getMessage()));
@@ -123,7 +124,6 @@ public final class CleanCommand implements BlazeCommand {
   private void actuallyClean(CommandEnvironment env,
       Path outputBase, Options cleanOptions, String symlinkPrefix) throws IOException,
       ShutdownBlazeServerException, CommandException, ExecException, InterruptedException {
-    BlazeRuntime runtime = env.getRuntime();
     if (env.getOutputService() != null) {
       env.getOutputService().clean();
     }
@@ -160,11 +160,11 @@ public final class CleanCommand implements BlazeCommand {
         .build().execute();
     } else {
       LOG.info("Output cleaning...");
-      runtime.clearCaches();
+      env.getBlazeWorkspace().clearCaches();
       // In order to be sure that we delete everything, delete the workspace directory both for
       // --deep_execroot and for --nodeep_execroot.
       for (String directory : new String[] {
-          runtime.getWorkspaceName(), "execroot/" + runtime.getWorkspaceName() }) {
+          env.getWorkspaceName(), "execroot/" + env.getWorkspaceName() }) {
         Path child = outputBase.getRelative(directory);
         if (child.exists()) {
           LOG.finest("Cleaning " + child);
@@ -174,10 +174,11 @@ public final class CleanCommand implements BlazeCommand {
     }
     // remove convenience links
     OutputDirectoryLinksUtils.removeOutputDirectoryLinks(
-        runtime.getWorkspaceName(), runtime.getWorkspace(), env.getReporter(), symlinkPrefix);
+        env.getWorkspaceName(), env.getWorkspace(), env.getReporter(), symlinkPrefix,
+        env.getRuntime().getProductName());
     // shutdown on expunge cleans
     if (cleanOptions.expunge || cleanOptions.expunge_async) {
-      throw new ShutdownBlazeServerException(0);
+      throw new ShutdownBlazeServerException(0, ShutdownMethod.EXPUNGE);
     }
   }
 

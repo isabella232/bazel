@@ -18,12 +18,13 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType.ABSTRACT;
 import static com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType.TEST;
 
+import com.google.common.base.Preconditions;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -36,15 +37,16 @@ import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.graph.Digraph;
 import com.google.devtools.build.lib.graph.Node;
 import com.google.devtools.build.lib.packages.Attribute;
-import com.google.devtools.build.lib.packages.NativeAspectClass.NativeAspectFactory;
+import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.SkylarkModules;
+import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Environment.Extension;
+import com.google.devtools.build.lib.syntax.Environment.Phase;
 import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.SkylarkType;
 import com.google.devtools.common.options.OptionsClassProvider;
 
 import java.lang.reflect.Constructor;
@@ -54,6 +56,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+
+import javax.annotation.Nullable;
 
 /**
  * Knows about every rule Blaze supports and the associated configuration options.
@@ -82,7 +87,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
    * Builder for {@link ConfiguredRuleClassProvider}.
    */
   public static class Builder implements RuleDefinitionEnvironment {
-    private final StringBuilder defaultWorkspaceFile = new StringBuilder();
+    private final StringBuilder defaultWorkspaceFilePrefix = new StringBuilder();
+    private final StringBuilder defaultWorkspaceFileSuffix = new StringBuilder();
     private Label preludeLabel;
     private String runfilesPrefix;
     private String toolsRepository;
@@ -91,25 +97,29 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     private final List<Class<? extends FragmentOptions>> configurationOptions = new ArrayList<>();
 
     private final Map<String, RuleClass> ruleClassMap = new HashMap<>();
-    private final  Map<String, Class<? extends RuleDefinition>> ruleDefinitionMap =
-        new HashMap<>();
-    private final Map<String, Class<? extends NativeAspectFactory>> aspectFactoryMap =
+    private final Map<String, RuleDefinition> ruleDefinitionMap = new HashMap<>();
+    private final Map<String, NativeAspectClass> nativeAspectClassMap =
         new HashMap<>();
     private final Map<Class<? extends RuleDefinition>, RuleClass> ruleMap = new HashMap<>();
-    private final Map<Class<? extends RuleDefinition>, RuleDefinition> ruleDefinitionInstanceCache =
-        new HashMap<>();
     private final Digraph<Class<? extends RuleDefinition>> dependencyGraph =
         new Digraph<>();
     private ConfigurationCollectionFactory configurationCollectionFactory;
     private Class<? extends BuildConfiguration.Fragment> universalFragment;
     private PrerequisiteValidator prerequisiteValidator;
-    private ImmutableMap<String, SkylarkType> skylarkAccessibleJavaClasses = ImmutableMap.of();
+    private ImmutableMap.Builder<String, Object> skylarkAccessibleTopLevels =
+        ImmutableMap.builder();
     private ImmutableList.Builder<Class<?>> skylarkModules =
         ImmutableList.<Class<?>>builder().addAll(SkylarkModules.MODULES);
-    private final List<Class<? extends FragmentOptions>> buildOptions = Lists.newArrayList();
+    private ImmutableBiMap.Builder<String, Class<? extends TransitiveInfoProvider>>
+        registeredSkylarkProviders = ImmutableBiMap.builder();
+    private Map<String, String> platformRegexps = new TreeMap<>();
 
-    public void addWorkspaceFile(String contents) {
-      defaultWorkspaceFile.append(contents);
+    public void addWorkspaceFilePrefix(String contents) {
+      defaultWorkspaceFilePrefix.append(contents);
+    }
+
+    public void addWorkspaceFileSuffix(String contents) {
+      defaultWorkspaceFileSuffix.append(contents);
     }
 
     public Builder setPrelude(String preludeLabelString) {
@@ -120,11 +130,6 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
             String.format("Prelude label '%s' is invalid: %s", preludeLabelString, e.getMessage());
         throw new IllegalArgumentException(errorMsg);
       }
-      return this;
-    }
-
-    public Builder addBuildOptions(Collection<Class<? extends FragmentOptions>> optionsClasses) {
-      buildOptions.addAll(optionsClasses);
       return this;
     }
 
@@ -150,7 +155,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
 
     public Builder addRuleDefinition(RuleDefinition ruleDefinition) {
       Class<? extends RuleDefinition> ruleDefinitionClass = ruleDefinition.getClass();
-      ruleDefinitionInstanceCache.put(ruleDefinitionClass, ruleDefinition);
+      ruleDefinitionMap.put(ruleDefinitionClass.getName(), ruleDefinition);
       dependencyGraph.createNode(ruleDefinitionClass);
       for (Class<? extends RuleDefinition> ancestor : ruleDefinition.getMetadata().ancestors()) {
         dependencyGraph.addEdge(ancestor, ruleDefinitionClass);
@@ -159,15 +164,19 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
       return this;
     }
 
-    public Builder addAspectFactory(
-        String name, Class<? extends ConfiguredNativeAspectFactory> configuredAspectFactoryClass) {
-      aspectFactoryMap.put(name, configuredAspectFactoryClass);
-
+    public Builder addNativeAspectClass(NativeAspectClass aspectFactoryClass) {
+      nativeAspectClassMap.put(aspectFactoryClass.getName(), aspectFactoryClass);
       return this;
     }
 
     public Builder addConfigurationOptions(Class<? extends FragmentOptions> configurationOptions) {
       this.configurationOptions.add(configurationOptions);
+      return this;
+    }
+
+    public Builder addConfigurationOptions(
+        Collection<Class<? extends FragmentOptions>> optionsClasses) {
+      this.configurationOptions.addAll(optionsClasses);
       return this;
     }
 
@@ -187,13 +196,43 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
       return this;
     }
 
-    public Builder setSkylarkAccessibleJavaClasses(ImmutableMap<String, SkylarkType> objects) {
-      this.skylarkAccessibleJavaClasses = objects;
+    public Builder addSkylarkAccessibleTopLevels(String name, Object object) {
+      this.skylarkAccessibleTopLevels.put(name, object);
       return this;
     }
 
     public Builder addSkylarkModule(Class<?>... modules) {
       this.skylarkModules.add(modules);
+      return this;
+    }
+
+    /**
+     * Adds a mapping that determines which keys in structs returned by skylark rules should be
+     * interpreted as native TransitiveInfoProvider instances of type (map value).
+     */
+    public Builder registerSkylarkProvider(
+        String name, Class<? extends TransitiveInfoProvider> provider) {
+      this.registeredSkylarkProviders.put(name, provider);
+      return this;
+    }
+
+    /**
+     * Do not use - this only exists for backwards compatibility! Platform regexps are part of a
+     * legacy mechanism - {@code vardef} - that is not exposed in Bazel.
+     *
+     * <p>{@code vardef} needs explicit support in the rule implementations, and cannot express
+     * conditional dependencies, only conditional attribute values. This mechanism will be
+     * supplanted by configuration dependent attributes, and its effect can usually also be achieved
+     * with select().
+     *
+     * <p>This is a map of platform names to regexps. When a name is used as the third argument to
+     * {@code vardef}, the corresponding regexp is used to match on the C++ abi, and the variable is
+     * only set to that value if the regexp matches. For example, the entry
+     * {@code "oldlinux": "i[34]86-libc[345]-linux"} might define a set of platforms representing
+     * certain older linux releases.
+     */
+    public Builder addPlatformRegexps(Map<String, String> platformRegexps) {
+      this.platformRegexps.putAll(Preconditions.checkNotNull(platformRegexps));
       return this;
     }
 
@@ -209,7 +248,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     }
 
     private RuleClass commitRuleDefinition(Class<? extends RuleDefinition> definitionClass) {
-      RuleDefinition instance = checkNotNull(ruleDefinitionInstanceCache.get(definitionClass),
+      RuleDefinition instance = checkNotNull(ruleDefinitionMap.get(definitionClass.getName()),
           "addRuleDefinition(new %s()) should be called before build()", definitionClass.getName());
 
       RuleDefinition.Metadata metadata = instance.getMetadata();
@@ -245,7 +284,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
       RuleClass ruleClass = instance.build(builder, this);
       ruleMap.put(definitionClass, ruleClass);
       ruleClassMap.put(ruleClass.getName(), ruleClass);
-      ruleDefinitionMap.put(ruleClass.getName(), definitionClass);
+      ruleDefinitionMap.put(ruleClass.getName(), instance);
 
       return ruleClass;
     }
@@ -262,17 +301,18 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
           toolsRepository,
           ImmutableMap.copyOf(ruleClassMap),
           ImmutableMap.copyOf(ruleDefinitionMap),
-          ImmutableMap.copyOf(aspectFactoryMap),
-          defaultWorkspaceFile.toString(),
+          ImmutableMap.copyOf(nativeAspectClassMap),
+          defaultWorkspaceFilePrefix.toString(),
+          defaultWorkspaceFileSuffix.toString(),
           ImmutableList.copyOf(buildInfoFactories),
           ImmutableList.copyOf(configurationOptions),
           ImmutableList.copyOf(configurationFragments),
           configurationCollectionFactory,
           universalFragment,
           prerequisiteValidator,
-          skylarkAccessibleJavaClasses,
+          skylarkAccessibleTopLevels.build(),
           skylarkModules.build(),
-          buildOptions);
+          registeredSkylarkProviders.build());
     }
 
     @Override
@@ -283,6 +323,16 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     @Override
     public Label getToolsLabel(String labelValue) {
       return getLabel(toolsRepository + labelValue);
+    }
+
+    @Override
+    public String getToolsRepository() {
+      return toolsRepository;
+    }
+
+    @Nullable
+    public Map<String, String> getPlatformRegexps() {
+      return platformRegexps.isEmpty() ? null : ImmutableMap.copyOf(platformRegexps);
     }
   }
 
@@ -303,10 +353,15 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   });
 
   /**
-   * A list of relative paths to the WORKSPACE files needed to provide external dependencies for
-   * the rule classes.
+   * Default content that should be added at the beginning of the WORKSPACE file.
    */
-  String defaultWorkspaceFile;
+  private final String defaultWorkspaceFilePrefix;
+
+  /**
+   * Default content that should be added at the end of the WORKSPACE file.
+   */
+  private final String defaultWorkspaceFileSuffix;
+
 
   /**
    * Label for the prelude file.
@@ -329,14 +384,14 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   private final ImmutableMap<String, RuleClass> ruleClassMap;
 
   /**
-   * Maps rule class name to the rule definition metaclasses.
+   * Maps rule class name to the rule definition objects.
    */
-  private final ImmutableMap<String, Class<? extends RuleDefinition>> ruleDefinitionMap;
+  private final ImmutableMap<String, RuleDefinition> ruleDefinitionMap;
 
   /**
    * Maps aspect name to the aspect factory meta class.
    */
-  private final ImmutableMap<String, Class<? extends NativeAspectFactory>> aspectFactoryMap;
+  private final ImmutableMap<String, NativeAspectClass> nativeAspectClassMap;
 
   /**
    * The configuration options that affect the behavior of the rules.
@@ -365,32 +420,35 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
 
   private final Environment.Frame globals;
 
-  private final List<Class<? extends FragmentOptions>> buildOptions;
+  private final ImmutableBiMap<String, Class<? extends TransitiveInfoProvider>>
+      registeredSkylarkProviders;
 
   private ConfiguredRuleClassProvider(
       Label preludeLabel,
       String runfilesPrefix,
       String toolsRepository,
       ImmutableMap<String, RuleClass> ruleClassMap,
-      ImmutableMap<String, Class<? extends RuleDefinition>> ruleDefinitionMap,
-      ImmutableMap<String, Class<? extends NativeAspectFactory>> aspectFactoryMap,
-      String defaultWorkspaceFile,
+      ImmutableMap<String, RuleDefinition> ruleDefinitionMap,
+      ImmutableMap<String, NativeAspectClass> nativeAspectClassMap,
+      String defaultWorkspaceFilePrefix,
+      String defaultWorkspaceFileSuffix,
       ImmutableList<BuildInfoFactory> buildInfoFactories,
       ImmutableList<Class<? extends FragmentOptions>> configurationOptions,
       ImmutableList<ConfigurationFragmentFactory> configurationFragments,
       ConfigurationCollectionFactory configurationCollectionFactory,
       Class<? extends BuildConfiguration.Fragment> universalFragment,
       PrerequisiteValidator prerequisiteValidator,
-      ImmutableMap<String, SkylarkType> skylarkAccessibleJavaClasses,
+      ImmutableMap<String, Object> skylarkAccessibleJavaClasses,
       ImmutableList<Class<?>> skylarkModules,
-      List<Class<? extends FragmentOptions>> buildOptions) {
+      ImmutableBiMap<String, Class<? extends TransitiveInfoProvider>> registeredSkylarkProviders) {
     this.preludeLabel = preludeLabel;
     this.runfilesPrefix = runfilesPrefix;
     this.toolsRepository = toolsRepository;
     this.ruleClassMap = ruleClassMap;
     this.ruleDefinitionMap = ruleDefinitionMap;
-    this.aspectFactoryMap = aspectFactoryMap;
-    this.defaultWorkspaceFile = defaultWorkspaceFile;
+    this.nativeAspectClassMap = nativeAspectClassMap;
+    this.defaultWorkspaceFilePrefix = defaultWorkspaceFilePrefix;
+    this.defaultWorkspaceFileSuffix = defaultWorkspaceFileSuffix;
     this.buildInfoFactories = buildInfoFactories;
     this.configurationOptions = configurationOptions;
     this.configurationFragments = configurationFragments;
@@ -398,7 +456,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     this.universalFragment = universalFragment;
     this.prerequisiteValidator = prerequisiteValidator;
     this.globals = createGlobals(skylarkAccessibleJavaClasses, skylarkModules);
-    this.buildOptions = buildOptions;
+    this.registeredSkylarkProviders = registeredSkylarkProviders;
   }
 
   public PrerequisiteValidator getPrerequisiteValidator() {
@@ -426,8 +484,13 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   }
 
   @Override
-  public Map<String, Class<? extends NativeAspectFactory>> getAspectFactoryMap() {
-    return aspectFactoryMap;
+  public Map<String, NativeAspectClass> getNativeAspectClassMap() {
+    return nativeAspectClassMap;
+  }
+
+  @Override
+  public NativeAspectClass getNativeAspectClass(String key) {
+    return nativeAspectClassMap.get(key);
   }
 
   /**
@@ -454,7 +517,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   /**
    * Returns the definition of the rule class definition with the specified name.
    */
-  public Class<? extends RuleDefinition> getRuleClassDefinition(String ruleClassName) {
+  public RuleDefinition getRuleClassDefinition(String ruleClassName) {
     return ruleDefinitionMap.get(ruleClassName);
   }
 
@@ -476,8 +539,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   /**
    * Returns the defaults package for the default settings.
    */
-  public String getDefaultsPackageContent() {
-    return DefaultsPackage.getDefaultsPackageContent(configurationOptions);
+  public String getDefaultsPackageContent(InvocationPolicy invocationPolicy) {
+    return DefaultsPackage.getDefaultsPackageContent(configurationOptions, invocationPolicy);
   }
 
   /**
@@ -488,8 +551,17 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
         BuildOptions.of(configurationOptions, optionsProvider));
   }
 
-  public ImmutableList<Class<? extends FragmentOptions>> getOptionFragments() {
-    return ImmutableList.copyOf(buildOptions);
+  /**
+   * Returns a map that indicates which keys in structs returned by skylark rules should be
+   * interpreted as native TransitiveInfoProvider instances of type (map value).
+   *
+   * <p>That is, if this map contains "dummy" -> DummyProvider.class, a "dummy" entry in a skylark
+   * rule implementations returned struct will be exported from that ConfiguredTarget as a
+   * DummyProvider.
+   */
+  public ImmutableBiMap<String, Class<? extends TransitiveInfoProvider>>
+      getRegisteredSkylarkProviders() {
+    return this.registeredSkylarkProviders;
   }
 
   /**
@@ -500,13 +572,13 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   }
 
   private Environment.Frame createGlobals(
-      ImmutableMap<String, SkylarkType> skylarkAccessibleJavaClasses,
+      ImmutableMap<String, Object> skylarkAccessibleToplLevels,
       ImmutableList<Class<?>> modules) {
     try (Mutability mutability = Mutability.create("ConfiguredRuleClassProvider globals")) {
       Environment env = createSkylarkRuleClassEnvironment(
           mutability, SkylarkModules.getGlobals(modules), null, null, null);
-      for (Map.Entry<String, SkylarkType> entry : skylarkAccessibleJavaClasses.entrySet()) {
-        env.setup(entry.getKey(), entry.getValue().getType());
+      for (Map.Entry<String, Object> entry : skylarkAccessibleToplLevels.entrySet()) {
+        env.setup(entry.getKey(), entry.getValue());
       }
       return env.getGlobals();
     }
@@ -524,7 +596,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
         .setEventHandler(eventHandler)
         .setFileContentHashCode(astFileContentHashCode)
         .setImportedExtensions(importMap)
-        .setLoadingPhase()
+        .setToolsRepository(toolsRepository)
+        .setPhase(Phase.LOADING)
         .build();
   }
 
@@ -539,9 +612,13 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
         eventHandler, astFileContentHashCode, importMap);
   }
 
+  @Override
+  public String getDefaultWorkspacePrefix() {
+    return defaultWorkspaceFilePrefix;
+  }
 
   @Override
-  public String getDefaultWorkspaceFile() {
-    return defaultWorkspaceFile;
+  public String getDefaultWorkspaceSuffix() {
+    return defaultWorkspaceFileSuffix;
   }
 }

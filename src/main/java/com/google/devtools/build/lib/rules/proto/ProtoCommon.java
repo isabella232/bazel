@@ -108,7 +108,9 @@ public class ProtoCommon {
       final NestedSet<Artifact> transitiveProtoSources, RuleContext ruleContext) {
     return RunfilesProvider.withData(
         Runfiles.EMPTY,
-        new Runfiles.Builder(ruleContext.getWorkspaceName())
+        new Runfiles.Builder(
+            ruleContext.getWorkspaceName(),
+            ruleContext.getConfiguration().legacyExternalRunfiles())
             // TODO(bazel-team): addArtifacts is deprecated, but addTransitive fails
             // due to nested set ordering restrictions. Figure this out.
             .addArtifacts(transitiveProtoSources)
@@ -130,7 +132,8 @@ public class ProtoCommon {
   public static ImmutableList<Artifact> getGeneratedOutputs(RuleContext ruleContext,
       ImmutableList<Artifact> protoSources, String extension, boolean pythonNames) {
     ImmutableList.Builder<Artifact> outputsBuilder = new ImmutableList.Builder<>();
-    Root genfiles = ruleContext.getConfiguration().getGenfilesDirectory();
+    Root genfiles = ruleContext.getConfiguration().getGenfilesDirectory(
+        ruleContext.getRule().getRepository());
     for (Artifact src : protoSources) {
       PathFragment srcPath = src.getRootRelativePath();
       if (pythonNames) {

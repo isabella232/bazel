@@ -25,7 +25,6 @@ import java.lang.annotation.Target;
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Option {
-
   /**
    * The name of the option ("--name").
    */
@@ -40,6 +39,12 @@ public @interface Option {
    * A help string for the usage information.
    */
   String help() default "";
+
+  /**
+   * A short text string to describe the type of the expected value. E.g., <code>regex</code>. This
+   * is ignored for boolean, tristate, boolean_or_enum, and void options.
+   */
+  String valueHelp() default "";
 
   /**
    * The default value for the option. This method should only be invoked
@@ -63,16 +68,10 @@ public @interface Option {
    * "null" is only applicable when computing the default value; if specified
    * on the command-line, this string will have its usual literal meaning.
    *
-   * <p>The default value for flags that set allowMultiple to true should be set with
-   * {@link #defaultMultipleValue()}
+   * <p>The default value for flags that set allowMultiple is always the empty
+   * list and its default value is ignored.
    */
   String defaultValue();
-
-  /**
-   * This method is an extension of {@link #defaultValue()} and it enables setting default values
-   * for flags whose allowMultiple is true. In that case {@link #defaultValue()} is ignored.
-   */
-  String[] defaultMultipleValue() default {};
 
   /**
    * A string describing the category of options that this belongs to. {@link
@@ -153,6 +152,11 @@ public @interface Option {
    * {@link Option#implicitRequirements()}, {@link Option#expansion()}, {@link Option#converter()}
    * attributes will not be processed. Wrapper options are implicitly repeatable (i.e., as though
    * {@link Option#allowMultiple()} is true regardless of its value in the annotation).
+   *
+   * <p>Wrapper options are provided only for transitioning flags which appear as values to other
+   * flags, to top-level flags. Wrapper options should not be used in Invocation Policy, as
+   * expansion flags to other flags, or as implicit requirements to other flags. Use the inner
+   * flags instead.  
    */
   boolean wrapperOption() default false;
 }

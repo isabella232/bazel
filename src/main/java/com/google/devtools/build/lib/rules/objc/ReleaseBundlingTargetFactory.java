@@ -20,11 +20,12 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
 import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.LinkedBinary;
-import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.SplitArchTransition.ConfigurationDistinguisher;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 
@@ -61,7 +62,9 @@ public abstract class ReleaseBundlingTargetFactory implements RuleConfiguredTarg
   }
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext) throws InterruptedException {
+  public ConfiguredTarget create(RuleContext ruleContext)
+      throws InterruptedException, RuleErrorException {
+    validateAttributes(ruleContext);
     ObjcCommon common = common(ruleContext);
 
     XcodeProvider.Builder xcodeProviderBuilder = new XcodeProvider.Builder();
@@ -71,9 +74,9 @@ public abstract class ReleaseBundlingTargetFactory implements RuleConfiguredTarg
         ruleContext, common.getObjcProvider(), LinkedBinary.DEPENDENCIES_ONLY, bundleDirFormat,
         bundleName(ruleContext), bundleMinimumOsVersion(ruleContext));
     releaseBundlingSupport
-        .registerActions()
+        .registerActions(DsymOutputType.APP)
         .addXcodeSettings(xcodeProviderBuilder)
-        .addFilesToBuild(filesToBuild)
+        .addFilesToBuild(filesToBuild, DsymOutputType.APP)
         .validateResources()
         .validateAttributes();
 
@@ -98,7 +101,7 @@ public abstract class ReleaseBundlingTargetFactory implements RuleConfiguredTarg
                 InstrumentedFilesProvider.class,
                 InstrumentedFilesCollector.forward(ruleContext, "binary"));
 
-    ObjcProvider exposedObjcProvider = exposedObjcProvider(ruleContext);
+    ObjcProvider exposedObjcProvider = exposedObjcProvider(ruleContext, releaseBundlingSupport);
     if (exposedObjcProvider != null) {
       targetBuilder.addProvider(ObjcProvider.class, exposedObjcProvider);
     }
@@ -106,6 +109,12 @@ public abstract class ReleaseBundlingTargetFactory implements RuleConfiguredTarg
     configureTarget(targetBuilder, ruleContext, releaseBundlingSupport);
     return targetBuilder.build();
   }
+
+  /**
+   * Validates application-related attributes set on this rule and registers any errors with the
+   * rule context. Default implemenation does nothing; subclasses may override it.
+   */
+  protected void validateAttributes(RuleContext ruleContext) {}
 
   /**
    * Returns the minimum OS version this bundle's plist and resources should be generated for
@@ -133,10 +142,12 @@ public abstract class ReleaseBundlingTargetFactory implements RuleConfiguredTarg
 
   /**
    * Returns an exposed {@code ObjcProvider} object.
-   * @throws InterruptedException 
+   * @throws InterruptedException
    */
   @Nullable
-  protected ObjcProvider exposedObjcProvider(RuleContext ruleContext) throws InterruptedException {
+  protected ObjcProvider exposedObjcProvider(
+      RuleContext ruleContext, ReleaseBundlingSupport releaseBundlingSupport)
+      throws InterruptedException {
     return null;
   }
 

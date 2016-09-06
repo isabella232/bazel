@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BaseSpawn;
+import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
@@ -51,20 +52,17 @@ import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.GeneratedMessage.GeneratedExtension;
-
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
 import javax.annotation.CheckReturnValue;
+import javax.annotation.Nullable;
 
-/**
- * An Action representing an arbitrary subprocess to be forked and exec'd.
- */
-public class SpawnAction extends AbstractAction {
+/** An Action representing an arbitrary subprocess to be forked and exec'd. */
+public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifier, CommandAction {
   private static class ExtraActionInfoSupplier<T> {
     private final GeneratedExtension<ExtraActionInfo, T> extension;
     private final T value;
@@ -83,13 +81,13 @@ public class SpawnAction extends AbstractAction {
 
   private static final String GUID = "ebd6fce3-093e-45ee-adb6-bf513b602f0d";
 
-  private final CommandLine argv;
+  protected final CommandLine argv;
 
   private final boolean executeUnconditionally;
   private final String progressMessage;
   private final String mnemonic;
   // entries are (directory for remote execution, Artifact)
-  private final ImmutableMap<PathFragment, Artifact> inputManifests;
+  protected final ImmutableMap<PathFragment, Artifact> inputManifests;
 
   private final ResourceSet resourceSet;
   private final ImmutableMap<String, String> environment;
@@ -192,9 +190,7 @@ public class SpawnAction extends AbstractAction {
     this.extraActionInfoSupplier = extraActionInfoSupplier;
   }
 
-  /**
-   * Returns the (immutable) list of all arguments, including the command name, argv[0].
-   */
+  @Override
   @VisibleForTesting
   public List<String> getArguments() {
     return ImmutableList.copyOf(argv.arguments());
@@ -354,16 +350,15 @@ public class SpawnAction extends AbstractAction {
     }
   }
 
-  /**
-   * Returns the environment in which to run this action.
-   */
-  public Map<String, String> getEnvironment() {
+  @Override
+  public ImmutableMap<String, String> getEnvironment() {
     return environment;
   }
 
   /**
    * Returns the out-of-band execution data for this action.
    */
+  @Override
   public Map<String, String> getExecutionInfo() {
     return executionInfo;
   }
@@ -429,8 +424,7 @@ public class SpawnAction extends AbstractAction {
   public static class Builder {
 
     private final NestedSetBuilder<Artifact> toolsBuilder = NestedSetBuilder.stableOrder();
-    private final NestedSetBuilder<Artifact> inputsBuilder =
-        NestedSetBuilder.stableOrder();
+    private final NestedSetBuilder<Artifact> inputsBuilder = NestedSetBuilder.stableOrder();
     private final List<Artifact> outputs = new ArrayList<>();
     private final Map<PathFragment, Artifact> toolManifests = new LinkedHashMap<>();
     private final Map<PathFragment, Artifact> inputManifests = new LinkedHashMap<>();
@@ -482,8 +476,9 @@ public class SpawnAction extends AbstractAction {
     }
 
     /**
-     * Builds the SpawnAction using the passed in action configuration and returns it and all
-     * dependent actions. The first item of the returned array is always the SpawnAction itself.
+     * Builds the SpawnAction and ParameterFileWriteAction (if param file is used) using the passed-
+     * in action configuration. The first item of the returned array is always the SpawnAction
+     * itself.
      *
      * <p>This method makes a copy of all the collections, so it is safe to reuse the builder after
      * this method returns.
@@ -506,32 +501,65 @@ public class SpawnAction extends AbstractAction {
     @VisibleForTesting @CheckReturnValue
     public Action[] build(ActionOwner owner, AnalysisEnvironment analysisEnvironment,
         BuildConfiguration configuration) {
-      if (isShellCommand && executable == null) {
-        executable = configuration.getShExecutable();
-      }
-      Preconditions.checkNotNull(executable);
-      Preconditions.checkNotNull(executableArgs);
-
-      if (useDefaultShellEnvironment) {
-        this.environment = configuration.getLocalShellEnvironment();
-      }
-
-      ImmutableList<String> argv = ImmutableList.<String>builder()
-          .add(executable.getPathString())
-          .addAll(executableArgs)
-          .build();
-
       Iterable<String> arguments = argumentsBuilder.build();
+      // Check to see if we need to use param file.
+      Artifact paramsFile = ParamFileHelper.getParamsFileMaybe(
+          buildExecutableArgs(configuration.getShExecutable()),
+          arguments,
+          commandLine,
+          paramFileInfo,
+          configuration,
+          analysisEnvironment,
+          outputs);
 
-      Artifact paramsFile = ParamFileHelper.getParamsFileMaybe(argv, arguments, commandLine,
-          paramFileInfo, configuration, analysisEnvironment, outputs);
+      List<Action> actions = new ArrayList<>(2);
 
-      List<Action> actions = new ArrayList<>();
+      // Set up the SpawnAction itself.
+      actions.add(buildSpawnAction(owner, configuration.getLocalShellEnvironment(),
+          configuration.getShExecutable(), paramsFile));
+
+      // If param file is to be used, set up the param file write action as well.
+      if (paramsFile != null) {
+        actions.add(ParamFileHelper.createParameterFileWriteAction(
+            arguments,
+            commandLine,
+            owner,
+            paramsFile,
+            paramFileInfo));
+      }
+
+      return actions.toArray(new Action[actions.size()]);
+    }
+
+    /**
+     * Builds the SpawnAction using the passed-in action configuration.
+     *
+     * <p>This method makes a copy of all the collections, so it is safe to reuse the builder after
+     * this method returns.
+     *
+     * <p>This method is invoked by {@link SpawnActionTemplate} in the execution phase. It is
+     * important that analysis-phase objects (RuleContext, Configuration, etc.) are not directly
+     * referenced in this function to prevent them from bleeding into the execution phase.
+     *
+     * @param owner the {@link ActionOwner} for the SpawnAction
+     * @param defaultShellEnvironment the default shell environment to use. May be null if not used.
+     * @param defaultShellExecutable the default shell executable path. May be null if not used.
+     * @param paramsFile the parameter file for the SpawnAction. May be null if not used.
+     * @return the SpawnAction and any actions required by it, with the first item always being the
+     *      SpawnAction itself.
+     */
+    SpawnAction buildSpawnAction(
+        ActionOwner owner,
+        @Nullable Map<String, String> defaultShellEnvironment,
+        @Nullable PathFragment defaultShellExecutable,
+        @Nullable Artifact paramsFile) {
+      List<String> argv = buildExecutableArgs(defaultShellExecutable);
+      Iterable<String> arguments = argumentsBuilder.build();
       CommandLine actualCommandLine;
       if (paramsFile != null) {
-        actualCommandLine = ParamFileHelper.createWithParamsFile(argv, arguments, commandLine,
-            isShellCommand, owner, actions, paramFileInfo, paramsFile);
         inputsBuilder.add(paramsFile);
+        actualCommandLine = ParamFileHelper.createWithParamsFile(argv, isShellCommand,
+            paramFileInfo, paramsFile);
       } else {
         actualCommandLine = ParamFileHelper.createWithoutParamsFile(argv, arguments, commandLine,
             isShellCommand);
@@ -550,23 +578,65 @@ public class SpawnAction extends AbstractAction {
           new LinkedHashMap<>(inputManifests);
       inputAndToolManifests.putAll(toolManifests);
 
-      actions.add(
-          0,
-          new SpawnAction(
-              owner,
-              tools,
-              inputsAndTools,
-              ImmutableList.copyOf(outputs),
-              resourceSet,
-              actualCommandLine,
-              environment,
-              executionInfo,
-              progressMessage,
-              ImmutableMap.copyOf(inputAndToolManifests),
-              mnemonic,
-              executeUnconditionally,
-              extraActionInfoSupplier));
-      return actions.toArray(new Action[actions.size()]);
+      Map<String, String> env;
+      if (useDefaultShellEnvironment) {
+        env = Preconditions.checkNotNull(defaultShellEnvironment);
+      } else {
+        env = this.environment;
+      }
+
+      return createSpawnAction(
+          owner,
+          tools,
+          inputsAndTools,
+          ImmutableList.copyOf(outputs),
+          actualCommandLine,
+          ImmutableMap.copyOf(env),
+          ImmutableMap.copyOf(executionInfo),
+          progressMessage,
+          ImmutableMap.copyOf(inputAndToolManifests),
+          mnemonic);
+    }
+
+    SpawnAction createSpawnAction(
+        ActionOwner owner,
+        NestedSet<Artifact> tools,
+        NestedSet<Artifact> inputsAndTools,
+        ImmutableList<Artifact> outputs,
+        CommandLine actualCommandLine,
+        ImmutableMap<String, String> env,
+        ImmutableMap<String, String> executionInfo,
+        String progressMessage,
+        ImmutableMap<PathFragment, Artifact> inputAndToolManifests,
+        String mnemonic) {
+      return new SpawnAction(
+          owner,
+          tools,
+          inputsAndTools,
+          outputs,
+          resourceSet,
+          actualCommandLine,
+          env,
+          executionInfo,
+          progressMessage,
+          inputAndToolManifests,
+          mnemonic,
+          executeUnconditionally,
+          extraActionInfoSupplier);
+    }
+
+    private List<String> buildExecutableArgs(@Nullable PathFragment defaultShellExecutable) {
+      if (isShellCommand && executable == null) {
+        Preconditions.checkNotNull(defaultShellExecutable);
+        executable = defaultShellExecutable;
+      }
+      Preconditions.checkNotNull(executable);
+      Preconditions.checkNotNull(executableArgs);
+
+      return ImmutableList.<String>builder()
+          .add(executable.getPathString())
+          .addAll(executableArgs)
+          .build();
     }
 
     /**
@@ -601,6 +671,15 @@ public class SpawnAction extends AbstractAction {
      */
     public Builder addInputs(Iterable<Artifact> artifacts) {
       inputsBuilder.addAll(artifacts);
+      return this;
+    }
+
+    /** @deprecated Use {@link #addTransitiveInputs} to avoid excessive memory use. */
+    @Deprecated
+    public Builder addInputs(NestedSet<Artifact> artifacts) {
+      // Do not delete this method, or else addInputs(Iterable) calls with a NestedSet argument
+      // will not be flagged.
+      inputsBuilder.addAll((Iterable<Artifact>) artifacts);
       return this;
     }
 
@@ -953,6 +1032,15 @@ public class SpawnAction extends AbstractAction {
     }
 
     /**
+     * Force the use of a parameter file and set the encoding to ISO-8859-1 (latin1).
+     *
+     * <p>In order to use parameter files, at least one output artifact must be specified.
+     */
+    public Builder alwaysUseParameterFile(ParameterFileType parameterFileType) {
+      return useParameterFile(parameterFileType, ISO_8859_1, "@", /*always=*/ true);
+    }
+
+    /**
      * Enable or disable the use of a parameter file, set the encoding to the given value, and
      * specify the argument prefix to use in passing the parameter file name to the tool.
      *
@@ -961,7 +1049,12 @@ public class SpawnAction extends AbstractAction {
      */
     public Builder useParameterFile(
         ParameterFileType parameterFileType, Charset charset, String flagPrefix) {
-      paramFileInfo = new ParamFileInfo(parameterFileType, charset, flagPrefix);
+      return useParameterFile(parameterFileType, charset, flagPrefix, /*always=*/ false);
+    }
+
+    private Builder useParameterFile(
+        ParameterFileType parameterFileType, Charset charset, String flagPrefix, boolean always) {
+      paramFileInfo = new ParamFileInfo(parameterFileType, charset, flagPrefix, always);
       return this;
     }
   }

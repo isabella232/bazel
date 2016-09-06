@@ -20,10 +20,9 @@ import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.rules.objc.J2ObjcSource.SourceType;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
-import com.google.devtools.build.lib.analysis.ConfiguredNativeAspectFactory;
+import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -32,6 +31,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.AspectDefinition;
 import com.google.devtools.build.lib.packages.AspectParameters;
+import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.proto.ProtoCommon;
@@ -55,11 +55,22 @@ import com.google.devtools.build.lib.vfs.PathFragment;
  * by this class and provided by proto_library will be exported all the way to objc_binary for ObjC
  * compilation and linking into the final application bundle.
  */
-public abstract class AbstractJ2ObjcProtoAspect implements ConfiguredNativeAspectFactory {
-  public static final String NAME = "J2ObjcProtoAspect";
+public abstract class AbstractJ2ObjcProtoAspect extends NativeAspectClass
+  implements ConfiguredAspectFactory {
+
   private static final Iterable<Attribute> DEPENDENT_ATTRIBUTES = ImmutableList.of(
       new Attribute("$protobuf_lib", Mode.TARGET),
       new Attribute("deps", Mode.TARGET));
+
+  /** Flags passed to J2ObjC proto compiler plugin. */
+  protected static final Iterable<String> J2OBJC_PLUGIN_PARAMS =
+      ImmutableList.of("file_dir_mapping", "generate_class_mappings");
+
+  protected final String toolsRepository;
+
+  public AbstractJ2ObjcProtoAspect(String toolsRepository) {
+    this.toolsRepository = toolsRepository;
+  }
 
   @Override
   public AspectDefinition getDefinition(AspectParameters aspectParameters) {
@@ -70,20 +81,23 @@ public abstract class AbstractJ2ObjcProtoAspect implements ConfiguredNativeAspec
             J2ObjcConfiguration.class,
             ObjcConfiguration.class,
             ProtoConfiguration.class)
-        .attributeAspect("deps", getClass())
-        .attributeAspect("exports", getClass())
-        .attributeAspect("runtime_deps", getClass())
+        .attributeAspect("deps", this)
+        .attributeAspect("exports", this)
+        .attributeAspect("runtime_deps", this)
         .add(attr("$protobuf_lib", LABEL)
             .value(Label.parseAbsoluteUnchecked("//third_party/java/j2objc:proto_runtime")))
         .add(attr("$xcrunwrapper", LABEL).cfg(HOST).exec()
             .value(Label.parseAbsoluteUnchecked(
-                Constants.TOOLS_REPOSITORY + "//tools/objc:xcrunwrapper")))
+                toolsRepository + "//tools/objc:xcrunwrapper")))
+        .add(attr(ObjcRuleClasses.LIBTOOL_ATTRIBUTE, LABEL).cfg(HOST).exec()
+              .value(Label.parseAbsoluteUnchecked(
+                toolsRepository + "//tools/objc:libtool")))
         .add(attr(":xcode_config", LABEL)
             .allowedRuleClasses("xcode_config")
             .checkConstraints()
             .direct_compile_time_input()
             .cfg(HOST)
-            .value(AppleToolchain.RequiresXcodeConfigRule.XCODE_CONFIG_LABEL));
+            .value(new AppleToolchain.XcodeConfigLabel(toolsRepository)));
     return addAdditionalAttributes(builder).build();
   }
 
@@ -97,7 +111,7 @@ public abstract class AbstractJ2ObjcProtoAspect implements ConfiguredNativeAspec
       ConfiguredTarget base, RuleContext ruleContext, AspectParameters parameters)
       throws InterruptedException {
     if (!checkShouldCreateAspect(ruleContext)) {
-      return new ConfiguredAspect.Builder(NAME, ruleContext).build();
+      return new ConfiguredAspect.Builder(getName(), ruleContext).build();
     }
 
     ProtoSourcesProvider protoSourcesProvider = base.getProvider(ProtoSourcesProvider.class);
@@ -144,7 +158,9 @@ public abstract class AbstractJ2ObjcProtoAspect implements ConfiguredNativeAspec
           j2ObjcSource.getHeaderSearchPaths(),
           DEPENDENT_ATTRIBUTES);
 
-      new CompilationSupport(ruleContext).registerCompileAndArchiveActions(common);
+      new CompilationSupport(ruleContext)
+          .registerCompileAndArchiveActions(common)
+          .registerFullyLinkAction(common.getObjcProvider());
     }
 
     NestedSet<Artifact> j2ObjcTransitiveHeaderMappingFiles = j2ObjcTransitiveHeaderMappingFiles(
@@ -152,7 +168,7 @@ public abstract class AbstractJ2ObjcProtoAspect implements ConfiguredNativeAspec
     NestedSet<Artifact> j2ObjcTransitiveClassMappingFiles = j2ObjcTransitiveClassMappingFiles(
         ruleContext, classMappingFiles);
 
-    return new ConfiguredAspect.Builder(NAME, ruleContext)
+    return new ConfiguredAspect.Builder(getName(), ruleContext)
         .addProvider(
             J2ObjcMappingFileProvider.class,
             new J2ObjcMappingFileProvider(
@@ -177,7 +193,8 @@ public abstract class AbstractJ2ObjcProtoAspect implements ConfiguredNativeAspec
     Iterable<Artifact> generatedSourceFiles = checkShouldCreateSources(ruleContext)
         ? ProtoCommon.getGeneratedOutputs(ruleContext, protoSources, ".j2objc.pb.m")
         : ImmutableList.<Artifact>of();
-    PathFragment objcFileRootExecPath = ruleContext.getConfiguration().getGenfilesDirectory()
+    PathFragment objcFileRootExecPath = ruleContext.getConfiguration()
+        .getGenfilesDirectory(ruleContext.getRule().getRepository())
         .getExecPath();
     Iterable<PathFragment> headerSearchPaths = J2ObjcLibrary.j2objcSourceHeaderSearchPaths(
         ruleContext, objcFileRootExecPath, protoSources);

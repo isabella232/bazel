@@ -19,10 +19,13 @@ import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.actions.ActionContextProvider;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildStartingEvent;
+import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.common.options.OptionsBase;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 /**
  * RemoteModule provides distributed cache and remote execution for Bazel.
@@ -37,11 +40,8 @@ public final class RemoteModule extends BlazeModule {
 
   @Override
   public Iterable<ActionContextProvider> getActionContextProviders() {
-    if (actionCache != null) {
-      return ImmutableList.<ActionContextProvider>of(
-          new RemoteActionContextProvider(env, buildRequest, actionCache, workExecutor));
-    }
-    return ImmutableList.<ActionContextProvider>of();
+    return ImmutableList.<ActionContextProvider>of(
+        new RemoteActionContextProvider(env, buildRequest, actionCache, workExecutor));
   }
 
   @Override
@@ -61,20 +61,44 @@ public final class RemoteModule extends BlazeModule {
     buildRequest = event.getRequest();
     RemoteOptions options = buildRequest.getOptions(RemoteOptions.class);
 
+    ConcurrentMapActionCache cache = null;
+
     // Don't provide the remote spawn unless at least action cache is initialized.
-    if (actionCache == null && options.hazelcastNode != null) {
-      actionCache =
-          new MemcacheActionCache(
-              this.env.getRuntime().getExecRoot(),
-              options,
-              HazelcastCacheFactory.create(options));
-      // TODO(alpha): Initialize a RemoteWorkExecutor.
+    if (actionCache == null) {
+      if (options.hazelcastNode != null || options.hazelcastClientConfig != null) {
+        cache =
+            new ConcurrentMapActionCache(
+                this.env.getDirectories().getExecRoot(),
+                HazelcastCacheFactory.create(options));
+      } else if (options.restCacheUrl != null) {
+        cache =
+            new ConcurrentMapActionCache(
+                this.env.getDirectories().getExecRoot(),
+                RestUrlCacheFactory.create(options));
+      }
+      actionCache = cache;
+    }
+
+    if (cache != null) {
+      if (workExecutor == null && options.remoteWorker != null) {
+        try {
+          URI uri = new URI("dummy://" + options.remoteWorker);
+          if (uri.getHost() == null || uri.getPort() == -1) {
+            throw new URISyntaxException("Invalid host or port.", "");
+          }
+          workExecutor =
+              MemcacheWorkExecutor.createRemoteWorkExecutor(cache, uri.getHost(), uri.getPort());
+        } catch (URISyntaxException e) {
+          env.getReporter()
+              .handle(Event.warn("Invalid argument for the address of remote worker."));
+        }
+      }
     }
   }
 
   @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
-    return command.builds()
+    return "build".equals(command.name())
         ? ImmutableList.<Class<? extends OptionsBase>>of(RemoteOptions.class)
         : ImmutableList.<Class<? extends OptionsBase>>of();
   }

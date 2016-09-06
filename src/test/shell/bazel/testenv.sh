@@ -16,67 +16,87 @@
 #
 # Setting up the environment for Bazel integration tests.
 #
-
 [ -z "$TEST_SRCDIR" ] && { echo "TEST_SRCDIR not set!" >&2; exit 1; }
+BAZEL_RUNFILES="$TEST_SRCDIR/io_bazel"
+
+if ! type rlocation &> /dev/null; then
+  function rlocation() {
+    if [[ "$1" = /* ]]; then
+      echo $1
+    else
+      echo "$TEST_SRCDIR/$1"
+    fi
+  }
+  export -f rlocation
+fi
 
 # Load the unit-testing framework
-source "${TEST_SRCDIR}/src/test/shell/unittest.bash" || \
+source "$(rlocation io_bazel/src/test/shell/unittest.bash)" || \
   { echo "Failed to source unittest.bash" >&2; exit 1; }
 
+# WORKSPACE file
+workspace_file="${BAZEL_RUNFILES}/WORKSPACE"
+
 # Bazel
-bazel_tree="${TEST_SRCDIR}/src/test/shell/bazel/doc-srcs.zip"
-bazel="${TEST_SRCDIR}/src/bazel"
-bazel_data="${TEST_SRCDIR}"
+bazel_tree="$(rlocation io_bazel/src/test/shell/bazel/doc-srcs.zip)"
+bazel="$(rlocation io_bazel/src/bazel)"
+bazel_data="${BAZEL_RUNFILES}"
+
+# Windows
+PLATFORM="$(uname -s | tr 'A-Z' 'a-z')"
+function is_windows() {
+  # On windows, the shell test actually running on msys
+  if [[ "${PLATFORM}" =~ msys_nt* ]]; then
+    true
+  else
+    false
+  fi
+}
 
 # Java
-jdk_dir="${TEST_SRCDIR}/external/local_jdk"
-langtools="${TEST_SRCDIR}/src/test/shell/bazel/langtools.jar"
+if is_windows; then
+  jdk_dir="$(cygpath -m $(cd $(rlocation local_jdk/bin/java.exe)/../..; pwd))"
+else
+  jdk_dir="${TEST_SRCDIR}/local_jdk"
+fi
+langtools="$(rlocation io_bazel/src/test/shell/bazel/langtools.jar)"
 
 # Tools directory location
-tools_dir="${TEST_SRCDIR}/tools"
-langtools_dir="${TEST_SRCDIR}/third_party/java/jdk/langtools"
-EXTRA_BAZELRC="build --java_langtools=//tools/jdk:test-langtools --ios_sdk_version=8.4"
+tools_dir="$(dirname $(rlocation io_bazel/tools/BUILD))"
+langtools_dir="$(dirname $(rlocation io_bazel/third_party/java/jdk/langtools/BUILD))"
+EXTRA_BAZELRC="build --ios_sdk_version=8.4"
 
 # Java tooling
-javabuilder_path="${TEST_SRCDIR}/src/java_tools/buildjar/JavaBuilder_deploy.jar"
-langtools_path="${TEST_SRCDIR}/third_party/java/jdk/langtools/javac.jar"
-singlejar_path="${TEST_SRCDIR}/src/java_tools/singlejar/SingleJar_deploy.jar"
-genclass_path="${TEST_SRCDIR}/src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass/GenClass_deploy.jar"
-junitrunner_path="${TEST_SRCDIR}/src/java_tools/junitrunner/java/com/google/testing/junit/runner/Runner_deploy.jar"
-ijar_path="${TEST_SRCDIR}/third_party/ijar/ijar"
+javabuilder_path="$(find ${BAZEL_RUNFILES} -name JavaBuilder_*.jar)"
+langtools_path="${BAZEL_RUNFILES}/third_party/java/jdk/langtools/javac.jar"
+singlejar_path="${BAZEL_RUNFILES}/src/java_tools/singlejar/SingleJar_deploy.jar"
+genclass_path="${BAZEL_RUNFILES}/src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass/GenClass_deploy.jar"
+junitrunner_path="${BAZEL_RUNFILES}/src/java_tools/junitrunner/java/com/google/testing/junit/runner/Runner_deploy.jar"
+ijar_path="${BAZEL_RUNFILES}/third_party/ijar/ijar"
 
 # Sandbox tools
-process_wrapper="${TEST_SRCDIR}/src/main/tools/process-wrapper"
-namespace_sandbox="${TEST_SRCDIR}/src/main/tools/namespace-sandbox"
-
-# Android tooling
-aargenerator_path="${TEST_SRCDIR}/src/tools/android/java/com/google/devtools/build/android/AarGeneratorAction_deploy.jar"
-androidresourceprocessor_path="${TEST_SRCDIR}/src/tools/android/java/com/google/devtools/build/android/AndroidResourceProcessingAction_deploy.jar"
-resourceshrinker_path="${TEST_SRCDIR}/src/tools/android/java/com/google/devtools/build/android/ResourceShrinkerAction_deploy.jar"
-dexmapper_path="${TEST_SRCDIR}/src/tools/android/java/com/google/devtools/build/android/ziputils/mapper_deploy.jar"
-dexreducer_path="${TEST_SRCDIR}/src/tools/android/java/com/google/devtools/build/android/ziputils/reducer_deploy.jar"
-incrementaldeployment_path="${TEST_SRCDIR}/src/tools/android/java/com/google/devtools/build/android/incrementaldeployment"
+process_wrapper="${BAZEL_RUNFILES}/src/main/tools/process-wrapper"
+linux_sandbox="${BAZEL_RUNFILES}/src/main/tools/linux-sandbox"
 
 # iOS and Objective-C tooling
-iossim_path="${TEST_SRCDIR}/third_party/iossim/iossim"
-actoolwrapper_path="${TEST_SRCDIR}/src/tools/xcode/actoolwrapper/actoolwrapper.sh"
-ibtoolwrapper_path="${TEST_SRCDIR}/src/tools/xcode/ibtoolwrapper/ibtoolwrapper.sh"
-swiftstdlibtoolwrapper_path="${TEST_SRCDIR}/src/tools/xcode/swiftstdlibtoolwrapper/swiftstdlibtoolwrapper.sh"
-momcwrapper_path="${TEST_SRCDIR}/src/tools/xcode/momcwrapper/momcwrapper.sh"
-bundlemerge_path="${TEST_SRCDIR}/src/objc_tools/bundlemerge/bundlemerge_deploy.jar"
-plmerge_path="${TEST_SRCDIR}/src/objc_tools/plmerge/plmerge_deploy.jar"
-xcodegen_path="${TEST_SRCDIR}/src/objc_tools/xcodegen/xcodegen_deploy.jar"
-stdredirect_path="${TEST_SRCDIR}/src/tools/xcode/stdredirect/StdRedirect.dylib"
-realpath_path="${TEST_SRCDIR}/src/tools/xcode/realpath/realpath"
-environment_plist_path="${TEST_SRCDIR}/src/tools/xcode/environment/environment_plist.sh"
-xcrunwrapper_path="${TEST_SRCDIR}/src/tools/xcode/xcrunwrapper/xcrunwrapper.sh"
+iossim_path="${BAZEL_RUNFILES}/third_party/iossim/iossim"
+actoolwrapper_path="${BAZEL_RUNFILES}/src/tools/xcode/actoolwrapper/actoolwrapper.sh"
+ibtoolwrapper_path="${BAZEL_RUNFILES}/src/tools/xcode/ibtoolwrapper/ibtoolwrapper.sh"
+swiftstdlibtoolwrapper_path="${BAZEL_RUNFILES}/src/tools/xcode/swiftstdlibtoolwrapper/swiftstdlibtoolwrapper.sh"
+momcwrapper_path="${BAZEL_RUNFILES}/src/tools/xcode/momcwrapper/momcwrapper.sh"
+bundlemerge_path="${BAZEL_RUNFILES}/src/objc_tools/bundlemerge/bundlemerge_deploy.jar"
+plmerge_path="${BAZEL_RUNFILES}/src/objc_tools/plmerge/plmerge_deploy.jar"
+xcodegen_path="${BAZEL_RUNFILES}/src/objc_tools/xcodegen/xcodegen_deploy.jar"
+stdredirect_path="${BAZEL_RUNFILES}/src/tools/xcode/stdredirect/StdRedirect.dylib"
+realpath_path="${BAZEL_RUNFILES}/src/tools/xcode/realpath/realpath"
+environment_plist_path="${BAZEL_RUNFILES}/src/tools/xcode/environment/environment_plist.sh"
+xcrunwrapper_path="${BAZEL_RUNFILES}/src/tools/xcode/xcrunwrapper/xcrunwrapper.sh"
 
 # Test data
-testdata_path=${TEST_SRCDIR}/src/test/shell/bazel/testdata
-python_server="${TEST_SRCDIR}/src/test/shell/bazel/testing_server.py"
+testdata_path=${BAZEL_RUNFILES}/src/test/shell/bazel/testdata
+python_server="${BAZEL_RUNFILES}/src/test/shell/bazel/testing_server.py"
 
 # Third-party
-PLATFORM="$(uname -s | tr 'A-Z' 'a-z')"
 MACHINE_TYPE="$(uname -m)"
 MACHINE_IS_64BIT='no'
 if [ "${MACHINE_TYPE}" = 'amd64' -o "${MACHINE_TYPE}" = 'x86_64' ]; then
@@ -85,26 +105,38 @@ fi
 case "${PLATFORM}" in
   darwin)
     if [ "${MACHINE_IS_64BIT}" = 'yes' ]; then
-      protoc_compiler="${TEST_SRCDIR}/third_party/protobuf/protoc-osx-x86_64.exe"
+      protoc_compiler="${BAZEL_RUNFILES}/third_party/protobuf/protoc-osx-x86_64.exe"
     else
-      protoc_compiler="${TEST_SRCDIR}/third_party/protobuf/protoc-osx-x86_32.exe"
+      protoc_compiler="${BAZEL_RUNFILES}/third_party/protobuf/protoc-osx-x86_32.exe"
     fi
     ;;
   *)
     if [ "${MACHINE_IS_64BIT}" = 'yes' ]; then
-      protoc_compiler="${TEST_SRCDIR}/third_party/protobuf/protoc-linux-x86_64.exe"
+      protoc_compiler="${BAZEL_RUNFILES}/third_party/protobuf/protoc-linux-x86_64.exe"
     else
-      protoc_compiler="${TEST_SRCDIR}/third_party/protobuf/protoc-linux-x86_32.exe"
+      protoc_compiler="${BAZEL_RUNFILES}/third_party/protobuf/protoc-linux-x86_32.exe"
     fi
     ;;
 esac
-protoc_jar="${TEST_SRCDIR}/third_party/protobuf/protobuf-*.jar"
-junit_jar="${TEST_SRCDIR}/third_party/junit/junit-*.jar"
-hamcrest_jar="${TEST_SRCDIR}/third_party/hamcrest/hamcrest-*.jar"
+
+if [ -z ${RUNFILES_MANIFEST_ONLY+x} ]; then
+  protoc_jar="${BAZEL_RUNFILES}/third_party/protobuf/protobuf-*.jar"
+  junit_jar="${BAZEL_RUNFILES}/third_party/junit/junit-*.jar"
+  hamcrest_jar="${BAZEL_RUNFILES}/third_party/hamcrest/hamcrest-*.jar"
+else
+  protoc_jar=$(rlocation io_bazel/third_party/protobuf/protobuf-.*.jar)
+  junit_jar=$(rlocation io_bazel/third_party/junit/junit-.*.jar)
+  hamcrest_jar=$(rlocation io_bazel/third_party/hamcrest/hamcrest-.*.jar)
+fi
 
 # This function copies the tools directory from Bazel.
 function copy_tools_directory() {
   cp -RL ${tools_dir}/* tools
+  # tools/jdk/BUILD file for JDK 7 is generated.
+  if [ -f tools/jdk/BUILD.* ]; then
+    cp tools/jdk/BUILD.* tools/jdk/BUILD
+    chmod +w tools/jdk/BUILD
+  fi
   # To support custom langtools
   cp ${langtools} tools/jdk/langtools.jar
   cat >>tools/jdk/BUILD <<'EOF'
@@ -143,7 +175,7 @@ function is_tools_directory() {
 
 # Copy the examples of the base workspace
 function copy_examples() {
-  EXAMPLE="$TEST_SRCDIR/examples"
+  EXAMPLE="$(cd $(dirname $(rlocation io_bazel/examples/cpp/BUILD))/..; pwd)"
   cp -RL ${EXAMPLE} .
   chmod -R +w .
 }

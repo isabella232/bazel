@@ -35,16 +35,16 @@ public class BlazeDirectoriesTest extends FoundationTestCase {
     Path installBase = fs.getPath("/my/install");
     Path outputBase = fs.getPath("/my/output");
     Path workspace = fs.getPath("/my/ws");
-    BlazeDirectories directories = new BlazeDirectories(installBase, outputBase, workspace);
+    BlazeDirectories directories = new BlazeDirectories(installBase, outputBase, workspace, "foo");
     assertEquals(directories.getExecRoot(), outputBase.getChild("ws"));
 
     workspace = null;
-    directories = new BlazeDirectories(installBase, outputBase, workspace);
+    directories = new BlazeDirectories(installBase, outputBase, workspace, "foo");
     assertEquals(directories.getExecRoot(),
         outputBase.getChild(BlazeDirectories.DEFAULT_EXEC_ROOT));
 
     workspace = fs.getPath("/");
-    directories = new BlazeDirectories(installBase, outputBase, workspace);
+    directories = new BlazeDirectories(installBase, outputBase, workspace, "foo");
     assertEquals(directories.getExecRoot(),
         outputBase.getChild(BlazeDirectories.DEFAULT_EXEC_ROOT));
   }

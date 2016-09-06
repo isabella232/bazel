@@ -28,16 +28,16 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.skyframe.AspectCompletionValue.AspectCompletionKey;
 import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
+import com.google.devtools.build.lib.skyframe.TargetCompletionValue.TargetCompletionKey;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.ValueOrException2;
-
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
-
 import javax.annotation.Nullable;
 
 /**
@@ -46,18 +46,28 @@ import javax.annotation.Nullable;
 public final class CompletionFunction<TValue extends SkyValue, TResult extends SkyValue>
     implements SkyFunction {
 
-  /**
-   * A strategy for completing the build.
-   */
-  public interface Completor<TValue, TResult extends SkyValue> {
+  /** A strategy for completing the build. */
+  interface Completor<TValue, TResult extends SkyValue> {
+
+    /** Obtains an analysis result value from environment. */
+    TValue getValueFromSkyKey(SkyKey skyKey, Environment env) throws InterruptedException;
 
     /**
-     * Obtains an analysis result value from environment.
+     * Returns the options which determine the artifacts to build for the top-level targets.
+     * <p>
+     * For the Top level targets we made a conscious decision to include the TopLevelArtifactContext
+     * within the SkyKey as an argument to the CompletionFunction rather than a separate SkyKey.
+     * As a result we do have <num top level targets> extra SkyKeys for every unique
+     * TopLevelArtifactContexts used over the lifetime of Blaze. This is a minor tradeoff,
+     * since it significantly improves null build times when we're switching the
+     * TopLevelArtifactContexts frequently (common for IDEs), by reusing existing SkyKeys
+     * from earlier runs, instead of causing an eager invalidation
+     * were the TopLevelArtifactContext modeled as a separate SkyKey.
      */
-    TValue getValueFromSkyKey(SkyKey skyKey, Environment env);
+    TopLevelArtifactContext getTopLevelArtifactContext(SkyKey skyKey);
 
     /**
-     * Returns all artefacts that need to be built to complete the {@code value}
+     * Returns all artifacts that need to be built to complete the {@code value}
      */
     ArtifactsToBuild getAllArtifactsToBuild(TValue value, TopLevelArtifactContext context);
 
@@ -80,15 +90,28 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
      * Creates a failed completion value.
      */
     SkyValue createFailed(TValue value, NestedSet<Label> rootCauses);
+
+    /**
+     * Extracts a tag given the {@link SkyKey}.
+     */
+    String extractTag(SkyKey skyKey);
   }
 
   private static class TargetCompletor
       implements Completor<ConfiguredTargetValue, TargetCompletionValue> {
     @Override
-    public ConfiguredTargetValue getValueFromSkyKey(SkyKey skyKey, Environment env) {
-      LabelAndConfiguration lac = (LabelAndConfiguration) skyKey.argument();
+    public ConfiguredTargetValue getValueFromSkyKey(SkyKey skyKey, Environment env)
+        throws InterruptedException {
+      TargetCompletionKey tcKey = (TargetCompletionKey) skyKey.argument();
+      LabelAndConfiguration lac = tcKey.labelAndConfiguration();
       return (ConfiguredTargetValue)
           env.getValue(ConfiguredTargetValue.key(lac.getLabel(), lac.getConfiguration()));
+    }
+
+    @Override
+    public TopLevelArtifactContext getTopLevelArtifactContext(SkyKey skyKey) {
+      TargetCompletionKey tcKey = (TargetCompletionKey) skyKey.argument();
+      return tcKey.topLevelArtifactContext();
     }
 
     @Override
@@ -126,13 +149,27 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
     public SkyValue createFailed(ConfiguredTargetValue value, NestedSet<Label> rootCauses) {
       return TargetCompleteEvent.createFailed(value.getConfiguredTarget(), rootCauses);
     }
+
+    @Override
+    public String extractTag(SkyKey skyKey) {
+      return Label.print(
+          ((TargetCompletionKey) skyKey.argument()).labelAndConfiguration().getLabel());
+    }
   }
 
   private static class AspectCompletor implements Completor<AspectValue, AspectCompletionValue> {
     @Override
-    public AspectValue getValueFromSkyKey(SkyKey skyKey, Environment env) {
-      AspectKey aspectKey = (AspectKey) skyKey.argument();
+    public AspectValue getValueFromSkyKey(SkyKey skyKey, Environment env)
+        throws InterruptedException {
+      AspectCompletionKey acKey = (AspectCompletionKey) skyKey.argument();
+      AspectKey aspectKey = acKey.aspectKey();
       return (AspectValue) env.getValue(AspectValue.key(aspectKey));
+    }
+
+    @Override
+    public TopLevelArtifactContext getTopLevelArtifactContext(SkyKey skyKey) {
+      AspectCompletionKey acKey = (AspectCompletionKey) skyKey.argument();
+      return acKey.topLevelArtifactContext();
     }
 
     @Override
@@ -172,6 +209,11 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
     public SkyValue createFailed(AspectValue value, NestedSet<Label> rootCauses) {
       return AspectCompleteEvent.createFailed(value, rootCauses);
     }
+
+    @Override
+    public String extractTag(SkyKey skyKey) {
+      return Label.print(((AspectCompletionKey) skyKey.argument()).aspectKey().getLabel());
+    }
   }
 
   public static SkyFunction targetCompletionFunction(AtomicReference<EventBus> eventBusRef) {
@@ -193,16 +235,17 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
 
   @Nullable
   @Override
-  public SkyValue compute(SkyKey skyKey, Environment env) throws CompletionFunctionException {
+  public SkyValue compute(SkyKey skyKey, Environment env)
+      throws CompletionFunctionException, InterruptedException {
     TValue value = completor.getValueFromSkyKey(skyKey, env);
-    TopLevelArtifactContext topLevelContext = PrecomputedValue.TOP_LEVEL_CONTEXT.get(env);
+    TopLevelArtifactContext topLevelContext = completor.getTopLevelArtifactContext(skyKey);
     if (env.valuesMissing()) {
       return null;
     }
 
     Map<SkyKey, ValueOrException2<MissingInputFileException, ActionExecutionException>> inputDeps =
         env.getValuesOrThrow(
-            ArtifactValue.mandatoryKeys(
+            ArtifactSkyKey.mandatoryKeys(
                 completor.getAllArtifactsToBuild(value, topLevelContext).getAllArtifacts()),
             MissingInputFileException.class,
             ActionExecutionException.class);
@@ -213,7 +256,7 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
     NestedSetBuilder<Label> rootCausesBuilder = NestedSetBuilder.stableOrder();
     for (Map.Entry<SkyKey, ValueOrException2<MissingInputFileException, ActionExecutionException>>
         depsEntry : inputDeps.entrySet()) {
-      Artifact input = ArtifactValue.artifact(depsEntry.getKey());
+      Artifact input = ArtifactSkyKey.artifact(depsEntry.getKey());
       try {
         depsEntry.getValue().get();
       } catch (MissingInputFileException e) {
@@ -250,7 +293,7 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
 
   @Override
   public String extractTag(SkyKey skyKey) {
-    return Label.print(((LabelAndConfiguration) skyKey.argument()).getLabel());
+    return completor.extractTag(skyKey);
   }
 
   private static final class CompletionFunctionException extends SkyFunctionException {

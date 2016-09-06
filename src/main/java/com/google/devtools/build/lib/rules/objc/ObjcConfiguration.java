@@ -15,37 +15,38 @@
 package com.google.devtools.build.lib.rules.objc;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.apple.DottedVersion;
-import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.SplitArchTransition.ConfigurationDistinguisher;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-
 import javax.annotation.Nullable;
 
-/**
- * A compiler configuration containing flags required for Objective-C compilation.
- */
+/** A compiler configuration containing flags required for Objective-C compilation. */
+@SkylarkModule(
+  name = "objc",
+  category = SkylarkModuleCategory.CONFIGURATION_FRAGMENT,
+  doc = "A configuration fragment for Objective-C"
+)
 @Immutable
 public class ObjcConfiguration extends BuildConfiguration.Fragment {
   @VisibleForTesting
   static final ImmutableList<String> DBG_COPTS =
-      ImmutableList.of("-O0", "-DDEBUG=1", "-fstack-protector", "-fstack-protector-all");
+      ImmutableList.of("-O0", "-DDEBUG=1", "-fstack-protector", "-fstack-protector-all", "-g");
 
   @VisibleForTesting
   static final ImmutableList<String> GLIBCXX_DBG_COPTS =
       ImmutableList.of(
           "-D_GLIBCXX_DEBUG", "-D_GLIBCXX_DEBUG_PEDANTIC", "-D_GLIBCPP_CONCEPT_CHECKS");
-  
+
   @VisibleForTesting
   static final ImmutableList<String> OPT_COPTS =
       ImmutableList.of(
@@ -54,21 +55,22 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
   private final DottedVersion iosMinimumOs;
   private final DottedVersion iosSimulatorVersion;
   private final String iosSimulatorDevice;
-  private final boolean generateDebugSymbols;
+  private final boolean generateDsym;
+  private final boolean generateLinkmap;
   private final boolean runMemleaks;
   private final ImmutableList<String> copts;
   private final CompilationMode compilationMode;
-  private final String iosSplitCpu;
   private final ImmutableList<String> fastbuildOptions;
   private final boolean enableBinaryStripping;
   private final boolean moduleMapsEnabled;
-  private final ConfigurationDistinguisher configurationDistinguisher;
   @Nullable private final String signingCertName;
   @Nullable private final Path clientWorkspaceRoot;
   private final String xcodeOverrideWorkspaceRoot;
   private final boolean useAbsolutePathsForActions;
   private final boolean prioritizeStaticLibs;
   private final boolean debugWithGlibcxx;
+  @Nullable private final Label extraEntitlements;
+  private final boolean deviceDebugEntitlements;
 
   ObjcConfiguration(ObjcCommandLineOptions objcOptions, BuildConfiguration.Options options,
       @Nullable BlazeDirectories directories) {
@@ -77,21 +79,22 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
         Preconditions.checkNotNull(objcOptions.iosSimulatorDevice, "iosSimulatorDevice");
     this.iosSimulatorVersion =
         Preconditions.checkNotNull(objcOptions.iosSimulatorVersion, "iosSimulatorVersion");
-    this.generateDebugSymbols = objcOptions.generateDebugSymbols;
+    this.generateDsym = objcOptions.appleGenerateDsym;
+    this.generateLinkmap = objcOptions.generateLinkmap;
     this.runMemleaks = objcOptions.runMemleaks;
     this.copts = ImmutableList.copyOf(objcOptions.copts);
     this.compilationMode = Preconditions.checkNotNull(options.compilationMode, "compilationMode");
-    this.iosSplitCpu = Preconditions.checkNotNull(objcOptions.iosSplitCpu, "iosSplitCpu");
     this.fastbuildOptions = ImmutableList.copyOf(objcOptions.fastbuildOptions);
     this.enableBinaryStripping = objcOptions.enableBinaryStripping;
     this.moduleMapsEnabled = objcOptions.enableModuleMaps;
-    this.configurationDistinguisher = objcOptions.configurationDistinguisher;
     this.clientWorkspaceRoot = directories != null ? directories.getWorkspace() : null;
     this.signingCertName = objcOptions.iosSigningCertName;
     this.xcodeOverrideWorkspaceRoot = objcOptions.xcodeOverrideWorkspaceRoot;
     this.useAbsolutePathsForActions = objcOptions.useAbsolutePathsForActions;
     this.prioritizeStaticLibs = objcOptions.prioritizeStaticLibs;
     this.debugWithGlibcxx = objcOptions.debugWithGlibcxx;
+    this.extraEntitlements = objcOptions.extraEntitlements;
+    this.deviceDebugEntitlements = objcOptions.deviceDebugEntitlements;
   }
 
   /**
@@ -99,6 +102,8 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
    * iOS version features or libraries will become weak dependencies which are only loaded if the
    * runtime OS supports them.
    */
+  @SkylarkCallable(name = "ios_minimum_os", structField = true,
+      doc = "The minimum compatible iOS version for target simulators and devices..")
   public DottedVersion getMinimumOs() {
     return iosMinimumOs;
   }
@@ -106,16 +111,27 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
   /**
    * Returns the type of device (e.g. 'iPhone 6') to simulate when running on the simulator.
    */
+  @SkylarkCallable(name = "ios_simulator_device", structField = true,
+      doc = "The type of device (e.g. 'iPhone 6') to use when running on the simulator.")
   public String getIosSimulatorDevice() {
     return iosSimulatorDevice;
   }
 
+  @SkylarkCallable(name = "ios_simulator_version", structField = true,
+      doc = "The SDK version of the iOS simulator to use when running on the simulator.")
   public DottedVersion getIosSimulatorVersion() {
     return iosSimulatorVersion;
   }
 
-  public boolean generateDebugSymbols() {
-    return generateDebugSymbols;
+  /**
+   * Returns whether dSYM generation is enabled.
+   */
+  public boolean generateDsym() {
+    return generateDsym;
+  }
+
+  public boolean generateLinkmap() {
+    return generateLinkmap;
   }
 
   public boolean runMemleaks() {
@@ -132,6 +148,9 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
   /**
    * Returns the default set of clang options for the current compilation mode.
    */
+  @SkylarkCallable(name = "copts_for_current_compilation_mode", structField = true,
+      doc = "Returns a list of default options to use for compiling Objective-C in the current "
+      + "mode.")
   public ImmutableList<String> getCoptsForCompilationMode() {
     switch (compilationMode) {
       case DBG:
@@ -153,9 +172,31 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
   }
 
   /**
+   * Returns the default set of swiftc options for the current compilation mode.
+   */
+  @SkylarkCallable(name = "swift_copts_for_current_compilation_mode", structField = true,
+      doc = "Returns a list of default options to use for compiling Swift in the current mode.")
+  public ImmutableList<String> getSwiftCoptsForCompilationMode() {
+    switch (compilationMode) {
+      case DBG:
+        return ImmutableList.of("-Onone", "-DDEBUG=1", "-g");
+      case FASTBUILD:
+        return ImmutableList.of("-Onone", "-DDEBUG=1");
+      case OPT:
+        return ImmutableList.of("-O", "-DNDEBUG=1");
+      default:
+        throw new AssertionError();
+    }
+  }
+
+  /**
    * Returns options passed to (Apple) clang when compiling Objective C. These options should be
    * applied after any default options but before options specified in the attributes of the rule.
    */
+  @SkylarkCallable(name = "copts", structField = true,
+      doc = "Returns a list of options to use for compiling Objective-C."
+      + "These options are applied after any default options but before options specified in the "
+      + "attributes of the rule.")
   public ImmutableList<String> getCopts() {
     return copts;
   }
@@ -165,33 +206,6 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
    */
   public boolean moduleMapsEnabled() {
     return moduleMapsEnabled;
-  }
-
-  /**
-   * Returns the unique identifier distinguishing configurations that are otherwise the same.
-   *
-   * <p>Use this value for situations in which two configurations create two outputs that are the
-   * same but are not collapsed due to their different configuration owners.
-   */
-  public ConfigurationDistinguisher getConfigurationDistinguisher() {
-    return configurationDistinguisher;
-  }
-
-  @Nullable
-  @Override
-  public String getOutputDirectoryName() {
-    List<String> components = new ArrayList<>();
-    if (!iosSplitCpu.isEmpty()) {
-      components.add("ios-" + iosSplitCpu);
-    }
-    if (configurationDistinguisher != ConfigurationDistinguisher.UNKNOWN) {
-      components.add(configurationDistinguisher.toString().toLowerCase(Locale.US));
-    }
-
-    if (components.isEmpty()) {
-      return null;
-    }
-    return Joiner.on('-').join(components);
   }
 
   /**
@@ -236,12 +250,30 @@ public class ObjcConfiguration extends BuildConfiguration.Fragment {
   public String getSigningCertName() {
     return this.signingCertName;
   }
-  
+
   /**
    * Returns true if the linker invocation should contain static library includes before framework
    * and system library includes.
    */
   public boolean shouldPrioritizeStaticLibs() {
     return this.prioritizeStaticLibs;
+  }
+
+  /**
+   * Returns the extra entitlements plist specified as a flag or {@code null} if none was given.
+   */
+  @Nullable
+  public Label getExtraEntitlements() {
+    return extraEntitlements;
+  }
+
+  /**
+   * Returns whether device debug entitlements should be included when signing an application.
+   *
+   * <p>Note that debug entitlements should not be included in compilation mode {@code opt}
+   * regardless of this setting.
+   */
+  public boolean useDeviceDebugEntitlements() {
+    return deviceDebugEntitlements;
   }
 }

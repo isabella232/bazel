@@ -18,21 +18,18 @@ import static com.google.devtools.build.lib.analysis.ExtraActionUtils.createExtr
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.ExtraActionArtifactsProvider.ExtraArtifactSet;
-import com.google.devtools.build.lib.analysis.LicensesProvider.TargetLicense;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.constraints.ConstraintSemantics;
 import com.google.devtools.build.lib.analysis.constraints.EnvironmentCollection;
 import com.google.devtools.build.lib.analysis.constraints.SupportedEnvironments;
 import com.google.devtools.build.lib.analysis.constraints.SupportedEnvironmentsProvider;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.License;
-import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.test.ExecutionInfoProvider;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
@@ -44,13 +41,20 @@ import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Preconditions;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
 
 /**
- * Builder class for analyzed rule instances (i.e., instances of {@link ConfiguredTarget}).
+ * Builder class for analyzed rule instances.
+ *
+ * <p>This is used to tell Bazel which {@link TransitiveInfoProvider}s are produced by the analysis
+ * of a configured target. For more information about analysis, see
+ * {@link com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory}.
+ *
+ * @see com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory
  */
 public final class RuleConfiguredTargetBuilder {
   private final RuleContext ruleContext;
@@ -63,12 +67,11 @@ public final class RuleConfiguredTargetBuilder {
   private NestedSet<Artifact> filesToBuild = NestedSetBuilder.emptySet(Order.STABLE_ORDER);
   private RunfilesSupport runfilesSupport;
   private Artifact executable;
-  private ImmutableList<Artifact> mandatoryStampFiles;
-  private ImmutableSet<Action> actionsWithoutExtraAction = ImmutableSet.of();
+  private ImmutableSet<ActionAnalysisMetadata> actionsWithoutExtraAction = ImmutableSet.of();
 
   public RuleConfiguredTargetBuilder(RuleContext ruleContext) {
     this.ruleContext = ruleContext;
-    add(LicensesProvider.class, initializeLicensesProvider());
+    add(LicensesProvider.class, LicensesProviderImpl.of(ruleContext));
     add(VisibilityProvider.class, new VisibilityProviderImpl(ruleContext.getVisibility()));
   }
 
@@ -83,9 +86,9 @@ public final class RuleConfiguredTargetBuilder {
       return null;
     }
 
-    FilesToRunProvider filesToRunProvider = new FilesToRunProvider(ruleContext.getLabel(),
-        RuleContext.getFilesToRun(runfilesSupport, filesToBuild), runfilesSupport, executable);
-    add(FileProvider.class, new FileProvider(ruleContext.getLabel(), filesToBuild));
+    FilesToRunProvider filesToRunProvider = new FilesToRunProvider(
+        getFilesToRun(runfilesSupport, filesToBuild), runfilesSupport, executable);
+    add(FileProvider.class, new FileProvider(filesToBuild));
     add(FilesToRunProvider.class, filesToRunProvider);
     addSkylarkTransitiveInfo(FilesToRunProvider.SKYLARK_NAME, filesToRunProvider);
 
@@ -115,12 +118,6 @@ public final class RuleConfiguredTargetBuilder {
 
     ExtraActionArtifactsProvider extraActionsProvider =
         createExtraActionProvider(actionsWithoutExtraAction, ruleContext);
-    if (mandatoryStampFiles != null && !mandatoryStampFiles.isEmpty()) {
-      extraActionsProvider = ExtraActionArtifactsProvider.create(
-          extraActionsProvider.getExtraActionArtifacts(),
-          NestedSetBuilder.fromNestedSet(extraActionsProvider.getTransitiveExtraActionArtifacts())
-              .add(ExtraArtifactSet.of(ruleContext.getLabel(), mandatoryStampFiles)).build());
-    }
     add(ExtraActionArtifactsProvider.class, extraActionsProvider);
 
     if (!outputGroupBuilders.isEmpty()) {
@@ -132,9 +129,44 @@ public final class RuleConfiguredTargetBuilder {
       add(OutputGroupProvider.class, new OutputGroupProvider(outputGroups.build()));
     }
 
+    addRegisteredProvidersToSkylarkProviders();
+      
+    return new RuleConfiguredTarget(ruleContext, skylarkProviders.build(), providers);
+  }
+  
+  /**
+   * Adds skylark providers from a skylark provider registry, and checks for collisions.
+   */
+  private void addRegisteredProvidersToSkylarkProviders() {
+    Map<String, Object> nativeSkylarkProviders = new HashMap<>();
+    for (Entry<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider> entry :
+        providers.entrySet()) {
+      if (ruleContext.getSkylarkProviderRegistry().containsValue(entry.getKey())) {
+        String skylarkName = ruleContext.getSkylarkProviderRegistry().inverse().get(entry.getKey());
+        nativeSkylarkProviders.put(skylarkName, entry.getValue());
+      }
+    }
+    try {
+      skylarkProviders.putAll(nativeSkylarkProviders);
+    } catch (IllegalArgumentException e) {
+      ruleContext.ruleError("Collision caused by duplicate skylark providers: " + e.getMessage());
+    }
+  }
 
-    return new RuleConfiguredTarget(
-        ruleContext, mandatoryStampFiles, skylarkProviders.build(), providers);
+  /**
+   * Like getFilesToBuild(), except that it also includes the runfiles middleman, if any.
+   * Middlemen are expanded in the SpawnStrategy or by the Distributor.
+   */
+  private ImmutableList<Artifact> getFilesToRun(
+      RunfilesSupport runfilesSupport, NestedSet<Artifact> filesToBuild) {
+    if (runfilesSupport == null) {
+      return ImmutableList.copyOf(filesToBuild);
+    } else {
+      ImmutableList.Builder<Artifact> allFilesToBuild = ImmutableList.builder();
+      allFilesToBuild.addAll(filesToBuild);
+      allFilesToBuild.add(runfilesSupport.getRunfilesMiddleman());
+      return allFilesToBuild.build();
+    }
   }
 
   /**
@@ -149,8 +181,13 @@ public final class RuleConfiguredTargetBuilder {
     EnvironmentCollection supportedEnvironments =
         ConstraintSemantics.getSupportedEnvironments(ruleContext);
     if (supportedEnvironments != null) {
-      add(SupportedEnvironmentsProvider.class, new SupportedEnvironments(supportedEnvironments));
-      ConstraintSemantics.checkConstraints(ruleContext, supportedEnvironments);
+      EnvironmentCollection.Builder refinedEnvironments = new EnvironmentCollection.Builder();
+      Map<Label, Target> removedEnvironmentCulprits = new LinkedHashMap<>();
+      ConstraintSemantics.checkConstraints(ruleContext, supportedEnvironments, refinedEnvironments,
+          removedEnvironmentCulprits);
+      add(SupportedEnvironmentsProvider.class,
+          new SupportedEnvironments(supportedEnvironments, refinedEnvironments.build(),
+              removedEnvironmentCulprits));
     }
   }
 
@@ -171,7 +208,7 @@ public final class RuleConfiguredTargetBuilder {
 
     TestEnvironmentProvider environmentProvider = findProvider(TestEnvironmentProvider.class);
     if (environmentProvider != null) {
-      testActionBuilder.setExtraEnv(environmentProvider.getEnvironment());
+      testActionBuilder.addExtraEnv(environmentProvider.getEnvironment());
     }
 
     final TestParams testParams =
@@ -183,35 +220,6 @@ public final class RuleConfiguredTargetBuilder {
     final ImmutableList<String> testTags =
         ImmutableList.copyOf(ruleContext.getRule().getRuleTags());
     return new TestProvider(testParams, testTags);
-  }
-
-  private LicensesProvider initializeLicensesProvider() {
-    if (!ruleContext.getConfiguration().checkLicenses()) {
-      return LicensesProviderImpl.EMPTY;
-    }
-
-    NestedSetBuilder<TargetLicense> builder = NestedSetBuilder.linkOrder();
-    BuildConfiguration configuration = ruleContext.getConfiguration();
-    Rule rule = ruleContext.getRule();
-    License toolOutputLicense = rule.getToolOutputLicense(ruleContext.attributes());
-    if (configuration.isHostConfiguration() && toolOutputLicense != null) {
-      if (toolOutputLicense != License.NO_LICENSE) {
-        builder.add(new TargetLicense(rule.getLabel(), toolOutputLicense));
-      }
-    } else {
-      if (rule.getLicense() != License.NO_LICENSE) {
-        builder.add(new TargetLicense(rule.getLabel(), rule.getLicense()));
-      }
-
-      for (TransitiveInfoCollection dep : ruleContext.getConfiguredTargetMap().values()) {
-        LicensesProvider provider = dep.getProvider(LicensesProvider.class);
-        if (provider != null) {
-          builder.addTransitive(provider.getTransitiveLicenses());
-        }
-      }
-    }
-
-    return new LicensesProviderImpl(builder.build());
   }
 
   private <T extends TransitiveInfoProvider> T findProvider(Class<T> clazz) {
@@ -330,18 +338,10 @@ public final class RuleConfiguredTargetBuilder {
   }
 
   /**
-   * Set the mandatory stamp files.
-   */
-  public RuleConfiguredTargetBuilder setMandatoryStampFiles(ImmutableList<Artifact> files) {
-    this.mandatoryStampFiles = files;
-    return this;
-  }
-
-
-  /**
    * Set the extra action pseudo actions.
    */
-  public RuleConfiguredTargetBuilder setActionsWithoutExtraAction(ImmutableSet<Action> actions) {
+  public RuleConfiguredTargetBuilder setActionsWithoutExtraAction(
+      ImmutableSet<ActionAnalysisMetadata> actions) {
     this.actionsWithoutExtraAction = actions;
     return this;
   }

@@ -18,6 +18,8 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.android.AndroidCommon;
 import com.google.devtools.build.lib.rules.android.AndroidIdeInfoProvider;
 import com.google.devtools.build.lib.rules.android.AndroidSemantics;
@@ -52,11 +54,11 @@ public class BazelAndroidSemantics implements AndroidSemantics {
       Artifact jarWithAllClasses) {}
 
   @Override
-  public ApplicationManifest getManifestForRule(RuleContext ruleContext) {
+  public ApplicationManifest getManifestForRule(RuleContext ruleContext) throws RuleErrorException {
     ApplicationManifest result = ApplicationManifest.fromRule(ruleContext);
     if (!result.getManifest().getExecPath().getBaseName().equals("AndroidManifest.xml")) {
       ruleContext.attributeError("manifest", "The manifest must be called 'AndroidManifest.xml'");
-      return null;
+      throw new RuleErrorException();
     }
 
     return result;
@@ -68,7 +70,7 @@ public class BazelAndroidSemantics implements AndroidSemantics {
   }
 
   @Override
-  public ImmutableList<String> getJavacArguments() {
+  public ImmutableList<String> getJavacArguments(RuleContext ruleContext) {
     return ImmutableList.of(
         "-source", "7",
         "-target", "7");
@@ -77,6 +79,10 @@ public class BazelAndroidSemantics implements AndroidSemantics {
   @Override
   public ImmutableList<String> getDxJvmArguments() {
     return ImmutableList.of();
+  }
+
+  @Override
+  public void addMainDexListActionArguments(RuleContext ruleContext, SpawnAction.Builder builder) {
   }
 
   @Override

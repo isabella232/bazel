@@ -49,7 +49,7 @@ EOF
 
 function zip_up() {
   repo2_zip=$TEST_TMPDIR/fox.zip
-  zip -0 -r $repo2_zip WORKSPACE fox
+  zip -0 -ry $repo2_zip WORKSPACE fox
 }
 
 function tar_gz_up() {
@@ -83,10 +83,8 @@ function http_archive_helper() {
   zipper=$1
   local write_workspace
   [[ $# -gt 1 ]] && [[ "$2" = "nowrite" ]] && write_workspace=1 || write_workspace=0
-  local do_symlink
-  [[ $# -gt 1 ]] && [[ "$2" = "do_symlink" ]] && do_symlink=1 || do_symlink=0
 
-  if [[ $write_workspace = 0 ]]; then
+  if [[ $write_workspace -eq 0 ]]; then
     # Create a zipped-up repository HTTP response.
     repo2=$TEST_TMPDIR/repo2
     rm -rf $repo2
@@ -106,10 +104,8 @@ EOF
 echo $what_does_the_fox_say
 EOF
     chmod +x fox/male
-    if [[ $do_symlink = 1 ]]; then
-      ln -s male fox/male_relative
-      ln -s /fox/male fox/male_absolute
-    fi
+    ln -s male fox/male_relative
+    ln -s /fox/male fox/male_absolute
     # Add some padding to the .zip to test that Bazel's download logic can
     # handle breaking a response into chunks.
     dd if=/dev/zero of=fox/padding bs=1024 count=10240 >& $TEST_log
@@ -139,7 +135,7 @@ EOF
 
     cat > zoo/female.sh <<EOF
 #!/bin/bash
-./external/endangered/fox/male
+../endangered/fox/male
 EOF
     chmod +x zoo/female.sh
 fi
@@ -149,11 +145,9 @@ fi
   kill_nc
   expect_log $what_does_the_fox_say
 
-  if [[ $do_symlink = 1 ]]; then
-    base_external_path=bazel-out/../external/endangered/fox
-    assert_files_same ${base_external_path}/male ${base_external_path}/male_relative
-    assert_files_same ${base_external_path}/male ${base_external_path}/male_absolute
-  fi
+  base_external_path=bazel-out/../external/endangered/fox
+  assert_files_same ${base_external_path}/male ${base_external_path}/male_relative
+  assert_files_same ${base_external_path}/male ${base_external_path}/male_absolute
 }
 
 function assert_files_same() {
@@ -187,13 +181,13 @@ EOF
 }
 
 function test_http_archive_tgz() {
-  http_archive_helper tar_gz_up "do_symlink"
+  http_archive_helper tar_gz_up
   bazel shutdown
-  http_archive_helper tar_gz_up "do_symlink"
+  http_archive_helper tar_gz_up
 }
 
 function test_http_archive_tar_xz() {
-  http_archive_helper tar_xz_up "do_symlink"
+  http_archive_helper tar_xz_up
 }
 
 function test_http_archive_no_server() {
@@ -285,22 +279,6 @@ EOF
     || echo "Expected run to succeed"
   kill_nc
   expect_log $what_does_the_fox_say
-}
-
-# Pending proper external file handling
-function DISABLED_test_changed_zip() {
-  nc_port=$(pick_random_unused_tcp_port) || fail "Couldn't get TCP port"
-  http_archive_helper zip_up
-  http_archive_helper zip_up "nowrite"
-  expect_not_log "Downloading from"
-  local readonly output_base=$(bazel info output_base)
-  local readonly repo_zip=$output_base/external/endangered/fox.zip
-  rm $repo_zip || fail "Couldn't delete $repo_zip"
-  touch $repo_zip || fail "Couldn't touch $repo_zip"
-  [[ -s $repo_zip ]] && fail "File size not 0"
-  http_archive_helper zip_up "nowrite"
-  expect_log "Downloading from"
-  [[ -s $repo_zip ]] || fail "File size was 0"
 }
 
 function test_cached_across_server_restart() {
@@ -422,10 +400,10 @@ EOF
   cat > test/test.sh <<EOF
 #!/bin/bash
 echo "symlink:"
-ls -l external/toto/file
+ls -l ../toto/file
 echo "dest:"
-ls -l \$(readlink -f external/toto/file/toto)
-external/toto/file/toto
+ls -l \$(readlink -f ../toto/file/toto)
+../toto/file/toto
 EOF
 
   chmod +x test/test.sh
@@ -459,7 +437,7 @@ EOF
 
   cat > test/test.sh <<EOF
 #!/bin/bash
-cat external/toto/file/toto
+cat ../toto/file/toto
 EOF
 
   chmod +x test/test.sh
@@ -581,7 +559,7 @@ EOF
 
   cat > zoo/female.sh <<EOF
 #!/bin/bash
-cat external/endangered/fox/male
+cat ../endangered/fox/male
 EOF
   chmod +x zoo/female.sh
 
@@ -812,6 +790,62 @@ http_archive(
 EOF
   bazel build @foo//bar &> $TEST_log || echo "Build failed, as expected"
   expect_log "Expected 200B, got 4B"
+}
+
+
+function test_android_sdk_basic_load() {
+  cat >> WORKSPACE <<'EOF' || fail "Couldn't cat"
+android_sdk_repository(
+    name = "androidsdk",
+    path = "/fake/path",
+    api_level = 23,
+    build_tools_version="23.0.0"
+)
+EOF
+
+  bazel query "//external:androidsdk" 2> "$TEST_log" > "$TEST_TMPDIR/queryout" \
+      || fail "Expected success"
+  cat "$TEST_TMPDIR/queryout" > "$TEST_log"
+  expect_log "//external:androidsdk"
+}
+
+function test_flip_flopping() {
+  REPO_PATH=$TEST_TMPDIR/repo
+  mkdir -p "$REPO_PATH"
+  cd "$REPO_PATH"
+  touch WORKSPACE BUILD foo
+  zip -r repo.zip *
+  startup_server $PWD
+  # Make the remote repo and local repo slightly different.
+  rm foo
+  touch bar
+  cd -
+
+  cat > local_ws <<EOF
+local_repository(
+    name = "repo",
+    path = "$REPO_PATH",
+)
+EOF
+  cat > remote_ws <<EOF
+http_archive(
+    name = "repo",
+    url = "http://localhost:$fileserver_port/repo.zip",
+)
+EOF
+  external_dir=$(bazel info output_base)/external
+  for i in $(seq 1 3); do
+    cp local_ws WORKSPACE
+    bazel build @repo//:all &> $TEST_log || fail "Build failed"
+    test -L "$external_dir/repo" || fail "creating local symlink failed"
+    test -a "$external_dir/repo/bar" || fail "bar not found"
+    cp remote_ws WORKSPACE
+    bazel build @repo//:all &> $TEST_log || fail "Build failed"
+    test -d "$external_dir//repo" || fail "creating remote repo failed"
+    test -a "$external_dir/repo/foo" || fail "foo not found"
+  done
+
+  shutdown_server
 }
 
 run_suite "external tests"

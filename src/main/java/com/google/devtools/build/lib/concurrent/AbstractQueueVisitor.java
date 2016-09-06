@@ -18,8 +18,8 @@ import com.google.common.base.Function;
 import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.AtomicLongMap;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.google.devtools.build.lib.concurrent.ErrorClassifier.ErrorClassification;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -28,7 +28,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
 import javax.annotation.Nullable;
 
 /** A {@link QuiescingExecutor} implementation that wraps an {@link ExecutorService}. */
@@ -60,12 +59,21 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
       };
 
   /**
-   * The first unhandled exception thrown by a worker thread.  We save it and re-throw it from
-   * the main thread to detect bugs faster; otherwise worker threads just quietly die.
+   * The most severe unhandled exception thrown by a worker thread, according to
+   * {@link #errorClassifier}. This exception gets propagated to the calling thread of
+   * {@link #awaitQuiescence} . We use the most severe error for the sake of not masking e.g.
+   * crashes in worker threads after the first critical error that can occur due to race conditions
+   * in client code.
    *
-   * Field updates happen only in blocks that are synchronized on the {@link
-   * AbstractQueueVisitor} object; it's important to save the first one as it may be more
-   * informative than a subsequent one, and this is not a performance-critical path.
+   * <p>Field updates happen only in blocks that are synchronized on the {@link
+   * AbstractQueueVisitor} object.
+   *
+   * <p>If {@link AbstractQueueVisitor} clients don't like the semantics of storing and propagating
+   * the most severe error, then they should be provide an {@link ErrorClassifier} that does the
+   * right thing (e.g. to cause the _first_ error to be propagated, you'd want to provide an
+   * {@link ErrorClassifier} that gives all errors the exact same {@link ErrorClassification}).
+   *
+   * <p>Note that this is not a performance-critical path.
    */
   private volatile Throwable unhandled = null;
 
@@ -129,9 +137,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
   /** If {@code true}, don't run new actions after an uncaught exception. */
   private final boolean failFastOnException;
 
-  /** If {@code true}, don't run new actions after an interrupt. */
-  private final boolean failFastOnInterrupt;
-
   /** If {@code true}, shut down the {@link ExecutorService} on completion. */
   private final boolean ownExecutorService;
 
@@ -150,7 +155,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    * @param keepAliveTime the keep-alive time for the {@link ExecutorService}, if applicable.
    * @param units the time units of keepAliveTime.
    * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param failFastOnInterrupt if {@code true}, don't run new actions after an interrupt.
    * @param poolName sets the name of threads spawned by the {@link ExecutorService}. If {@code
    *                 null}, default thread naming will be used.
    */
@@ -160,7 +164,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
       long keepAliveTime,
       TimeUnit units,
       boolean failFastOnException,
-      boolean failFastOnInterrupt,
       String poolName) {
     this(
         concurrent,
@@ -168,7 +171,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
         keepAliveTime,
         units,
         failFastOnException,
-        failFastOnInterrupt,
         poolName,
         EXECUTOR_FACTORY,
         ErrorClassifier.DEFAULT);
@@ -178,16 +180,15 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    * Create the {@link AbstractQueueVisitor}.
    *
    * @param concurrent {@code true} if concurrency should be enabled. Only set to {@code false} for
-   *                   debugging.
+   *     debugging.
    * @param parallelism a measure of parallelism for the {@link ExecutorService}, such as {@code
-   *                    parallelism} in {@link java.util.concurrent.ForkJoinPool}, or both {@code
-   *                    corePoolSize} and {@code maximumPoolSize} in {@link ThreadPoolExecutor}.
+   *     parallelism} in {@link java.util.concurrent.ForkJoinPool}, or both {@code corePoolSize} and
+   *     {@code maximumPoolSize} in {@link ThreadPoolExecutor}.
    * @param keepAliveTime the keep-alive time for the {@link ExecutorService}, if applicable.
    * @param units the time units of keepAliveTime.
    * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param failFastOnInterrupt if {@code true}, don't run new actions after an interrupt.
    * @param poolName sets the name of threads spawned by the {@link ExecutorService}. If {@code
-   *                 null}, default thread naming will be used.
+   *     null}, default thread naming will be used.
    * @param errorClassifier an error classifier used to determine whether to log and/or stop jobs.
    */
   public AbstractQueueVisitor(
@@ -196,7 +197,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
       long keepAliveTime,
       TimeUnit units,
       boolean failFastOnException,
-      boolean failFastOnInterrupt,
       String poolName,
       ErrorClassifier errorClassifier) {
     this(
@@ -205,7 +205,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
         keepAliveTime,
         units,
         failFastOnException,
-        failFastOnInterrupt,
         poolName,
         EXECUTOR_FACTORY,
         errorClassifier);
@@ -215,18 +214,18 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    * Create the {@link AbstractQueueVisitor}.
    *
    * @param concurrent {@code true} if concurrency should be enabled. Only set to {@code false} for
-   *                   debugging.
+   *     debugging.
    * @param parallelism a measure of parallelism for the {@link ExecutorService}, such as {@code
-   *                    parallelism} in {@link java.util.concurrent.ForkJoinPool}, or both {@code
-   *                    corePoolSize} and {@code maximumPoolSize} in {@link ThreadPoolExecutor}.
+   *     parallelism} in {@link java.util.concurrent.ForkJoinPool}, or both {@code corePoolSize} and
+   *     {@code maximumPoolSize} in {@link ThreadPoolExecutor}.
    * @param keepAliveTime the keep-alive time for the {@link ExecutorService}, if applicable.
    * @param units the time units of keepAliveTime.
    * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param failFastOnInterrupt if {@code true}, don't run new actions after interrupt.
    * @param poolName sets the name of threads spawned by the {@link ExecutorService}. If {@code
-   *                 null}, default thread naming will be used.
+   *     null}, default thread naming will be used.
    * @param executorFactory the factory for constructing the executor service if {@code concurrent}
-   *                        is {@code true}.
+   *     is {@code true}.
+   * @param errorClassifier an error classifier used to determine whether to log and/or stop jobs.
    */
   public AbstractQueueVisitor(
       boolean concurrent,
@@ -234,7 +233,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
       long keepAliveTime,
       TimeUnit units,
       boolean failFastOnException,
-      boolean failFastOnInterrupt,
       String poolName,
       Function<ExecutorParams, ? extends ExecutorService> executorFactory,
       ErrorClassifier errorClassifier) {
@@ -243,7 +241,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
     Preconditions.checkNotNull(errorClassifier);
     this.concurrent = concurrent;
     this.failFastOnException = failFastOnException;
-    this.failFastOnInterrupt = failFastOnInterrupt;
     this.ownExecutorService = true;
     this.executorService =
         concurrent
@@ -257,58 +254,20 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
   /**
    * Create the {@link AbstractQueueVisitor}.
    *
-   * @param concurrent {@code true} if concurrency should be enabled. Only set to {@code false}
-   *                   for debugging.
-   * @param parallelism a measure of parallelism for the {@link ExecutorService}, such as {@code
-   *                    parallelism} in {@link java.util.concurrent.ForkJoinPool}, or both {@code
-   *                    corePoolSize} and {@code maximumPoolSize} in {@link ThreadPoolExecutor}.
-   * @param keepAliveTime the keep-alive time for the {@link ExecutorService}, if applicable.
-   * @param units the time units of keepAliveTime.
-   * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param poolName sets the name of threads spawned by the {@link ExecutorService}. If {@code
-   *                 null}, default thread naming will be used.
-   */
-  public AbstractQueueVisitor(
-      boolean concurrent,
-      int parallelism,
-      long keepAliveTime,
-      TimeUnit units,
-      boolean failFastOnException,
-      String poolName) {
-    this(
-        concurrent,
-        parallelism,
-        keepAliveTime,
-        units,
-        failFastOnException,
-        true,
-        poolName,
-        EXECUTOR_FACTORY,
-        ErrorClassifier.DEFAULT);
-  }
-
-  /**
-   * Create the {@link AbstractQueueVisitor}.
-   *
    * @param executorService The {@link ExecutorService} to use.
    * @param shutdownOnCompletion If {@code true}, pass ownership of the {@link ExecutorService} to
    *                             this class. The service will be shut down after a
    *                             call to {@link #awaitQuiescence}. Callers must not shutdown the
    *                             {@link ExecutorService} while queue visitors use it.
    * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param failFastOnInterrupt if {@code true}, don't run new actions after an interrupt.
    */
   public AbstractQueueVisitor(
-      ExecutorService executorService,
-      boolean shutdownOnCompletion,
-      boolean failFastOnException,
-      boolean failFastOnInterrupt) {
+      ExecutorService executorService, boolean shutdownOnCompletion, boolean failFastOnException) {
     this(
         /*concurrent=*/ true,
         executorService,
         shutdownOnCompletion,
         failFastOnException,
-        failFastOnInterrupt,
         ErrorClassifier.DEFAULT);
   }
 
@@ -323,18 +282,15 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    *                             call to {@link #awaitQuiescence}. Callers must not shut down the
    *                             {@link ExecutorService} while queue visitors use it.
    * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param failFastOnInterrupt if {@code true}, don't run new actions after an interrupt.
    */
   public AbstractQueueVisitor(
       boolean concurrent,
       ExecutorService executorService,
       boolean shutdownOnCompletion,
-      boolean failFastOnException,
-      boolean failFastOnInterrupt) {
+      boolean failFastOnException) {
     Preconditions.checkArgument(executorService != null || !concurrent);
     this.concurrent = concurrent;
     this.failFastOnException = failFastOnException;
-    this.failFastOnInterrupt = failFastOnInterrupt;
     this.ownExecutorService = shutdownOnCompletion;
     this.executorService = executorService;
     this.errorClassifier = ErrorClassifier.DEFAULT;
@@ -344,14 +300,12 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    * Create the AbstractQueueVisitor.
    *
    * @param concurrent if {@code false}, run tasks inline instead of using the {@link
-   *                   ExecutorService}.
+   *     ExecutorService}.
    * @param executorService The {@link ExecutorService} to use.
    * @param shutdownOnCompletion If {@code true}, pass ownership of the {@link ExecutorService} to
-   *                             this class. The service will be shut down after a
-   *                             call to {@link #awaitQuiescence}. Callers must not shut down the
-   *                             {@link ExecutorService} while queue visitors use it.
+   *     this class. The service will be shut down after a call to {@link #awaitQuiescence}. Callers
+   *     must not shut down the {@link ExecutorService} while queue visitors use it.
    * @param failFastOnException if {@code true}, don't run new actions after an uncaught exception.
-   * @param failFastOnInterrupt if {@code true}, don't run new actions after an interrupt.
    * @param errorClassifier an error classifier used to determine whether to log and/or stop jobs.
    */
   public AbstractQueueVisitor(
@@ -359,12 +313,10 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
       ExecutorService executorService,
       boolean shutdownOnCompletion,
       boolean failFastOnException,
-      boolean failFastOnInterrupt,
       ErrorClassifier errorClassifier) {
     Preconditions.checkArgument(executorService != null || !concurrent);
     this.concurrent = concurrent;
     this.failFastOnException = failFastOnException;
-    this.failFastOnInterrupt = failFastOnInterrupt;
     this.ownExecutorService = shutdownOnCompletion;
     this.executorService = executorService;
     this.errorClassifier = errorClassifier;
@@ -388,7 +340,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
         keepAlive,
         units,
         false,
-        true,
         poolName,
         EXECUTOR_FACTORY,
         ErrorClassifier.DEFAULT);
@@ -435,7 +386,7 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
   }
 
   /**
-   * Subclasses may override this to make dynamic decisiouns about whether to run tasks
+   * Subclasses may override this to make dynamic decisions about whether to run tasks
    * asynchronously versus in-thread.
    */
   protected boolean runConcurrently() {
@@ -454,6 +405,42 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
     executorService.execute(runnable);
   }
 
+  private synchronized void maybeSaveUnhandledThrowable(Throwable e, boolean markToStopJobs) {
+    boolean critical = false;
+    ErrorClassification errorClassification = errorClassifier.classify(e);
+    switch (errorClassification) {
+        case AS_CRITICAL_AS_POSSIBLE:
+        case CRITICAL_AND_LOG:
+          critical = true;
+          LOG.log(Level.WARNING, "Found critical error in queue visitor", e);
+          break;
+        case CRITICAL:
+          critical = true;
+          break;
+        default:
+          break;
+    }
+    if (unhandled == null
+        || errorClassification.compareTo(errorClassifier.classify(unhandled)) > 0) {
+      // Save the most severe error.
+      unhandled = e;
+      exceptionLatch.countDown();
+    }
+    if (markToStopJobs) {
+      synchronized (zeroRemainingTasks) {
+        if (critical && !jobsMustBeStopped) {
+          jobsMustBeStopped = true;
+          // This introduces a benign race, but it's the best we can do. When we have multiple
+          // errors of the same severity that is at least CRITICAL, we'll end up saving (above) and
+          // propagating (in 'awaitQuiescence') the most severe one we see, but the set of errors we
+          // see is non-deterministic and is at the mercy of how quickly the calling thread of
+          // 'awaitQuiescence' can do its thing after this 'notify' call.
+          zeroRemainingTasks.notify();
+        }
+      }
+    }
+  }
+
   private void recordError(Throwable e) {
     try {
       // If threadInterrupted is true, then RejectedExecutionExceptions are expected. There's no
@@ -463,12 +450,7 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
         return;
       }
       catastrophe = e;
-      synchronized (this) {
-        if (unhandled == null) { // save only the first one.
-          unhandled = e;
-          exceptionLatch.countDown();
-        }
-      }
+      maybeSaveUnhandledThrowable(e, /*markToStopJobs=*/ false);
     } finally {
       decrementRemainingTasks();
     }
@@ -479,13 +461,12 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    * <ul>
    *   <li>Sets {@link #run} to {@code true} when {@code WrappedRunnable} is run,
    *   <li>Records the thread evaluating {@code r} in {@link #jobs} while {@code r} is evaluated,
-   *   <li>Prevents {@param runnable} from being invoked if {@link #blockNewActions} returns
+   *   <li>Prevents {@link #originalRunnable} from being invoked if {@link #blockNewActions} returns
    *   {@code true},
    *   <li>Synchronously invokes {@code runnable.run()},
-   *   <li>Catches any {@link Throwable} thrown by {@code runnable.run()}, and if it is the first
-   *   {@link Throwable} seen by this {@link AbstractQueueVisitor}, assigns it to {@link
-   *   #unhandled}, and calls {@link #markToStopAllJobsIfNeeded} to set {@link #jobsMustBeStopped}
-   *   if necessary,
+   *   <li>Catches any {@link Throwable} thrown by {@code runnable.run()}, and if it is the most
+   *   severe {@link Throwable} seen by this {@link AbstractQueueVisitor}, assigns it to
+   *   {@link #unhandled}, and sets {@link #jobsMustBeStopped} if necessary,
    *   <li>And, lastly, calls {@link #decrementRemainingTasks}.
    * </ul>
    */
@@ -514,13 +495,7 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
         }
         originalRunnable.run();
       } catch (Throwable e) {
-        synchronized (AbstractQueueVisitor.this) {
-          if (unhandled == null) { // save only the first one.
-            unhandled = e;
-            exceptionLatch.countDown();
-          }
-          markToStopAllJobsIfNeeded(e);
-        }
+        maybeSaveUnhandledThrowable(e, /*markToStopJobs=*/ true);
       } finally {
         try {
           if (thread != null && addedJob) {
@@ -563,15 +538,17 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
 
   /** If this returns true, don't enqueue new actions. */
   protected boolean blockNewActions() {
-    return (failFastOnInterrupt && isInterrupted()) || (unhandled != null && failFastOnException);
+    return isInterrupted() || (unhandled != null && failFastOnException);
   }
 
   @VisibleForTesting
+  @Override
   public final CountDownLatch getExceptionLatchForTestingOnly() {
     return exceptionLatch;
   }
 
   @VisibleForTesting
+  @Override
   public final CountDownLatch getInterruptionLatchForTestingOnly() {
     return interruptedLatch;
   }
@@ -597,7 +574,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
    * worker thread failed unexpectedly.
    */
   private void awaitTermination(boolean interruptWorkers) throws InterruptedException {
-    Preconditions.checkState(failFastOnInterrupt || !interruptWorkers);
     Throwables.propagateIfPossible(catastrophe);
     try {
       synchronized (zeroRemainingTasks) {
@@ -672,35 +648,6 @@ public class AbstractQueueVisitor implements QuiescingExecutor {
     for (Thread thread : jobs.asMap().keySet()) {
       if (thisThread != thread) {
         thread.interrupt();
-      }
-    }
-  }
-
-  /**
-   * Classifies a {@link Throwable} {@param e} thrown by a job.
-   *
-   * <p>If it is classified as critical, then this sets the {@link #jobsMustBeStopped} flag to
-   * {@code true} which signals {@link #awaitTermination(boolean)} to stop all jobs.
-   *
-   * <p>Also logs details about {@param e} if it is classified as something that must be logged.
-   */
-  private void markToStopAllJobsIfNeeded(Throwable e) {
-    boolean critical = false;
-    switch (errorClassifier.classify(e)) {
-        case CRITICAL_AND_LOG:
-          critical = true;
-          LOG.log(Level.WARNING, "Found critical error in queue visitor", e);
-          break;
-        case CRITICAL:
-          critical = true;
-          break;
-        default:
-          break;
-    }
-    synchronized (zeroRemainingTasks) {
-      if (critical && !jobsMustBeStopped) {
-        jobsMustBeStopped = true;
-        zeroRemainingTasks.notify();
       }
     }
   }

@@ -17,7 +17,6 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.base.Predicate;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
@@ -69,9 +68,9 @@ public final class LibraryLinkingTest extends BuildViewTestCase {
         linkAction,
         "-shared",
         "-o",
-        Constants.PRODUCT_NAME + "-out/.+/genrule/thebinary.so",
+        analysisMock.getProductName() + "-out/.+/genrule/thebinary.so",
         "-Wl,-whole-archive",
-        Constants.PRODUCT_NAME + "-out/.+/genrule/genlib.a",
+        analysisMock.getProductName() + "-out/.+/genrule/genlib.a",
         "-Wl,-no-whole-archive");
   }
 

@@ -34,10 +34,10 @@ import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.AttributeMap.AcceptsLabelAttribute;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.util.SpellChecker;
 import com.google.devtools.build.lib.vfs.Canonicalizer;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -46,7 +46,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -104,7 +103,7 @@ public class Package {
 
   /**
    * The root of the source tree in which this package was found. It is an invariant that
-   * {@code sourceRoot.getRelative(packageId.getPathFragment()).equals(packageDirectory)}.
+   * {@code sourceRoot.getRelative(packageId.getSourceRoot()).equals(packageDirectory)}.
    */
   private Path sourceRoot;
 
@@ -140,10 +139,10 @@ public class Package {
    */
   private String defaultHdrsCheck;
 
-  /**
-   * Default copts for cc_* rules.  The rules' individual copts will append to
-   * this value.
-   */
+  /** See getter. */
+  private TriState defaultStrictDepsJavaProtos = TriState.AUTO;
+
+  /** Default copts for cc_* rules. The rules' individual copts will append to this value. */
   private ImmutableList<String> defaultCopts;
 
   /**
@@ -209,7 +208,7 @@ public class Package {
    * @precondition {@code name} must be a suffix of
    * {@code filename.getParentDirectory())}.
    */
-  private Package(PackageIdentifier packageId, String runfilesPrefix) {
+  protected Package(PackageIdentifier packageId, String runfilesPrefix) {
     this.packageIdentifier = packageId;
     this.workspaceName = runfilesPrefix;
     this.nameFragment = Canonicalizer.fragments().intern(packageId.getPackageFragment());
@@ -293,9 +292,9 @@ public class Package {
     this.filename = builder.getFilename();
     this.packageDirectory = filename.getParentDirectory();
 
-    this.sourceRoot = getSourceRoot(filename, packageIdentifier.getPathFragment());
+    this.sourceRoot = getSourceRoot(filename, packageIdentifier.getSourceRoot());
     if ((sourceRoot == null
-        || !sourceRoot.getRelative(packageIdentifier.getPathFragment()).equals(packageDirectory))
+        || !sourceRoot.getRelative(packageIdentifier.getSourceRoot()).equals(packageDirectory))
         && !filename.getBaseName().equals("WORKSPACE")) {
       throw new IllegalArgumentException(
           "Invalid BUILD file name for package '" + packageIdentifier + "': " + filename);
@@ -346,7 +345,7 @@ public class Package {
    * Returns the source root (a directory) beneath which this package's BUILD file was found.
    *
    * <p> Assumes invariant:
-   * {@code getSourceRoot().getRelative(packageId.getPathFragment()).equals(getPackageDirectory())}
+   * {@code getSourceRoot().getRelative(packageId.getSourceRoot()).equals(getPackageDirectory())}
    */
   public Path getSourceRoot() {
     return sourceRoot;
@@ -396,7 +395,10 @@ public class Package {
   public Map<String, String> getAllMakeVariables(String platform) {
     ImmutableMap.Builder<String, String> map = ImmutableMap.builder();
     for (String var : makeEnv.getBindings().keySet()) {
-      map.put(var, makeEnv.lookup(var, platform));
+      String value = makeEnv.lookup(var, platform);
+      if (value != null) {
+        map.put(var, value);
+      }
     }
     return map.build();
   }
@@ -528,16 +530,31 @@ public class Package {
       suffix = "; however, a source file of this name exists.  (Perhaps add "
           + "'exports_files([\"" + targetName + "\"])' to " + name + "/BUILD?)";
     } else {
-      suffix = "";
+      String suggestion = SpellChecker.suggest(targetName, targets.keySet());
+      if (suggestion != null) {
+        suffix = " (did you mean '" + suggestion + "'?)";
+      } else {
+        suffix = "";
+      }
     }
 
+    throw makeNoSuchTargetException(targetName, suffix);
+  }
+
+  protected NoSuchTargetException makeNoSuchTargetException(String targetName, String suffix) {
+    Label label;
     try {
-      throw new NoSuchTargetException(createLabel(targetName), "target '" + targetName
-          + "' not declared in package '" + name + "'" + suffix + " defined by "
-          + this.filename);
+      label = createLabel(targetName);
     } catch (LabelSyntaxException e) {
       throw new IllegalArgumentException(targetName);
     }
+    String msg = String.format(
+        "target '%s' not declared in package '%s'%s defined by %s",
+        targetName,
+        name,
+        suffix,
+        filename);
+    return new NoSuchTargetException(label, msg);
   }
 
   /**
@@ -571,8 +588,15 @@ public class Package {
   }
 
   /**
-   * Gets the default header checking mode.
+   * Default for 'strict_deps' of Java proto rules, when they aren't explicitly specified.
+   *
+   * <p>A value of AUTO is returned when the package didn't itself explicitly specify this value.
    */
+  public TriState getDefaultStrictDepsJavaProtos() {
+    return defaultStrictDepsJavaProtos;
+  }
+
+  /** Gets the default header checking mode. */
   public String getDefaultHdrsCheck() {
     return defaultHdrsCheck != null ? defaultHdrsCheck : "strict";
   }
@@ -666,49 +690,49 @@ public class Package {
     }
   }
 
-  /**
-   * Builder class for {@link Package} that does its own globbing.
-   *
-   * <p>Despite its name, this is the normal builder used when parsing BUILD files.
-   */
-  // TODO(bazel-team): This class is no longer needed and can be removed.
-  public static class LegacyBuilder extends Builder {
-    LegacyBuilder(PackageIdentifier packageId, String runfilesPrefix) {
-      super(packageId, runfilesPrefix);
-    }
-
-    /**
-     * Derive a LegacyBuilder from a normal Builder.
-     */
-    LegacyBuilder(Builder builder) {
-      super(builder.pkg);
-      if (builder.getFilename() != null) {
-        setFilename(builder.getFilename());
-      }
-    }
-
-    /**
-     * Removes a target from the {@link Package} under construction. Intended to be used only by
-     * {@link com.google.devtools.build.lib.skyframe.PackageFunction} to remove targets whose
-     * labels cross subpackage boundaries.
-     */
-    public void removeTarget(Target target) {
-      if (target.getPackage() == pkg) {
-        this.targets.remove(target.getName());
-      }
-    }
-  }
-
-  public static LegacyBuilder newExternalPackageBuilder(Path workspacePath, String runfilesPrefix) {
-    LegacyBuilder b = new LegacyBuilder(Label.EXTERNAL_PACKAGE_IDENTIFIER, runfilesPrefix);
+  public static Builder newExternalPackageBuilder(Builder.Helper helper, Path workspacePath,
+      String runfilesPrefix) {
+    Builder b = new Builder(helper.createFreshPackage(
+        Label.EXTERNAL_PACKAGE_IDENTIFIER, runfilesPrefix));
     b.setFilename(workspacePath);
     b.setMakeEnv(new MakeEnvironment.Builder());
     return b;
   }
 
+  /**
+   * A builder for {@link Package} objects. Only intended to be used by {@link PackageFactory} and
+   * {@link com.google.devtools.build.lib.skyframe.PackageFunction}.
+   */
   public static class Builder {
-    protected static Package newPackage(PackageIdentifier packageId, String runfilesPrefix) {
-      return new Package(packageId, runfilesPrefix);
+    public static interface Helper {
+      /**
+       * Returns a fresh {@link Package} instance that a {@link Builder} will internally mutate
+       * during package loading. Called by {@link PackageFactory}.
+       */
+      Package createFreshPackage(PackageIdentifier packageId, String runfilesPrefix);
+
+      /**
+       * Called after {@link com.google.devtools.build.lib.skyframe.PackageFunction} is completely
+       * done loading the given {@link Package}.
+       */
+      void onLoadingComplete(Package pkg);
+    }
+
+    /** {@link Helper} that simply calls the {@link Package} constructor. */
+    public static class DefaultHelper implements Helper {
+      public static final DefaultHelper INSTANCE = new DefaultHelper();
+
+      private DefaultHelper() {
+      }
+
+      @Override
+      public Package createFreshPackage(PackageIdentifier packageId, String runfilesPrefix) {
+        return new Package(packageId, runfilesPrefix);
+      }
+
+      @Override
+      public void onLoadingComplete(Package pkg) {
+      }
     }
 
     /**
@@ -773,8 +797,8 @@ public class Package {
       }
     }
 
-    public Builder(PackageIdentifier id, String runfilesPrefix) {
-      this(newPackage(id, runfilesPrefix));
+    public Builder(Helper helper, PackageIdentifier id, String runfilesPrefix) {
+      this(helper.createFreshPackage(id, runfilesPrefix));
     }
 
     protected PackageIdentifier getPackageIdentifier() {
@@ -888,9 +912,12 @@ public class Package {
       return this;
     }
 
-    /**
-     * Sets the default value of copts. Rule-level copts will append to this.
-     */
+    public Builder setDefaultStrictDepsJavaProtos(TriState value) {
+      pkg.defaultStrictDepsJavaProtos = value;
+      return this;
+    }
+
+    /** Sets the default value of copts. Rule-level copts will append to this. */
     public Builder setDefaultCopts(List<String> defaultCopts) {
       this.defaultCopts = defaultCopts;
       return this;
@@ -994,7 +1021,32 @@ public class Package {
         RuleClass ruleClass,
         Location location,
         AttributeContainer attributeContainer) {
-      return new Rule(pkg, label, ruleClass, location, attributeContainer);
+      return new Rule(
+          pkg,
+          label,
+          ruleClass,
+          location,
+          attributeContainer);
+    }
+
+    /**
+     * Same as {@link #createRule(Label, RuleClass, Location, AttributeContainer)}, except
+     * allows specifying an {@link ImplicitOutputsFunction} override. Only use if you know what
+     * you're doing.
+     */
+    Rule createRule(
+        Label label,
+        RuleClass ruleClass,
+        Location location,
+        AttributeContainer attributeContainer,
+        ImplicitOutputsFunction implicitOutputsFunction) {
+      return new Rule(
+          pkg,
+          label,
+          ruleClass,
+          location,
+          attributeContainer,
+          implicitOutputsFunction);
     }
 
     /**
@@ -1189,8 +1241,13 @@ public class Package {
       }
     }
 
-    void addRule(Rule rule) throws NameConflictException {
-      checkForConflicts(rule);
+    /**
+     * Same as {@link #addRule}, except with no name conflict checks.
+     *
+     * <p>Don't call this function unless you know what you're doing.
+     */
+    void addRuleUnchecked(Rule rule) {
+      Preconditions.checkArgument(rule.getPackage() == pkg);
       // Now, modify the package:
       for (OutputFile outputFile : rule.getOutputFiles()) {
         targets.put(outputFile.getName(), outputFile);
@@ -1208,7 +1265,12 @@ public class Package {
       }
     }
 
-    private Builder beforeBuild() {
+    void addRule(Rule rule) throws NameConflictException, InterruptedException {
+      checkForConflicts(rule);
+      addRuleUnchecked(rule);
+    }
+
+    private Builder beforeBuild() throws InterruptedException {
       Preconditions.checkNotNull(pkg);
       Preconditions.checkNotNull(filename);
       Preconditions.checkNotNull(buildFileLabel);
@@ -1261,11 +1323,22 @@ public class Package {
     }
 
     /** Intended for use by {@link com.google.devtools.build.lib.skyframe.PackageFunction} only. */
-    public Builder buildPartial() {
+    public Builder buildPartial() throws InterruptedException {
       if (alreadyBuilt) {
         return this;
       }
       return beforeBuild();
+    }
+
+    /**
+     * Removes a target from the {@link Package} under construction. Intended to be used only by
+     * {@link com.google.devtools.build.lib.skyframe.PackageFunction} to remove targets whose
+     * labels cross subpackage boundaries.
+     */
+    public void removeTarget(Target target) {
+      if (target.getPackage() == pkg) {
+        this.targets.remove(target.getName());
+      }
     }
 
     /** Intended for use by {@link com.google.devtools.build.lib.skyframe.PackageFunction} only. */
@@ -1298,7 +1371,7 @@ public class Package {
       return externalPackageData;
     }
 
-    public Package build() {
+    public Package build() throws InterruptedException {
       if (alreadyBuilt) {
         return pkg;
       }
@@ -1326,14 +1399,15 @@ public class Package {
     }
 
     /**
-     * Precondition check for addRule.  We must maintain these invariants of the
-     * package:
-     * - Each name refers to at most one target.
-     * - No rule with errors is inserted into the package.
-     * - The generating rule of every output file in the package must itself be
-     *   in the package.
+     * Precondition check for addRule. We must maintain these invariants of the package:
+     *
+     * <ul>
+     * <li>Each name refers to at most one target.
+     * <li>No rule with errors is inserted into the package.
+     * <li>The generating rule of every output file in the package must itself be in the package.
+     * </ul>
      */
-    private void checkForConflicts(Rule rule) throws NameConflictException {
+    private void checkForConflicts(Rule rule) throws NameConflictException, InterruptedException {
       String name = rule.getName();
       Target existing = targets.get(name);
       if (existing != null) {
@@ -1378,17 +1452,15 @@ public class Package {
     }
 
     /**
-     * A utility method that checks for conflicts between
-     * input file names and output file names for a rule from a build
-     * file.
-     * @param rule the rule whose inputs and outputs are
-     *       to be checked for conflicts.
-     * @param outputFiles a set containing the names of output
-     *       files to be generated by the rule.
+     * A utility method that checks for conflicts between input file names and output file names for
+     * a rule from a build file.
+     *
+     * @param rule the rule whose inputs and outputs are to be checked for conflicts.
+     * @param outputFiles a set containing the names of output files to be generated by the rule.
      * @throws NameConflictException if a conflict is found.
      */
     private void checkForInputOutputConflicts(Rule rule, Set<String> outputFiles)
-        throws NameConflictException {
+        throws NameConflictException, InterruptedException {
       PathFragment packageFragment = rule.getLabel().getPackageFragment();
       for (Label inputLabel : rule.getLabels()) {
         if (packageFragment.equals(inputLabel.getPackageFragment())

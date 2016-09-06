@@ -24,11 +24,12 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.LabelValidator;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.Package.Builder;
-import com.google.devtools.build.lib.packages.Package.LegacyBuilder;
 import com.google.devtools.build.lib.packages.Package.NameConflictException;
 import com.google.devtools.build.lib.packages.PackageFactory.EnvironmentExtension;
+import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
 import com.google.devtools.build.lib.syntax.BaseFunction;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
@@ -37,6 +38,7 @@ import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Environment.Extension;
 import com.google.devtools.build.lib.syntax.Environment.Frame;
+import com.google.devtools.build.lib.syntax.Environment.Phase;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.FunctionSignature;
@@ -46,13 +48,10 @@ import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
 import com.google.devtools.build.lib.vfs.Path;
-
 import java.io.File;
-import java.io.IOException;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 import javax.annotation.Nullable;
 
 /**
@@ -72,8 +71,8 @@ public class WorkspaceFactory {
           "DEFAULT_SERVER_JAVABASE", // serializable so optional
           PackageFactory.PKG_CONTEXT);
 
-  private final LegacyBuilder builder;
-  
+  private final Builder builder;
+
   private final Path installDir;
   private final Path workspaceDir;
   private final Mutability mutability;
@@ -101,7 +100,7 @@ public class WorkspaceFactory {
    * @param mutability the Mutability for the current evaluation context
    */
   public WorkspaceFactory(
-      LegacyBuilder builder,
+      Builder builder,
       RuleClassProvider ruleClassProvider,
       ImmutableList<EnvironmentExtension> environmentExtensions,
       Mutability mutability) {
@@ -118,7 +117,7 @@ public class WorkspaceFactory {
    * @param workspaceDir the workspace directory
    */
   public WorkspaceFactory(
-      LegacyBuilder builder,
+      Builder builder,
       RuleClassProvider ruleClassProvider,
       ImmutableList<EnvironmentExtension> environmentExtensions,
       Mutability mutability,
@@ -137,16 +136,16 @@ public class WorkspaceFactory {
   /**
    * Parses the given WORKSPACE file without resolving skylark imports.
    *
-   * <p>Called by com.google.devtools.build.workspace.Resolver from
-   * //src/tools/generate_workspace.</p>
+   * <p>Called by com.google.devtools.build.workspace.Resolver from //src/tools/generate_workspace.
    */
-  public void parse(ParserInputSource source) throws InterruptedException, IOException {
+  public void parse(ParserInputSource source)
+      throws BuildFileContainsErrorsException, InterruptedException {
     parse(source, null);
   }
 
   @VisibleForTesting
   public void parse(ParserInputSource source, @Nullable StoredEventHandler localReporter)
-      throws InterruptedException, IOException {
+      throws BuildFileContainsErrorsException, InterruptedException {
     // This method is split in 2 so WorkspaceFileFunction can call the two parts separately and
     // do the Skylark load imports in between. We can't load skylark imports from
     // generate_workspace at the moment because it doesn't have access to skyframe, but that's okay
@@ -154,9 +153,10 @@ public class WorkspaceFactory {
     if (localReporter == null) {
       localReporter = new StoredEventHandler();
     }
-    BuildFileAST buildFileAST = BuildFileAST.parseBuildFile(source, localReporter, false);
+    BuildFileAST buildFileAST = BuildFileAST.parseBuildFile(source, localReporter);
     if (buildFileAST.containsErrors()) {
-      throw new IOException("Failed to parse " + source.getPath());
+      throw new BuildFileContainsErrorsException(
+          Label.EXTERNAL_PACKAGE_IDENTIFIER, "Failed to parse " + source.getPath());
     }
     execute(buildFileAST, null, localReporter);
   }
@@ -190,7 +190,7 @@ public class WorkspaceFactory {
       importMap = parentImportMap;
     }
     environmentBuilder.setImportedExtensions(importMap);
-    Environment workspaceEnv = environmentBuilder.setLoadingPhase().build();
+    Environment workspaceEnv = environmentBuilder.setPhase(Phase.WORKSPACE).build();
     addWorkspaceFunctions(workspaceEnv, localReporter);
     for (Map.Entry<String, Object> binding : parentVariableBindings.entrySet()) {
       try {
@@ -246,16 +246,33 @@ public class WorkspaceFactory {
       Package aPackage,
       ImmutableMap<String, Extension> importMap,
       ImmutableMap<String, Object> bindings)
-      throws NameConflictException {
+      throws NameConflictException, InterruptedException {
     this.parentVariableBindings = bindings;
     this.parentImportMap = importMap;
+    builder.setWorkspaceName(aPackage.getWorkspaceName());
     // Transmit the content of the parent package to the new package builder.
     builder.addEvents(aPackage.getEvents());
     if (aPackage.containsErrors()) {
       builder.setContainsErrors();
     }
-    for (Target target : aPackage.getTargets(Rule.class)) {
-      builder.addRule((Rule) target);
+    for (Rule rule : aPackage.getTargets(Rule.class)) {
+      try {
+        // The old rule references another Package instance and we wan't to keep the invariant that
+        // every Rule references the Package it is contained within
+        Rule newRule = builder.createRule(
+            rule.getLabel(),
+            rule.getRuleClassObject(),
+            rule.getLocation(),
+            rule.getAttributeContainer());
+        newRule.populateOutputFiles(NullEventHandler.INSTANCE, builder);
+        if (rule.containsErrors()) {
+          newRule.setContainsErrors();
+        }
+        builder.addRule(newRule);
+      } catch (LabelSyntaxException e) {
+        // This rule has already been created once, so it should have worked the second time, too
+        throw new IllegalStateException(e);
+      }
     }
   }
 
@@ -268,9 +285,8 @@ public class WorkspaceFactory {
             + "description of the project, using underscores as separators, e.g., "
             + "github.com/bazelbuild/bazel should use com_github_bazelbuild_bazel. Names must "
             + "start with a letter and can only contain letters, numbers, and underscores.",
-    mandatoryPositionals = {
-      @SkylarkSignature.Param(name = "name", type = String.class, doc = "the name of the workspace."
-      )
+    parameters = {
+      @Param(name = "name", type = String.class, doc = "the name of the workspace.")
     },
     documented = true,
     useAst = true,
@@ -302,7 +318,7 @@ public class WorkspaceFactory {
               public Object invoke(String name, FuncallExpression ast) throws EvalException {
                 throw new EvalException(
                     ast.getLocation(),
-                    "workspace() function should be used only at the top of the WORKSPACE file.");
+                    "workspace() function should be used only at the top of the WORKSPACE file");
               }
             };
           }
@@ -318,7 +334,7 @@ public class WorkspaceFactory {
         try {
           nameLabel = Label.parseAbsolute("//external:" + name);
           try {
-            LegacyBuilder builder = PackageFactory.getContext(env, ast).pkgBuilder;
+            Builder builder = PackageFactory.getContext(env, ast).pkgBuilder;
             RuleClass ruleClass = ruleFactory.getRuleClass("bind");
             builder
                 .externalPackageData()
@@ -327,11 +343,11 @@ public class WorkspaceFactory {
                     ruleClass,
                     nameLabel,
                     actual == null ? null : Label.parseAbsolute(actual),
-                    ast.getLocation());
-          } catch (
-              RuleFactory.InvalidRuleException | Package.NameConflictException
-                      | LabelSyntaxException
-                  e) {
+                    ast.getLocation(),
+                    ruleFactory.getAttributeContainer(ruleClass));
+          } catch (RuleFactory.InvalidRuleException
+              | Package.NameConflictException
+              | LabelSyntaxException e) {
             throw new EvalException(ast.getLocation(), e.getMessage());
           }
 
@@ -388,7 +404,8 @@ public class WorkspaceFactory {
   private static ImmutableMap<String, BaseFunction> createWorkspaceFunctions(
       RuleClassProvider ruleClassProvider, boolean allowOverride) {
     ImmutableMap.Builder<String, BaseFunction> mapBuilder = ImmutableMap.builder();
-    RuleFactory ruleFactory = new RuleFactory(ruleClassProvider);
+    RuleFactory ruleFactory =
+        new RuleFactory(ruleClassProvider, AttributeContainer.ATTRIBUTE_CONTAINER_FACTORY);
     mapBuilder.put(BIND, newBindFunction(ruleFactory));
     for (String ruleClass : ruleFactory.getRuleClassNames()) {
       if (!ruleClass.equals(BIND)) {
@@ -419,7 +436,8 @@ public class WorkspaceFactory {
       }
       workspaceEnv.setupDynamic(
           PackageFactory.PKG_CONTEXT,
-          new PackageFactory.PackageContext(builder, null, localReporter));
+          new PackageFactory.PackageContext(
+              builder, null, localReporter, AttributeContainer.ATTRIBUTE_CONTAINER_FACTORY));
     } catch (EvalException e) {
       throw new AssertionError(e);
     }
@@ -436,7 +454,8 @@ public class WorkspaceFactory {
     }
 
     builder.put("bazel_version", version);
-    return new ClassObject.SkylarkClassObject(builder.build(), "no native function or rule '%s'");
+    return SkylarkClassObjectConstructor.STRUCT.create(
+        builder.build(), "no native function or rule '%s'");
   }
 
   public static ClassObject newNativeModule(RuleClassProvider ruleClassProvider, String version) {

@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.vfs;
 
+import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 
@@ -94,5 +95,28 @@ public class PathWindowsTest {
 
     assertSame(root.getRelative("dots"),
                root.getRelative("broken/../../dots"));
+  }
+
+  @Test
+  public void testStartsWithWorksOnWindows() {
+    assertStartsWithReturnsOnWindows(true, "C:/first/x", "C:/first/x/y");
+    assertStartsWithReturnsOnWindows(true, "c:/first/x", "C:/FIRST/X/Y");
+    assertStartsWithReturnsOnWindows(true, "C:/FIRST/X", "c:/first/x/y");
+  }
+
+  @Test
+  public void testGetRelative() {
+    Path root = filesystem.getPath("C:\\first\\x");
+    Path other = root.getRelative("a\\b\\c");
+    assertThat(other.asFragment().getPathString()).isEqualTo("C:/first/x/a/b/c");
+  }
+
+  private void assertStartsWithReturnsOnWindows(boolean expected,
+      String ancestor,
+      String descendant) {
+    FileSystem windowsFileSystem = new WindowsFileSystem();
+    Path parent = windowsFileSystem.getPath(ancestor);
+    Path child = windowsFileSystem.getPath(descendant);
+    assertEquals(expected, child.startsWith(parent));
   }
 }

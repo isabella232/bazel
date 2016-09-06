@@ -18,12 +18,13 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
+import com.google.common.collect.ImmutableMap;
+import java.io.IOException;
+import java.net.Proxy;
+import java.util.Map;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.IOException;
-import java.net.Proxy;
 
 /**
  * Tests for @{link ProxyHelper}.
@@ -32,11 +33,46 @@ import java.net.Proxy;
 public class ProxyHelperTest {
 
   @Test
+  public void testCreateIfNeededHttpLowerCase() throws Exception {
+    Map<String, String> env = ImmutableMap.<String, String>builder()
+        .put("http_proxy", "http://my.example.com").build();
+    Proxy proxy = ProxyHelper.createProxyIfNeeded("http://www.something.com", env);
+    assertThat(proxy.toString()).endsWith("my.example.com:80");
+  }
+
+  @Test
+  public void testCreateIfNeededHttpUpperCase() throws Exception {
+    Map<String, String> env = ImmutableMap.<String, String>builder()
+        .put("HTTP_PROXY", "http://my.example.com").build();
+    Proxy proxy = ProxyHelper.createProxyIfNeeded("http://www.something.com", env);
+    assertThat(proxy.toString()).endsWith("my.example.com:80");
+  }
+
+  @Test
+  public void testCreateIfNeededHttpsLowerCase() throws Exception {
+    Map<String, String> env = ImmutableMap.<String, String>builder()
+        .put("https_proxy", "https://my.example.com").build();
+    Proxy proxy = ProxyHelper.createProxyIfNeeded("https://www.something.com", env);
+    assertThat(proxy.toString()).endsWith("my.example.com:443");
+  }
+
+  @Test
+  public void testCreateIfNeededHttpsUpperCase() throws Exception {
+    Map<String, String> env = ImmutableMap.<String, String>builder()
+        .put("HTTPS_PROXY", "https://my.example.com").build();
+    Proxy proxy = ProxyHelper.createProxyIfNeeded("https://www.something.com", env);
+    assertThat(proxy.toString()).endsWith("my.example.com:443");
+  }
+
+  @Test
   public void testNoProxy() throws Exception {
     // Empty address.
     Proxy proxy = ProxyHelper.createProxy(null);
     assertEquals(Proxy.NO_PROXY, proxy);
     proxy = ProxyHelper.createProxy("");
+    assertEquals(Proxy.NO_PROXY, proxy);
+    Map<String, String> env = ImmutableMap.of();
+    proxy = ProxyHelper.createProxyIfNeeded("https://www.something.com", env);
     assertEquals(Proxy.NO_PROXY, proxy);
   }
 
@@ -135,5 +171,25 @@ public class ProxyHelperTest {
     } catch (IOException e) {
       assertThat(e.getMessage()).contains("No password given for proxy");
     }
+  }
+
+  @Test
+  public void testNoProxyAuth() throws Exception {
+    Proxy proxy = ProxyHelper.createProxy("http://127.0.0.1:3128/");
+    assertEquals(Proxy.Type.HTTP, proxy.type());
+    assertThat(proxy.toString()).endsWith(":3128");
+    assertEquals(System.getProperty("http.proxyHost"), "127.0.0.1");
+    assertEquals(System.getProperty("http.proxyPort"), "3128");
+  }
+
+  @Test
+  public void testTrailingSlash() throws Exception {
+    Proxy proxy = ProxyHelper.createProxy("http://foo:bar@example.com:8000/");
+    assertEquals(Proxy.Type.HTTP, proxy.type());
+    assertThat(proxy.toString()).endsWith(":8000");
+    assertEquals(System.getProperty("http.proxyHost"), "example.com");
+    assertEquals(System.getProperty("http.proxyPort"), "8000");
+    assertEquals(System.getProperty("http.proxyUser"), "foo");
+    assertEquals(System.getProperty("http.proxyPassword"), "bar");
   }
 }

@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Actions;
@@ -32,15 +33,21 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.License;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
+import com.google.devtools.build.lib.rules.cpp.FdoSupport.FdoException;
+import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
+import com.google.devtools.build.skyframe.SkyFunction;
+import com.google.devtools.build.skyframe.SkyKey;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -48,9 +55,47 @@ import java.util.Map;
  * Implementation for the cc_toolchain rule.
  */
 public class CcToolchain implements RuleConfiguredTargetFactory {
+  /**
+   * This file (found under the sysroot) may be unconditionally included in every C/C++ compilation.
+   */
+  private static final PathFragment BUILTIN_INCLUDE_FILE_SUFFIX =
+      new PathFragment("include/stdc-predef.h");
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext) {
+  public ConfiguredTarget create(RuleContext ruleContext)
+      throws RuleErrorException, InterruptedException {
+    TransitiveInfoCollection lipoContextCollector =
+        ruleContext.getPrerequisite(":lipo_context_collector", Mode.DONT_CHECK);
+    if (lipoContextCollector != null
+        && lipoContextCollector.getProvider(LipoContextProvider.class) == null) {
+      ruleContext.ruleError("--lipo_context must point to a cc_binary or a cc_test rule");
+      return null;
+    }
+
+    CppConfiguration cppConfiguration =
+        Preconditions.checkNotNull(ruleContext.getFragment(CppConfiguration.class));
+    Path fdoZip = ruleContext.getConfiguration().getCompilationMode() == CompilationMode.OPT
+        ? cppConfiguration.getFdoZip()
+        : null;
+    SkyKey fdoKey = FdoSupportValue.key(
+        cppConfiguration.getLipoMode(),
+        fdoZip,
+        cppConfiguration.getFdoInstrument());
+
+    SkyFunction.Environment skyframeEnv = ruleContext.getAnalysisEnvironment().getSkyframeEnv();
+    FdoSupportValue fdoSupport;
+    try {
+      fdoSupport = (FdoSupportValue) skyframeEnv.getValueOrThrow(
+          fdoKey, FdoException.class, IOException.class);
+    } catch (FdoException | IOException e) {
+      ruleContext.ruleError("cannot initialize FDO: " + e.getMessage());
+      return null;
+    }
+
+    if (skyframeEnv.valuesMissing()) {
+      return null;
+    }
+
     final Label label = ruleContext.getLabel();
     final NestedSet<Artifact> crosstool = ruleContext.getPrerequisite("all_files", Mode.HOST)
         .getProvider(FileProvider.class).getFilesToBuild();
@@ -60,13 +105,12 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
     final NestedSet<Artifact> objcopy = getFiles(ruleContext, "objcopy_files");
     final NestedSet<Artifact> link = getFiles(ruleContext, "linker_files");
     final NestedSet<Artifact> dwp = getFiles(ruleContext, "dwp_files");
-    final NestedSet<Artifact> libcLink = inputsForLibcLink(ruleContext);
+    final NestedSet<Artifact> libcLink = inputsForLibc(ruleContext);
     String purposePrefix = Actions.escapeLabel(label) + "_";
     String runtimeSolibDirBase = "_solib_" + "_" + Actions.escapeLabel(label);
     final PathFragment runtimeSolibDir = ruleContext.getConfiguration()
         .getBinFragment().getRelative(runtimeSolibDirBase);
 
-    CppConfiguration cppConfiguration = ruleContext.getFragment(CppConfiguration.class);
     // Static runtime inputs.
     TransitiveInfoCollection staticRuntimeLibDep = selectDep(ruleContext, "static_runtime_libs",
         cppConfiguration.getStaticRuntimeLibsLabel());
@@ -106,7 +150,7 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
         if (CppHelper.SHARED_LIBRARY_FILETYPES.matches(artifact.getFilename())) {
           dynamicRuntimeLinkInputsBuilder.add(SolibSymlinkAction.getCppRuntimeSymlink(
               ruleContext, artifact, runtimeSolibDirBase,
-              ruleContext.getConfiguration()).getArtifact());
+              ruleContext.getConfiguration()));
         } else {
           dynamicRuntimeLinkInputsBuilder.add(artifact);
         }
@@ -144,9 +188,18 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
     boolean supportsHeaderParsing =
         ruleContext.attributes().get("supports_header_parsing", BOOLEAN);
 
+    NestedSetBuilder<Pair<String, String>> coverageEnvironment = NestedSetBuilder.compileOrder();
+
+    coverageEnvironment.add(Pair.of(
+        "COVERAGE_GCOV_PATH", cppConfiguration.getGcovExecutable().getPathString()));
+    if (cppConfiguration.getFdoInstrument() != null) {
+      coverageEnvironment.add(Pair.of(
+          "FDO_DIR", cppConfiguration.getFdoInstrument().getPathString()));
+    }
+
     CcToolchainProvider provider =
         new CcToolchainProvider(
-            Preconditions.checkNotNull(ruleContext.getFragment(CppConfiguration.class)),
+            cppConfiguration,
             crosstool,
             fullInputsForCrosstool(ruleContext, crosstoolMiddleman),
             compile,
@@ -163,10 +216,13 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
             context,
             supportsParamFiles,
             supportsHeaderParsing,
-            getBuildVariables(ruleContext));
+            getBuildVariables(ruleContext),
+            getBuiltinIncludes(ruleContext),
+            coverageEnvironment.build());
     RuleConfiguredTargetBuilder builder =
         new RuleConfiguredTargetBuilder(ruleContext)
             .add(CcToolchainProvider.class, provider)
+            .add(FdoSupportProvider.class, new FdoSupportProvider(fdoSupport.getFdoSupport()))
             .setFilesToBuild(new NestedSetBuilder<Artifact>(Order.STABLE_ORDER).build())
             .add(RunfilesProvider.class, RunfilesProvider.simple(Runfiles.EMPTY));
 
@@ -192,10 +248,21 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
     return builder.build();
   }
 
-  private NestedSet<Artifact> inputsForLibcLink(RuleContext ruleContext) {
-    TransitiveInfoCollection libcLink = ruleContext.getPrerequisite(":libc_link", Mode.HOST);
-    return libcLink != null
-        ? libcLink.getProvider(FileProvider.class).getFilesToBuild()
+  private ImmutableList<Artifact> getBuiltinIncludes(RuleContext ruleContext) {
+    ImmutableList.Builder<Artifact> result = ImmutableList.builder();
+    for (Artifact artifact : inputsForLibc(ruleContext)) {
+      if (artifact.getExecPath().endsWith(BUILTIN_INCLUDE_FILE_SUFFIX)) {
+        result.add(artifact);
+      }
+    }
+
+    return result.build();
+  }
+
+  private NestedSet<Artifact> inputsForLibc(RuleContext ruleContext) {
+    TransitiveInfoCollection libc = ruleContext.getPrerequisite(":libc_top", Mode.HOST);
+    return libc != null
+        ? libc.getProvider(FileProvider.class).getFilesToBuild()
         : NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER);
   }
 
@@ -203,19 +270,23 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
       NestedSet<Artifact> crosstoolMiddleman) {
     return NestedSetBuilder.<Artifact>stableOrder()
         .addTransitive(crosstoolMiddleman)
-        // Use "libc_link" here, because it is functionally identical to the case
-        // below. If we introduce separate filegroups for compiling and linking, we
-        // need to fix that here.
-        .addTransitive(AnalysisUtils.getMiddlemanFor(ruleContext, ":libc_link"))
+        .addTransitive(AnalysisUtils.getMiddlemanFor(ruleContext, ":libc_top"))
         .build();
   }
 
-  private NestedSet<Artifact> fullInputsForLink(RuleContext ruleContext, NestedSet<Artifact> link) {
+  /**
+   * Returns the crosstool-derived link action inputs for a given rule. Adds the given set of
+   * artifacts as extra inputs.
+   */
+  protected NestedSet<Artifact> fullInputsForLink(
+      RuleContext ruleContext, NestedSet<Artifact> link) {
     return NestedSetBuilder.<Artifact>stableOrder()
         .addTransitive(link)
-        .addTransitive(AnalysisUtils.getMiddlemanFor(ruleContext, ":libc_link"))
-        .add(ruleContext.getAnalysisEnvironment().getEmbeddedToolArtifact(
-            CppRuleClasses.BUILD_INTERFACE_SO))
+        .addTransitive(AnalysisUtils.getMiddlemanFor(ruleContext, ":libc_top"))
+        .add(
+            ruleContext
+                .getAnalysisEnvironment()
+                .getEmbeddedToolArtifact(CppRuleClasses.BUILD_INTERFACE_SO))
         .build();
   }
 

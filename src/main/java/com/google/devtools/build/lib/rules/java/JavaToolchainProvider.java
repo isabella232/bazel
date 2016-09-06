@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules.java;
 import static com.google.devtools.build.lib.util.Preconditions.checkNotNull;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
@@ -23,9 +24,7 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-
 import java.util.List;
-
 import javax.annotation.Nullable;
 
 /**
@@ -41,40 +40,45 @@ public final class JavaToolchainProvider implements TransitiveInfoProvider {
 
   private final String sourceVersion;
   private final String targetVersion;
-  @Nullable private final NestedSet<Artifact> bootclasspath;
-  @Nullable private final NestedSet<Artifact> extclasspath;
+  private final NestedSet<Artifact> bootclasspath;
+  private final NestedSet<Artifact> extclasspath;
   private final String encoding;
   private final ImmutableList<String> javacOptions;
-  private final ImmutableList<String> javacJvmOptions;
-  @Nullable private final Artifact javac;
-  @Nullable private final Artifact javaBuilder;
-  @Nullable private final Artifact headerCompiler;
+  private final ImmutableList<String> jvmOptions;
+  private final boolean javacSupportsWorkers;
+  private final Artifact javac;
+  private final Artifact javaBuilder;
+  private final Artifact headerCompiler;
   @Nullable private final Artifact singleJar;
-  @Nullable private final Artifact genClass;
-  @Nullable private final FilesToRunProvider ijar;
+  private final Artifact genClass;
+  private final FilesToRunProvider ijar;
+  private final ImmutableMap<String, ImmutableList<String>> compatibleJavacOptions;
 
   public JavaToolchainProvider(
       JavaToolchainData data,
-      @Nullable NestedSet<Artifact> bootclasspath,
-      @Nullable NestedSet<Artifact> extclasspath,
+      NestedSet<Artifact> bootclasspath,
+      NestedSet<Artifact> extclasspath,
       List<String> defaultJavacFlags,
-      @Nullable Artifact javac,
-      @Nullable Artifact javaBuilder,
+      Artifact javac,
+      Artifact javaBuilder,
       @Nullable Artifact headerCompiler,
-      @Nullable Artifact singleJar,
-      @Nullable Artifact genClass,
-      @Nullable FilesToRunProvider ijar) {
+      Artifact singleJar,
+      Artifact genClass,
+      FilesToRunProvider ijar,
+      ImmutableMap<String, ImmutableList<String>> compatibleJavacOptions) {
     this.sourceVersion = checkNotNull(data.getSourceVersion(), "sourceVersion must not be null");
     this.targetVersion = checkNotNull(data.getTargetVersion(), "targetVersion must not be null");
-    this.bootclasspath = bootclasspath;
-    this.extclasspath = extclasspath;
+    this.bootclasspath = checkNotNull(bootclasspath, "bootclasspath must not be null");
+    this.extclasspath = checkNotNull(extclasspath, "extclasspath must not be null");
     this.encoding = checkNotNull(data.getEncoding(), "encoding must not be null");
-    this.javac = javac;
-    this.javaBuilder = javaBuilder;
+    this.javac = checkNotNull(javac, "javac must not be null");
+    this.javaBuilder = checkNotNull(javaBuilder, "javaBuilder must not be null");
     this.headerCompiler = headerCompiler;
-    this.singleJar = singleJar;
-    this.genClass = genClass;
-    this.ijar = ijar;
+    this.singleJar = checkNotNull(singleJar, "singleJar must not be null");
+    this.genClass = checkNotNull(genClass, "genClass must not be null");
+    this.ijar = checkNotNull(ijar, "ijar must not be null");
+    this.compatibleJavacOptions =
+        checkNotNull(compatibleJavacOptions, "compatible javac options must not be null");
 
     // merges the defaultJavacFlags from
     // {@link JavaConfiguration} with the flags from the {@code java_toolchain} rule.
@@ -83,7 +87,8 @@ public final class JavaToolchainProvider implements TransitiveInfoProvider {
             .addAll(data.getJavacOptions())
             .addAll(defaultJavacFlags)
             .build();
-    this.javacJvmOptions = data.getJavacJvmOptions();
+    this.jvmOptions = data.getJvmOptions();
+    this.javacSupportsWorkers = data.getJavacSupportsWorkers();
   }
 
   /** @return the list of default options for the java compiler */
@@ -91,9 +96,16 @@ public final class JavaToolchainProvider implements TransitiveInfoProvider {
     return javacOptions;
   }
 
-  /** @return the list of default options for the JVM running the java compiler */
-  public ImmutableList<String> getJavacJvmOptions() {
-    return javacJvmOptions;
+  /**
+   * @return the list of default options for the JVM running the java compiler and associated tools.
+   */
+  public ImmutableList<String> getJvmOptions() {
+    return jvmOptions;
+  }
+
+  /** @return whether JavaBuilders supports running as a persistent worker or not */
+  public boolean getJavacSupportsWorkers() {
+    return javacSupportsWorkers;
   }
 
   /** @return the input Java language level */
@@ -156,5 +168,12 @@ public final class JavaToolchainProvider implements TransitiveInfoProvider {
   @Nullable
   public FilesToRunProvider getIjar() {
     return ijar;
+  }
+
+  /** @return the map of target environment-specific javacopts. */
+  public ImmutableList<String> getCompatibleJavacOptions(String key) {
+    return compatibleJavacOptions.containsKey(key)
+        ? compatibleJavacOptions.get(key)
+        : ImmutableList.<String>of();
   }
 }

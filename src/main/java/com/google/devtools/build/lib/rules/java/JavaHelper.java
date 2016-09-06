@@ -13,17 +13,19 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.java;
 
+import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL_LIST;
+
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.AnalysisUtils;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,7 +43,7 @@ public abstract class JavaHelper {
    */
   public static TransitiveInfoCollection launcherForTarget(JavaSemantics semantics,
       RuleContext ruleContext) {
-    String launcher = filterLauncherForTarget(semantics, ruleContext);
+    String launcher = filterLauncherForTarget(ruleContext);
     return (launcher == null) ? null : ruleContext.getPrerequisite(launcher, Mode.TARGET);
   }
 
@@ -51,7 +53,7 @@ public abstract class JavaHelper {
    */
   public static Artifact launcherArtifactForTarget(JavaSemantics semantics,
       RuleContext ruleContext) {
-    String launcher = filterLauncherForTarget(semantics, ruleContext);
+    String launcher = filterLauncherForTarget(ruleContext);
     return (launcher == null) ? null : ruleContext.getPrerequisiteArtifact(launcher, Mode.TARGET);
   }
 
@@ -59,12 +61,16 @@ public abstract class JavaHelper {
    * Control structure abstraction for safely extracting a prereq from the launcher attribute
    * or --java_launcher flag.
    */
-  private static String filterLauncherForTarget(JavaSemantics semantics, RuleContext ruleContext) {
+  private static String filterLauncherForTarget(RuleContext ruleContext) {
+    // create_executable=0 disables the launcher
+    if (ruleContext.getRule().isAttrDefined("create_executable", Type.BOOLEAN)
+        && !ruleContext.attributes().get("create_executable", Type.BOOLEAN)) {
+      return null;
+    }
     // BUILD rule "launcher" attribute
     if (ruleContext.getRule().isAttrDefined("launcher", BuildType.LABEL)
         && ruleContext.attributes().get("launcher", BuildType.LABEL) != null) {
-      if (ruleContext.attributes().get("launcher", BuildType.LABEL)
-          .equals(JavaSemantics.JDK_LAUNCHER_LABEL)) {
+      if (isJdkLauncher(ruleContext, ruleContext.attributes().get("launcher", BuildType.LABEL))) {
         return null;
       }
       return "launcher";
@@ -72,9 +78,8 @@ public abstract class JavaHelper {
     // Blaze flag --java_launcher
     JavaConfiguration javaConfig = ruleContext.getFragment(JavaConfiguration.class);
     if (ruleContext.getRule().isAttrDefined(":java_launcher", BuildType.LABEL)
-        && ((javaConfig.getJavaLauncherLabel() != null
-                && !javaConfig.getJavaLauncherLabel().equals(JavaSemantics.JDK_LAUNCHER_LABEL))
-            || semantics.forceUseJavaLauncherTarget(ruleContext))) {
+        && javaConfig.getJavaLauncherLabel() != null
+        && !isJdkLauncher(ruleContext, javaConfig.getJavaLauncherLabel())) {
       return ":java_launcher";
     }
     return null;
@@ -109,6 +114,12 @@ public abstract class JavaHelper {
   public static PathFragment getJavaResourcePath(
       JavaSemantics semantics, RuleContext ruleContext, Artifact resource) {
     PathFragment rootRelativePath = resource.getRootRelativePath();
+
+    if (!resource.getOwner().getWorkspaceRoot().isEmpty()) {
+      PathFragment workspace = new PathFragment(resource.getOwner().getWorkspaceRoot());
+      rootRelativePath = rootRelativePath.relativeTo(workspace);
+    }
+
     if (!ruleContext.attributes().has("resource_strip_prefix", Type.STRING)
         || !ruleContext.attributes().isAttributeValueExplicitlySpecified("resource_strip_prefix")) {
       return semantics.getDefaultJavaResourcePath(rootRelativePath);
@@ -132,5 +143,14 @@ public abstract class JavaHelper {
    */
   public static NestedSet<Artifact> getHostJavabaseInputs(RuleContext ruleContext) {
     return AnalysisUtils.getMiddlemanFor(ruleContext, ":host_jdk");
+  }
+
+  /**
+   * Returns true if the given Label is of the pseudo-cc_binary that tells Bazel a Java target's
+   * JAVABIN is never to be replaced by the contents of --java_launcher; only the JDK's launcher
+   * will ever be used.
+   */
+  public static boolean isJdkLauncher(RuleContext ruleContext, Label label) {
+    return ruleContext.attributes().get("$no_launcher", NODEP_LABEL_LIST).contains(label);
   }
 }

@@ -18,11 +18,12 @@ import static com.google.devtools.build.buildjar.javac.plugins.dependency.Depend
 import static com.google.devtools.build.buildjar.javac.plugins.dependency.ImplicitDependencyExtractor.getPlatformJars;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Ordering;
+import com.google.devtools.build.buildjar.JarOwner;
 import com.google.devtools.build.buildjar.javac.plugins.BlazeJavaCompilerPlugin;
 import com.google.devtools.build.buildjar.javac.plugins.dependency.DependencyModule.StrictJavaDeps;
 import com.google.devtools.build.lib.view.proto.Deps;
 import com.google.devtools.build.lib.view.proto.Deps.Dependency;
-
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.code.Kinds;
 import com.sun.tools.javac.code.Symbol;
@@ -35,17 +36,16 @@ import com.sun.tools.javac.tree.TreeScanner;
 import com.sun.tools.javac.util.Context;
 import com.sun.tools.javac.util.Log;
 import com.sun.tools.javac.util.Log.WriterKind;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
-import java.util.TreeSet;
-
 import javax.annotation.Generated;
 import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
@@ -75,7 +75,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
   private final Set<JCTree> trees;
 
   /** Computed missing dependencies */
-  private final Set<String> missingTargets;
+  private final Set<JarOwner> missingTargets;
 
   private static Properties targetMap;
 
@@ -100,7 +100,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
     toplevels = new HashSet<>();
     trees = new HashSet<>();
     targetMap = new Properties();
-    missingTargets = new TreeSet<>();
+    missingTargets = new HashSet<>();
   }
 
   @Override
@@ -160,24 +160,20 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
     implicitDependencyExtractor.accumulate(context, checkingTreeScanner.getSeenClasses());
 
     if (!missingTargets.isEmpty()) {
-      StringBuilder missingTargetsStr = new StringBuilder();
-      for (String target : missingTargets) {
-        missingTargetsStr.append(target);
-        missingTargetsStr.append(" ");
-      }
-      String canonicalizedLabel;
-      if (dependencyModule.getTargetLabel() == null) {
-        canonicalizedLabel = null;
-      } else {
-        canonicalizedLabel = canonicalizeTarget(dependencyModule.getTargetLabel());
+      String canonicalizedLabel =
+          dependencyModule.getTargetLabel() == null
+              ? null
+              : canonicalizeTarget(dependencyModule.getTargetLabel());
+      List<JarOwner> canonicalizedMissing = new ArrayList<>();
+      for (JarOwner owner :
+          Ordering.natural().onResultOf(JarOwner.LABEL).immutableSortedCopy(missingTargets)) {
+        canonicalizedMissing.add(
+            JarOwner.create(canonicalizeTarget(owner.label()), owner.aspect()));
       }
       errWriter.print(
-          String.format(
-              dependencyModule.getFixMessage(),
-              USE_COLOR ? "\033[35m\033[1m" : "",
-              USE_COLOR ? "\033[0m" : "",
-              missingTargetsStr.toString(),
-              canonicalizedLabel));
+          dependencyModule
+              .getFixMessage()
+              .get(canonicalizedMissing, canonicalizedLabel, USE_COLOR));
     }
   }
 
@@ -189,12 +185,12 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
    */
   private static class CheckingTreeScanner extends TreeScanner {
 
-    private static final String transitiveDepMessage =
+    private static final String TRANSITIVE_DEP_MESSAGE =
         "[strict] Using type {0} from an indirect dependency (TOOL_INFO: \"{1}\"). "
             + "See command below **";
 
     /** Lookup for jars coming from transitive dependencies */
-    private final Map<String, String> indirectJarsToTargets;
+    private final Map<String, JarOwner> indirectJarsToTargets;
 
     /** All error reporting is done through javac's log, */
     private final Log log;
@@ -206,14 +202,14 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
     private final StrictJavaDeps strictJavaDepsMode;
 
     /** Missing targets */
-    private final Set<String> missingTargets;
+    private final Set<JarOwner> missingTargets;
 
     /** Collect seen direct dependencies and their associated information */
     private final Map<String, Deps.Dependency> directDependenciesMap;
 
     /** We only emit one warning/error per class symbol */
     private final Set<ClassSymbol> seenClasses = new HashSet<>();
-    private final Set<String> seenTargets = new HashSet<>();
+    private final Set<JarOwner> seenTargets = new HashSet<>();
 
     /** The set of jars on the compilation bootclasspath. */
     private final Set<String> platformJars;
@@ -221,8 +217,15 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
     /** The set of generators we exempt from this testing. */
     private final Set<String> exemptGenerators;
 
-    public CheckingTreeScanner(DependencyModule dependencyModule, Log log,
-        Set<String> missingTargets, Set<String> platformJars, JavaFileManager fileManager) {
+    /** Was the node being visited generated by an exempt annotation processor? */
+    private boolean isStrictDepsExempt = false;
+
+    public CheckingTreeScanner(
+        DependencyModule dependencyModule,
+        Log log,
+        Set<JarOwner> missingTargets,
+        Set<String> platformJars,
+        JavaFileManager fileManager) {
       this.indirectJarsToTargets = dependencyModule.getIndirectMapping();
       this.strictJavaDepsMode = dependencyModule.getStrictJavaDeps();
       this.log = log;
@@ -262,19 +265,28 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
      * replaced by the more complete Blaze implementation).
      */
     private void collectExplicitDependency(String jarName, JCTree node, Symbol.TypeSymbol sym) {
-      if (strictJavaDepsMode.isEnabled()) {
-        // Does it make sense to emit a warning/error for this pair of (type, target)?
-        // We want to emit only one error/warning per target.
-        String target = indirectJarsToTargets.get(jarName);
-        if (target != null && seenTargets.add(target)) {
-          String canonicalTargetName = canonicalizeTarget(target);
-          missingTargets.add(canonicalTargetName);
+      if (strictJavaDepsMode.isEnabled() && !isStrictDepsExempt) {
+        // Does it make sense to emit a warning/error for this pair of (type, owner)?
+        // We want to emit only one error/warning per owner.
+        JarOwner owner = indirectJarsToTargets.get(jarName);
+        if (owner != null && seenTargets.add(owner)) {
+          // owner is of the form "//label/of:rule <Aspect name>" where <Aspect name> is optional.
+          String canonicalTargetName = canonicalizeTarget(owner.label());
+          missingTargets.add(owner);
+          String toolInfo =
+              owner.aspect() == null
+                  ? canonicalTargetName
+                  : String.format("%s with aspect %s", canonicalTargetName, owner.aspect());
           if (strictJavaDepsMode == ERROR) {
-            log.error(node.pos, "proc.messager",
-                MessageFormat.format(transitiveDepMessage, sym, canonicalTargetName));
+            log.error(
+                node.pos,
+                "proc.messager",
+                MessageFormat.format(TRANSITIVE_DEP_MESSAGE, sym, toolInfo));
           } else {
-            log.warning(node.pos, "proc.messager",
-                MessageFormat.format(transitiveDepMessage, sym, canonicalTargetName));
+            log.warning(
+                node.pos,
+                "proc.messager",
+                MessageFormat.format(TRANSITIVE_DEP_MESSAGE, sym, toolInfo));
           }
         }
       }
@@ -335,43 +347,47 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
       }
     }
 
-    private static final String TIKTOK_COMPONENT_PROCESSOR_NAME =
-        "com.google.apps.tiktok.inject.processor.ComponentProcessor";
-
     private static final String DAGGER_PROCESSOR_PREFIX = "dagger.";
 
-    public boolean generatedByDagger(JCTree.JCClassDecl tree) {
+    enum ProcessorDependencyMode {
+      DEFAULT,
+      EXEMPT_RECORD,
+      EXEMPT_NORECORD;
+    }
+
+    public ProcessorDependencyMode isAnnotationProcessorExempt(JCTree.JCClassDecl tree) {
       if (tree.sym == null) {
-        return false;
+        return ProcessorDependencyMode.DEFAULT;
       }
       Generated generated = tree.sym.getAnnotation(Generated.class);
       if (generated == null) {
-        return false;
+        return ProcessorDependencyMode.DEFAULT;
       }
       for (String value : generated.value()) {
+        // Relax strict deps for dagger-generated code (b/17979436).
         if (value.startsWith(DAGGER_PROCESSOR_PREFIX)) {
-          return true;
+          return ProcessorDependencyMode.EXEMPT_NORECORD;
         }
-        // additional exemption for tiktok (b/21307381)
-        if (value.equals(TIKTOK_COMPONENT_PROCESSOR_NAME)) {
-          return true;
-        }
-        for (String exemptGenerator : exemptGenerators) {
-          if (value.equals(exemptGenerator)) {
-            return true;
-          }
+        if (exemptGenerators.contains(value)) {
+          return ProcessorDependencyMode.EXEMPT_RECORD;
         }
       }
-      return false;
+      return ProcessorDependencyMode.DEFAULT;
     }
 
     @Override
     public void visitClassDef(JCTree.JCClassDecl tree) {
-      // Relax strict deps for dagger-generated code (b/17979436).
-      if (generatedByDagger(tree)) {
+      ProcessorDependencyMode mode = isAnnotationProcessorExempt(tree);
+      if (mode == ProcessorDependencyMode.EXEMPT_NORECORD) {
         return;
       }
-      super.visitClassDef(tree);
+      boolean previous = isStrictDepsExempt;
+      try {
+        isStrictDepsExempt |= mode == ProcessorDependencyMode.EXEMPT_RECORD;
+        super.visitClassDef(tree);
+      } finally {
+        isStrictDepsExempt = previous;
+      }
     }
   }
 

@@ -13,15 +13,16 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
+import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
-import com.google.devtools.build.lib.Constants;
+import com.google.devtools.build.lib.analysis.RedirectChaser;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.DefaultLabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.EmptyToNullLabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -32,24 +33,19 @@ import com.google.devtools.build.lib.analysis.config.InvalidConfigurationExcepti
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
+import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
-
+import com.google.devtools.common.options.OptionsParsingException;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Configuration fragment for Android rules.
  */
 @Immutable
 public class AndroidConfiguration extends BuildConfiguration.Fragment {
-
-  /** Converter for --android_sdk. */
-  public static class AndroidSdkConverter extends DefaultLabelConverter {
-    public AndroidSdkConverter() {
-      super(Constants.ANDROID_DEFAULT_SDK);
-    }
-  }
 
   /**
    * Converter for {@link com.google.devtools.build.lib.rules.android.AndroidConfiguration.ConfigurationDistinguisher}
@@ -66,7 +62,47 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
    */
   public static final class IncrementalDexingConverter extends EnumConverter<IncrementalDexing> {
     public IncrementalDexingConverter() {
-      super(IncrementalDexing.class, "use incremental dexing");
+      super(IncrementalDexing.class, "incremental dexing option");
+    }
+  }
+
+  /**
+   * Converter for a set of {@link AndroidBinaryType}s.
+   */
+  public static final class AndroidBinaryTypesConverter
+      implements Converter<Set<AndroidBinaryType>> {
+
+    private final EnumConverter<AndroidBinaryType> elementConverter =
+        new EnumConverter<AndroidBinaryType>(AndroidBinaryType.class, "Android binary type") {};
+    private final Splitter splitter = Splitter.on(',').omitEmptyStrings().trimResults();
+
+    public AndroidBinaryTypesConverter() {}
+
+    @Override
+    public ImmutableSet<AndroidBinaryType> convert(String input) throws OptionsParsingException {
+      if ("all".equals(input)) {
+        return ImmutableSet.copyOf(AndroidBinaryType.values());
+      }
+      ImmutableSet.Builder<AndroidBinaryType> result = ImmutableSet.builder();
+      for (String opt : splitter.split(input)) {
+        result.add(elementConverter.convert(opt));
+      }
+      return result.build();
+    }
+
+    @Override
+    public String getTypeDescription() {
+      return "comma-separated list of: " + elementConverter.getTypeDescription();
+    }
+  }
+
+  /**
+   * Converter for {@link AndroidManifestMerger}
+   */
+  public static final class AndroidManifestMergerConverter
+      extends EnumConverter<AndroidManifestMerger> {
+    public AndroidManifestMergerConverter() {
+      super(AndroidManifestMerger.class, "android manifest merger");
     }
   }
 
@@ -92,9 +128,48 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     }
   }
 
+  /** Types of android binaries as {@link AndroidBinary#dex} distinguishes them. */
+  public enum AndroidBinaryType {
+    MONODEX, MULTIDEX_UNSHARDED, MULTIDEX_SHARDED
+  }
+
   /** When to use incremental dexing (using {@link DexArchiveProvider}). */
-  public enum IncrementalDexing {
-    OFF, WITH_DEX_SHARDS,
+  private enum IncrementalDexing {
+    OFF(),
+    WITH_DEX_SHARDS(AndroidBinaryType.MULTIDEX_SHARDED),
+    WITH_MULTIDEX(AndroidBinaryType.MULTIDEX_UNSHARDED, AndroidBinaryType.MULTIDEX_SHARDED),
+    WITH_MONODEX_OR_DEX_SHARDS(AndroidBinaryType.MONODEX, AndroidBinaryType.MULTIDEX_SHARDED),
+    AS_PERMITTED(AndroidBinaryType.values());
+
+    private ImmutableSet<AndroidBinaryType> binaryTypes;
+
+    private IncrementalDexing(AndroidBinaryType... binaryTypes) {
+      this.binaryTypes = ImmutableSet.copyOf(binaryTypes);
+    }
+  }
+
+  /** Types of android manifest mergers. */
+  public enum AndroidManifestMerger {
+    LEGACY,
+    ANDROID;
+
+    public static List<String> getAttributeValues() {
+      return ImmutableList.of(LEGACY.name().toLowerCase(), ANDROID.name().toLowerCase(),
+          getRuleAttributeDefault());
+    }
+
+    public static String getRuleAttributeDefault() {
+      return "auto";
+    }
+
+    public static AndroidManifestMerger fromString(String value) {
+      for (AndroidManifestMerger merger : AndroidManifestMerger.values()) {
+        if (merger.name().equalsIgnoreCase(value)) {
+          return merger;
+        }
+      }
+      return null;
+    }
   }
 
   /**
@@ -149,9 +224,9 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     // Label of filegroup combining all Android tools used as implicit dependencies of
     // android_* rules
     @Option(name = "android_sdk",
-            defaultValue = "",
+            defaultValue = "@bazel_tools//tools/android:sdk",
             category = "version",
-            converter = AndroidSdkConverter.class,
+            converter = LabelConverter.class,
             help = "Specifies Android SDK/platform that is used to build Android applications.")
     public Label sdk;
 
@@ -165,8 +240,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     // TODO(bazel-team): Maybe merge this with --android_cpu above.
     @Option(name = "fat_apk_cpu",
             converter = Converters.CommaSeparatedOptionListConverter.class,
-            allowMultiple = true,
-            defaultValue = "",
+            defaultValue = "armeabi-v7a",
             category = "undocumented",
             help = "Setting this option enables fat APKs, which contain native binaries for all "
                 + "specified target architectures, e.g., --fat_apk_cpu=x86,armeabi-v7a. Note that "
@@ -187,27 +261,54 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
         help = "Enables sanity checks for Jack and Jill compilation.")
     public boolean jackSanityChecks;
 
-    // Do not use on the command line.
-    // The idea is that once this option works, we'll flip the default value in a config file, then
-    // once it is proven that it works, remove it from Bazel and said config file.
     @Option(name = "experimental_incremental_dexing",
         defaultValue = "off",
         category = "undocumented",
         converter = IncrementalDexingConverter.class,
+        deprecationWarning = "Use --incremental_dexing instead to turn on incremental dexing.",
         help = "Does most of the work for dexing separately for each Jar file.  Incompatible with "
             + "Jack and Jill.")
     public IncrementalDexing dexingStrategy;
 
+    @Option(name = "incremental_dexing",
+        defaultValue = "false",
+        category = "semantics",
+        implicitRequirements = "--noexperimental_android_use_jack_for_dexing",
+        help = "Does most of the work for dexing separately for each Jar file.  Incompatible with "
+            + "Jack and Jill.")
+    public boolean incrementalDexing;
+
+    // Do not use on the command line.
+    // The idea is that this option lets us gradually turn on incremental dexing for different
+    // binaries.  Users should rely on --noincremental_dexing to turn it off.
+    @Option(name = "incremental_dexing_binary_types",
+        defaultValue = "multidex_sharded",
+        category = "undocumented",
+        converter = AndroidBinaryTypesConverter.class,
+        implicitRequirements = "--incremental_dexing",
+        help = "Kinds of binaries to incrementally dex if --incremental_dexing is true.")
+    public Set<AndroidBinaryType> incrementalDexingBinaries;
+
     @Option(name = "non_incremental_per_target_dexopts",
         converter = Converters.CommaSeparatedOptionListConverter.class,
         defaultValue = "--no-locals",
-        category = "undocumented",
+        category = "semantics",
         help = "dx flags that that prevent incremental dexing for binary targets that list any of "
             + "the flags listed here in their 'dexopts' attribute, which are ignored with "
-            + "incremental dexing.  Defaults to --no-locals for safety but can in general be used "
+            + "incremental dexing (superseding --dexopts_supported_in_incremental_dexing).  "
+            + "Defaults to --no-locals for safety but can in general be used "
             + "to make sure the listed dx flags are honored, with additional build latency.  "
             + "Please notify us if you find yourself needing this flag.")
     public List<String> nonIncrementalPerTargetDexopts;
+
+    // Do not use on the command line.
+    // This flag is intended to be updated as we add supported flags to the incremental dexing tools
+    @Option(name = "dexopts_supported_in_incremental_dexing",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "",
+        category = "hidden",
+        help = "dx flags supported in incremental dexing.")
+    public List<String> dexoptsSupportedInIncrementalDexing;
 
     @Option(name = "experimental_allow_android_library_deps_without_srcs",
         defaultValue = "true",
@@ -222,6 +323,23 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
         help = "Enables resource shrinking for android_binary APKs that use proguard.")
     public boolean useAndroidResourceShrinking;
 
+    @Option(name = "android_manifest_merger",
+        defaultValue = "legacy",
+        category = "semantics",
+        converter = AndroidManifestMergerConverter.class,
+        help = "Selects the manifest merger to use for android_binary rules. Flag to help the"
+            + "transition to the Android manifest merger from the legacy merger.")
+    public AndroidManifestMerger manifestMerger;
+
+    // Do not use on the command line.
+    // The idea is that once this option works, we'll flip the default value in a config file, then
+    // once it is proven that it works, remove it from Bazel and said config file.
+    @Option(name = "experimental_use_rclass_generator",
+        defaultValue = "false",
+        category = "undocumented",
+        help = "Use the specialized R class generator to build the final app and lib R classes.")
+    public boolean useRClassGenerator;
+
     @Override
     public void addAllLabels(Multimap<String, Label> labelMap) {
       if (androidCrosstoolTop != null) {
@@ -235,18 +353,8 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     public FragmentOptions getHost(boolean fallback) {
       Options host = (Options) super.getHost(fallback);
       host.androidCrosstoolTop = androidCrosstoolTop;
+      host.sdk = sdk;
       return host;
-    }
-
-    // This method is here because Constants.ANDROID_DEFAULT_FAT_APK_CPUS cannot be a constant
-    // because we replace the class file in the .jar after compilation. However, that means that we
-    // cannot use it as an attribute value in an annotation.
-    public List<String> realFatApkCpus() {
-      if (fatApkCpus.isEmpty()) {
-        return Constants.ANDROID_DEFAULT_FAT_APK_CPUS;
-      } else {
-        return fatApkCpus;
-      }
     }
 
     @Override
@@ -266,8 +374,14 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   public static class Loader implements ConfigurationFragmentFactory {
     @Override
     public Fragment create(ConfigurationEnvironment env, BuildOptions buildOptions)
-        throws InvalidConfigurationException {
-      return new AndroidConfiguration(buildOptions.get(Options.class));
+        throws InvalidConfigurationException, InterruptedException {
+      AndroidConfiguration.Options androidOptions =
+          buildOptions.get(AndroidConfiguration.Options.class);
+      Label androidSdk = RedirectChaser.followRedirects(env, androidOptions.sdk, "android_sdk");
+      if (androidSdk == null) {
+        return null;
+      }
+      return new AndroidConfiguration(buildOptions.get(Options.class), androidSdk);
     }
 
     @Override
@@ -286,30 +400,39 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   private final boolean legacyNativeSupport;
   private final String cpu;
   private final boolean incrementalNativeLibs;
-  private final boolean fatApk;
   private final ConfigurationDistinguisher configurationDistinguisher;
   private final boolean useJackForDexing;
   private final boolean jackSanityChecks;
-  private final IncrementalDexing dexingStrategy;
+  private final ImmutableSet<AndroidBinaryType> incrementalDexingBinaries;
+  private final ImmutableList<String> dexoptsSupportedInIncrementalDexing;
   private final ImmutableList<String> targetDexoptsThatPreventIncrementalDexing;
   private final boolean allowAndroidLibraryDepsWithoutSrcs;
   private final boolean useAndroidResourceShrinking;
+  private final boolean useRClassGenerator;
+  private final AndroidManifestMerger manifestMerger;
 
-  AndroidConfiguration(Options options) {
-    this.sdk = options.sdk;
+  AndroidConfiguration(Options options, Label androidSdk) {
+    this.sdk = androidSdk;
     this.incrementalNativeLibs = options.incrementalNativeLibs;
     this.strictDeps = options.strictDeps;
     this.legacyNativeSupport = options.legacyNativeSupport;
     this.cpu = options.cpu;
-    this.fatApk = !options.realFatApkCpus().isEmpty();
     this.configurationDistinguisher = options.configurationDistinguisher;
     this.useJackForDexing = options.useJackForDexing;
     this.jackSanityChecks = options.jackSanityChecks;
-    this.dexingStrategy = options.dexingStrategy;
+    if (options.incrementalDexing) {
+      this.incrementalDexingBinaries = ImmutableSet.copyOf(options.incrementalDexingBinaries);
+    } else {
+      this.incrementalDexingBinaries = options.dexingStrategy.binaryTypes;
+    }
+    this.dexoptsSupportedInIncrementalDexing =
+        ImmutableList.copyOf(options.dexoptsSupportedInIncrementalDexing);
     this.targetDexoptsThatPreventIncrementalDexing =
         ImmutableList.copyOf(options.nonIncrementalPerTargetDexopts);
     this.allowAndroidLibraryDepsWithoutSrcs = options.allowAndroidLibraryDepsWithoutSrcs;
     this.useAndroidResourceShrinking = options.useAndroidResourceShrinking;
+    this.useRClassGenerator = options.useRClassGenerator;
+    this.manifestMerger = options.manifestMerger;
   }
 
   public String getCpu() {
@@ -326,10 +449,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   public StrictDepsMode getStrictDeps() {
     return strictDeps;
-  }
-
-  public boolean isFatApk() {
-    return fatApk;
   }
 
   /**
@@ -355,13 +474,20 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
    * Returns when to use incremental dexing using {@link DexArchiveProvider}.  Note this is disabled
    * if {@link #isJackUsedForDexing()}.
    */
-  public IncrementalDexing getIncrementalDexing() {
-    return isJackUsedForDexing() ? IncrementalDexing.OFF : dexingStrategy;
+  public ImmutableSet<AndroidBinaryType> getIncrementalDexingBinaries() {
+    return isJackUsedForDexing() ? ImmutableSet.<AndroidBinaryType>of() : incrementalDexingBinaries;
   }
 
   /**
-   * Regardless of {@link #getIncrementalDexing}, incremental dexing must not be used for binaries
-   * that list any of these flags in their {@code dexopts} attribute.
+   * dx flags supported in incremental dexing actions.
+   */
+  public ImmutableList<String> getDexoptsSupportedInIncrementalDexing() {
+    return dexoptsSupportedInIncrementalDexing;
+  }
+
+  /**
+   * Regardless of {@link #getIncrementalDexingBinaries}, incremental dexing must not be used for
+   * binaries that list any of these flags in their {@code dexopts} attribute.
    */
   public ImmutableList<String> getTargetDexoptsThatPreventIncrementalDexing() {
     return targetDexoptsThatPreventIncrementalDexing;
@@ -373,6 +499,14 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   public boolean useAndroidResourceShrinking() {
     return useAndroidResourceShrinking;
+  }
+
+  public boolean useRClassGenerator() {
+    return useRClassGenerator;
+  }
+
+  public AndroidManifestMerger getManifestMerger() {
+    return manifestMerger;
   }
 
   @Override

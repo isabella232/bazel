@@ -28,8 +28,10 @@ import com.google.devtools.build.lib.rules.SkylarkModules;
 import com.google.devtools.build.lib.rules.SkylarkRuleContext;
 import com.google.devtools.build.lib.rules.SkylarkRuleContext.Kind;
 import com.google.devtools.build.lib.syntax.Environment;
+import com.google.devtools.build.lib.syntax.Environment.Phase;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
+import com.google.devtools.build.lib.testutil.TestConstants;
 
 import org.junit.Before;
 
@@ -55,13 +57,14 @@ public abstract class SkylarkTestCase extends BuildViewTestCase {
             .setSkylark()
             .setEventHandler(getEventHandler())
             .setGlobals(SkylarkModules.getGlobals(SkylarkModules.MODULES))
-            .setLoadingPhase()
+            .setToolsRepository(TestConstants.TOOLS_REPOSITORY)
+            .setPhase(Phase.LOADING)
             .build()
             .setupDynamic(
                 PackageFactory.PKG_CONTEXT,
                 // This dummy pkgContext works because no Skylark unit test attempts to actually
                 // create rules. Creating actual rules is tested in SkylarkIntegrationTest.
-                new PackageContext(null, null, getEventHandler()));
+                new PackageContext(null, null, getEventHandler(), null));
       }
     };
   }
@@ -146,6 +149,7 @@ public abstract class SkylarkTestCase extends BuildViewTestCase {
   }
 
   protected void checkErrorContains(String errorMsg, String... lines) throws Exception {
+    ev.setFailFast(false);
     try {
       eval(lines);
       fail("checkErrorContains(String, String...): There was no error");

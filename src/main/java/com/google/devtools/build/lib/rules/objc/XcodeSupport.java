@@ -25,10 +25,11 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.BinaryFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
-import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.SplitArchTransition.ConfigurationDistinguisher;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
 import com.google.devtools.build.lib.rules.objc.XcodeProvider.Builder;
 import com.google.devtools.build.lib.rules.objc.XcodeProvider.Project;
 import com.google.devtools.build.xcode.xcodegen.proto.XcodeGenProtos;
@@ -41,6 +42,11 @@ import java.util.List;
  * Support for Objc rule types that export an Xcode provider or generate xcode project files.
  *
  * <p>Methods on this class can be called in any order without impacting the result.
+ *
+ * <p>These objects should not outlast the analysis phase. Do not pass them to {@link Action}
+ * objects or other persistent objects. There are internal tests to ensure that XcodeSupport objects
+ * are not persisted that check the name of this class, so update those tests if you change this
+ * class's name.
  */
 public final class XcodeSupport {
 
@@ -51,12 +57,26 @@ public final class XcodeSupport {
       fromTemplates("%{name}.xcodeproj/project.pbxproj");
 
   private final RuleContext ruleContext;
+  private final IntermediateArtifacts intermediateArtifacts;
+  private final Label xcodeTargetLabel;
 
   /**
    * Creates a new xcode support for the given context.
    */
-  XcodeSupport(RuleContext ruleContext) {
+  XcodeSupport(RuleContext ruleContext)  {
+    this(ruleContext, ObjcRuleClasses.intermediateArtifacts(ruleContext), ruleContext.getLabel());
+  }
+
+  /**
+   * Creates a new xcode support for the given context and {@link IntermediateArtifacts} with given
+   * target label.
+   */
+  public XcodeSupport(
+      RuleContext ruleContext, IntermediateArtifacts intermediateArtifacts,
+      Label xcodeTargetLabel) {
     this.ruleContext = ruleContext;
+    this.intermediateArtifacts = intermediateArtifacts;
+    this.xcodeTargetLabel = xcodeTargetLabel;
   }
 
   /**
@@ -78,9 +98,6 @@ public final class XcodeSupport {
    * @return this xcode support
    */
   XcodeSupport addDummySource(XcodeProvider.Builder xcodeProviderBuilder) {
-    IntermediateArtifacts intermediateArtifacts =
-        ObjcRuleClasses.intermediateArtifacts(ruleContext);
-
     ruleContext.registerAction(new SymlinkAction(
         ruleContext.getActionOwner(),
         ruleContext.getPrerequisiteArtifact("$dummy_source", Mode.TARGET),
@@ -126,10 +143,9 @@ public final class XcodeSupport {
    */
   XcodeSupport addXcodeSettings(XcodeProvider.Builder xcodeProviderBuilder,
       ObjcProvider objcProvider, XcodeProductType productType) {
-    ObjcConfiguration objcConfiguration = ObjcRuleClasses.objcConfiguration(ruleContext);
     AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
     return addXcodeSettings(xcodeProviderBuilder, objcProvider, productType,
-        appleConfiguration.getIosCpu(), objcConfiguration.getConfigurationDistinguisher());
+        appleConfiguration.getIosCpu(), appleConfiguration.getConfigurationDistinguisher());
   }
 
   /**
@@ -149,7 +165,7 @@ public final class XcodeSupport {
       ObjcProvider objcProvider, XcodeProductType productType, String architecture,
       ConfigurationDistinguisher configurationDistinguisher) {
     xcodeProviderBuilder
-        .setLabel(ruleContext.getLabel())
+        .setLabel(xcodeTargetLabel)
         .setArchitecture(architecture)
         .setConfigurationDistinguisher(configurationDistinguisher)
         .setObjcProvider(objcProvider)
@@ -186,6 +202,17 @@ public final class XcodeSupport {
   }
 
   /**
+   * Adds J2ObjC JRE dependencies to the given provider builder from the given attribute.
+   *
+   * @return this xcode support
+   */
+  XcodeSupport addJreDependencies(Builder xcodeProviderBuilder) {
+    xcodeProviderBuilder.addJreDependencies(
+        ruleContext.getPrerequisites("jre_deps", Mode.TARGET, XcodeProvider.class));
+    return this;
+  }
+
+  /**
    * Generates an extra {@link XcodeProductType#LIBRARY_STATIC} Xcode target with the same
    * compilation artifacts as the main Xcode target associated with this Xcode support. The extra
    * Xcode library target, instead of the main Xcode target, will act as a dependency for all
@@ -205,8 +232,7 @@ public final class XcodeSupport {
   }
 
   private void registerXcodegenActions(XcodeProvider.Project project) throws InterruptedException {
-    Artifact controlFile =
-        ObjcRuleClasses.intermediateArtifacts(ruleContext).pbxprojControlArtifact();
+    Artifact controlFile = intermediateArtifacts.pbxprojControlArtifact();
 
     ruleContext.registerAction(new BinaryFileWriteAction(
         ruleContext.getActionOwner(),
@@ -245,14 +271,10 @@ public final class XcodeSupport {
       this.project = project;
       this.pbxproj = pbxproj;
       this.workspaceRoot = objcConfiguration.getXcodeWorkspaceRoot();
-      List<String> multiCpus = appleConfiguration.getIosMultiCpus();
-      if (multiCpus.isEmpty()) {
-        this.appleCpus = ImmutableList.of(appleConfiguration.getIosCpu());
-      } else {
-        this.appleCpus = multiCpus;
-      }
+      this.appleCpus = appleConfiguration.getMultiArchitectures(
+          appleConfiguration.getSingleArchPlatform().getType());
       this.minimumOs = objcConfiguration.getMinimumOs().toString();
-      this.generateDebugSymbols = objcConfiguration.generateDebugSymbols();
+      this.generateDebugSymbols = objcConfiguration.generateDsym();
     }
 
     @Override

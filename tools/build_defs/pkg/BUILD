@@ -6,6 +6,11 @@ filegroup(
     visibility = ["//tools:__pkg__"],
 )
 
+exports_files(
+    ["README.md"],
+    visibility = ["//site:__pkg__"],
+)
+
 # Used by pkg_deb
 py_library(
     name = "archive",
@@ -28,6 +33,12 @@ py_test(
     ],
     data = [":archive_testdata"],
     deps = [":archive"],
+)
+
+py_test(
+    name = "path_test",
+    srcs = ["path_test.py"],
+    data = ["path.bzl"],
 )
 
 py_binary(

@@ -14,11 +14,16 @@
 package com.google.devtools.build.lib.rules.apple.cpp;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.AnalysisUtils;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.apple.DottedVersion;
+import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.cpp.CcToolchain;
-
 import java.util.Map;
 
 /**
@@ -29,13 +34,50 @@ public class AppleCcToolchain extends CcToolchain {
   // TODO(bazel-team): Compute default based on local Xcode instead of hardcoded 7.2.
   private static final DottedVersion DEFAULT_XCODE_VERSION = DottedVersion.fromString("7.2");
 
-  public static final String XCODE_VERSION_KEY = "xcode_version";
+  private static final String XCODE_VERSION_KEY = "xcode_version";
+  private static final String IOS_SDK_VERSION_KEY = "ios_sdk_version";
+  private static final String MACOSX_SDK_VERSION_KEY = "macosx_sdk_version";
+  private static final String TVOS_SDK_VERSION_KEY = "appletvos_sdk_version";
+  private static final String WATCHOS_SDK_VERSION_KEY = "watchos_sdk_version";
+  public static final String SDK_DIR_KEY = "sdk_dir";
+  public static final String SDK_FRAMEWORK_DIR_KEY = "sdk_framework_dir";
+  public static final String PLATFORM_DEVELOPER_FRAMEWORK_DIR = "platform_developer_framework_dir";
 
   @Override
   protected Map<String, String> getBuildVariables(RuleContext ruleContext) {
     AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
-    return ImmutableMap.of(
-        XCODE_VERSION_KEY,
-        appleConfiguration.getXcodeVersion().or(DEFAULT_XCODE_VERSION).toString());
+    Platform platform = appleConfiguration.getSingleArchPlatform();
+
+    return ImmutableMap.<String, String>builder()
+        .put(
+            XCODE_VERSION_KEY,
+            appleConfiguration.getXcodeVersion().or(DEFAULT_XCODE_VERSION).toString())
+        .put(
+            IOS_SDK_VERSION_KEY,
+            appleConfiguration.getSdkVersionForPlatform(Platform.IOS_SIMULATOR).toString())
+        .put(
+            MACOSX_SDK_VERSION_KEY,
+            appleConfiguration.getSdkVersionForPlatform(Platform.MACOS_X).toString())
+        .put(
+            TVOS_SDK_VERSION_KEY,
+            appleConfiguration.getSdkVersionForPlatform(Platform.TVOS_SIMULATOR).toString())
+        .put(
+            WATCHOS_SDK_VERSION_KEY,
+            appleConfiguration.getSdkVersionForPlatform(Platform.WATCHOS_SIMULATOR).toString())
+        .put(SDK_DIR_KEY, AppleToolchain.sdkDir())
+        .put(SDK_FRAMEWORK_DIR_KEY, AppleToolchain.sdkFrameworkDir(platform, appleConfiguration))
+        .put(
+            PLATFORM_DEVELOPER_FRAMEWORK_DIR,
+            AppleToolchain.platformDeveloperFrameworkDir(appleConfiguration))
+        .build();
+  }
+  
+  @Override
+  protected NestedSet<Artifact> fullInputsForLink(
+      RuleContext ruleContext, NestedSet<Artifact> link) {
+    return NestedSetBuilder.<Artifact>stableOrder()
+        .addTransitive(link)
+        .addTransitive(AnalysisUtils.getMiddlemanFor(ruleContext, ":libc_top"))
+        .build();
   }
 }

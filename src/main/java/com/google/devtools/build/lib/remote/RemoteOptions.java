@@ -22,6 +22,16 @@ import com.google.devtools.common.options.OptionsBase;
  */
 public final class RemoteOptions extends OptionsBase {
   @Option(
+    name = "rest_cache_url",
+    defaultValue = "null",
+    category = "remote",
+    help =
+        "A base URL for a RESTful cache server for storing build artifacts."
+            + "It has to support PUT, GET, and HEAD requests."
+  )
+  public String restCacheUrl;
+
+  @Option(
     name = "hazelcast_node",
     defaultValue = "null",
     category = "remote",
@@ -30,10 +40,30 @@ public final class RemoteOptions extends OptionsBase {
   public String hazelcastNode;
 
   @Option(
-    name = "rest_worker_url",
+    name = "hazelcast_client_config",
     defaultValue = "null",
     category = "remote",
-    help = "URL for the REST worker."
+    help = "A file path to a hazelcast client config XML file. For client mode only."
   )
-  public String restWorkerUrl;
+  public String hazelcastClientConfig;
+
+  @Option(
+    name = "hazelcast_standalone_listen_port",
+    defaultValue = "0",
+    category = "build_worker",
+    help =
+        "Runs an embedded hazelcast server that listens to this port. The server does not join"
+            + " any cluster. This is useful for testing."
+  )
+  public int hazelcastStandaloneListenPort;
+
+  @Option(
+    name = "remote_worker",
+    defaultValue = "null",
+    category = "remote",
+    help =
+        "Hostname and port number of remote worker in the form of host:port. "
+            + "For client mode only."
+  )
+  public String remoteWorker;
 }

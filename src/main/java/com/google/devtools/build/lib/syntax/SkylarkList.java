@@ -16,27 +16,26 @@ package com.google.devtools.build.lib.syntax;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.syntax.SkylarkMutable.MutableCollection;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.RandomAccess;
-
 import javax.annotation.Nullable;
 
-/**
- * A class to handle lists and tuples in Skylark.
- */
-@SkylarkModule(name = "sequence", documented = false,
-    doc = "common type of lists and tuples")
-  public abstract class SkylarkList<E>
-    extends MutableCollection<E> implements List<E>, RandomAccess {
+/** A class to handle lists and tuples in Skylark. */
+@SkylarkModule(
+  name = "sequence",
+  documented = false,
+  category = SkylarkModuleCategory.BUILTIN,
+  doc = "common type of lists and tuples"
+)
+public abstract class SkylarkList<E> extends MutableCollection<E> implements List<E>, RandomAccess {
 
   /**
    * Returns an ImmutableList object with the current underlying contents of this SkylarkList.
@@ -192,11 +191,10 @@ import javax.annotation.Nullable;
     return castList(getContentsUnsafe(), type, description);
   }
 
-  /**
-   * A class for mutable lists.
-   */
+  /** A class for mutable lists. */
   @SkylarkModule(
     name = "list",
+    category = SkylarkModuleCategory.BUILTIN,
     doc =
         "A language built-in type to support lists. Example of list literal:<br>"
             + "<pre class=language-python>x = [1, 2, 3]</pre>"
@@ -231,13 +229,25 @@ import javax.annotation.Nullable;
      * @return a MutableList containing the elements
      */
     @SuppressWarnings("unchecked")
-    MutableList(Iterable<? extends E> contents, Mutability mutability) {
+    private MutableList(Iterable<? extends E> contents, Mutability mutability) {
       super();
       addAllUnsafe(contents);
       if (contents instanceof GlobList) {
         globList = (GlobList<E>) contents;
       }
       this.mutability = mutability;
+    }
+
+    /** Specialized constructor for concat. */
+    private MutableList(
+        MutableList<? extends E> lhs,
+        MutableList<? extends E> rhs,
+        @Nullable Environment env) {
+      super();
+      this.contents.ensureCapacity(lhs.size() + rhs.size());
+      this.contents.addAll(lhs);
+      this.contents.addAll(rhs);
+      this.mutability = env == null ? Mutability.IMMUTABLE : env.mutability();
     }
 
     /**
@@ -267,7 +277,7 @@ import javax.annotation.Nullable;
     }
 
     /**
-     * Builds a Skylark list (actually immutable) from a variable number of arguments.
+     * Builds a Skylark list from a variable number of arguments.
      * @param env an Environment from which to inherit Mutability, or null for immutable
      * @param contents the contents of the list
      * @return a Skylark list containing the specified arguments as elements.
@@ -282,9 +292,7 @@ import javax.annotation.Nullable;
      * Assumes that you already checked for Mutability.
      */
     private void addAllUnsafe(Iterable<? extends E> elements) {
-      for (E elem : elements) {
-        contents.add(elem);
-      }
+      Iterables.addAll(contents, elements);
     }
 
     @Override
@@ -336,7 +344,7 @@ import javax.annotation.Nullable;
         MutableList<? extends E> right,
         Environment env) {
       if (left.getGlobList() == null && right.getGlobList() == null) {
-        return new MutableList(Iterables.concat(left, right), env);
+        return new MutableList<>(left, right, env);
       }
       return new MutableList(GlobList.concat(
           left.getGlobListOrContentsUnsafe(), right.getGlobListOrContentsUnsafe()), env);
@@ -351,6 +359,18 @@ import javax.annotation.Nullable;
     public void add(E element, Location loc, Environment env) throws EvalException {
       checkMutable(loc, env);
       contents.add(element);
+    }
+
+    /**
+     * Inserts an item at a given position to the MutableList.
+     * @param index the index of the given position
+     * @param element the element to add
+     * @param loc the Location at which to report any error
+     * @param env the Environment requesting the modification
+     */
+    public void add(int index, E element, Location loc, Environment env) throws EvalException {
+      checkMutable(loc, env);
+      contents.add(index, element);
     }
 
     public void remove(int index, Location loc, Environment env) throws EvalException {
@@ -385,22 +405,16 @@ import javax.annotation.Nullable;
       return false;
     }
 
-    @Override
-    public boolean isImmutable() {
-      return false;
-    }
-
     /**
      * An empty IMMUTABLE MutableList.
      */
     public static final MutableList EMPTY = new MutableList(Tuple.EMPTY);
   }
 
-  /**
-   * An immutable tuple, e.g. in (1, 2, 3)
-   */
+  /** An immutable tuple, e.g. in (1, 2, 3) */
   @SkylarkModule(
     name = "tuple",
+    category = SkylarkModuleCategory.BUILTIN,
     doc =
         "A language built-in type to support tuples. Example of tuple literal:<br>"
             + "<pre class=language-python>x = (1, 2, 3)</pre>"
@@ -416,7 +430,6 @@ import javax.annotation.Nullable;
             + "('a', 'b', 'c', 'd')[3:0:-1]  # ('d', 'c', 'b')</pre>"
             + "Tuples are immutable, therefore <code>x[1] = \"a\"</code> is not supported."
   )
-  @Immutable
   public static final class Tuple<E> extends SkylarkList<E> {
 
     private final ImmutableList<E> contents;

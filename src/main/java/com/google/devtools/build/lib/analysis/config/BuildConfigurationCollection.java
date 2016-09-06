@@ -109,6 +109,13 @@ public final class BuildConfigurationCollection {
     return result;
   }
 
+  /**
+   * Returns whether this build uses dynamic configurations.
+   */
+  public boolean useDynamicConfigurations() {
+    return getTargetConfigurations().get(0).useDynamicConfigurations();
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (this == obj) {
@@ -176,6 +183,14 @@ public final class BuildConfigurationCollection {
 
     public Map<? extends Transition, ConfigurationHolder> getTransitionTable() {
       return transitionTable;
+    }
+
+    public List<BuildConfiguration> getSplitConfigurationsNoSelf(SplitTransition<?> transition) {
+      if (splitTransitionTable.containsKey(transition)) {
+        return splitTransitionTable.get(transition);
+      } else {
+        return ImmutableList.of();
+      }
     }
 
     public List<BuildConfiguration> getSplitConfigurations(SplitTransition<?> transition) {

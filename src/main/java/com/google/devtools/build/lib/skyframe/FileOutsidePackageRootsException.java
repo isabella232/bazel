@@ -18,17 +18,18 @@ import com.google.devtools.build.lib.vfs.RootedPath;
 import java.io.IOException;
 
 /**
- * Exception thrown to signal reference to file outside of known/allowed directory structures.
- * Extends IOException to ensure it is properly handled by skyframe.
+ * <p>This is an implementation detail of {@link FileFunction} to signal attempt to evaluate a file
+ * outside of known/allowed directory structures.
+ *
+ * <p>Extends {@link IOException} to ensure it is properly handled by consumers of
+ * {@link FileValue}.
  */
 // TODO(bazel-team): Don't piggyback on existing handling of IOExceptions and instead implement
 // the desired semantics.
-public class FileOutsidePackageRootsException extends IOException {
+class FileOutsidePackageRootsException extends IOException {
 
-  /**
-   * @param outsideRoots the {@link RootedPath} that triggered this exception.
-   */
-  public FileOutsidePackageRootsException(RootedPath outsideRoots) {
-    super("Encountered reference to external mutable " + outsideRoots);
+  /** @param outsidePath the {@link RootedPath} that triggered this exception. */
+  public FileOutsidePackageRootsException(RootedPath outsidePath) {
+    super("Encountered reference to external mutable " + outsidePath);
   }
 }

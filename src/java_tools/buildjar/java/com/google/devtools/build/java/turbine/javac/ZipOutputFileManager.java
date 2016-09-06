@@ -20,6 +20,7 @@ import com.sun.tools.javac.util.Context;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,10 +33,12 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
+import javax.annotation.Nullable;
 import javax.tools.FileObject;
 import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
 import javax.tools.SimpleJavaFileObject;
+import javax.tools.StandardLocation;
 
 /** A {@link JavacFileManager} that collects output into a zipfile. */
 @Trusted
@@ -53,7 +56,7 @@ public class ZipOutputFileManager extends JavacFileManager {
    * implementation.
    */
   private boolean ownedLocation(Location location) {
-    return location.isOutputLocation();
+    return location.isOutputLocation() && location != StandardLocation.NATIVE_HEADER_OUTPUT;
   }
 
   @Override
@@ -116,25 +119,34 @@ public class ZipOutputFileManager extends JavacFileManager {
 
     public final Location location;
 
-    private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    @Nullable private ByteArrayOutputStream buffer;
 
     public OutputFileObject(String name, Kind kind, Location location) {
-      super(URI.create("outputbuffer://" + name), kind);
+      super(URI.create("outputbuffer:/" + name), kind);
       this.location = location;
     }
 
     @Override
     public OutputStream openOutputStream() {
+      if (buffer == null) {
+        buffer = new ByteArrayOutputStream();
+      }
       return buffer;
     }
 
     @Override
     public InputStream openInputStream() throws IOException {
+      if (buffer == null) {
+        throw new FileNotFoundException(getName());
+      }
       return new ByteArrayInputStream(asBytes());
     }
 
     @Override
     public CharSequence getCharContent(boolean ignoreEncodingErrors) throws IOException {
+      if (buffer == null) {
+        throw new FileNotFoundException(getName());
+      }
       CodingErrorAction errorAction =
           ignoreEncodingErrors ? CodingErrorAction.IGNORE : CodingErrorAction.REPORT;
       CharsetDecoder decoder =
@@ -146,7 +158,7 @@ public class ZipOutputFileManager extends JavacFileManager {
     }
 
     public byte[] asBytes() {
-      return buffer.toByteArray();
+      return buffer != null ? buffer.toByteArray() : null;
     }
   }
 

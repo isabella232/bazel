@@ -19,12 +19,11 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.eventbus.EventBus;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactPrefixConflictException;
@@ -64,6 +63,7 @@ import com.google.devtools.build.lib.skyframe.BuildInfoCollectionValue.BuildInfo
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetFunction.ConfiguredValueCreationException;
 import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ConflictException;
 import com.google.devtools.build.lib.skyframe.SkylarkImportLookupFunction.SkylarkImportFailedException;
+import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.CycleInfo;
@@ -73,13 +73,11 @@ import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
-
 import javax.annotation.Nullable;
 
 /**
@@ -213,7 +211,8 @@ public final class SkyframeBuildView {
     } finally {
       enableAnalysis(false);
     }
-    ImmutableMap<Action, ConflictException> badActions = skyframeExecutor.findArtifactConflicts();
+    ImmutableMap<ActionAnalysisMetadata, ConflictException> badActions =
+        skyframeExecutor.findArtifactConflicts();
 
     Collection<AspectValue> goodAspects = Lists.newArrayListWithCapacity(values.size());
     NestedSetBuilder<Package> packages = NestedSetBuilder.stableOrder();
@@ -256,7 +255,7 @@ public final class SkyframeBuildView {
     // TODO(bazel-team): We might want to report the other errors through the event bus but
     // for keeping this code in parity with legacy we just report the first error for now.
     if (!keepGoing) {
-      for (Map.Entry<Action, ConflictException> bad : badActions.entrySet()) {
+      for (Map.Entry<ActionAnalysisMetadata, ConflictException> bad : badActions.entrySet()) {
         ConflictException ex = bad.getValue();
         try {
           ex.rethrowTyped();
@@ -339,7 +338,7 @@ public final class SkyframeBuildView {
     }
 
     Collection<Exception> reportedExceptions = Sets.newHashSet();
-    for (Map.Entry<Action, ConflictException> bad : badActions.entrySet()) {
+    for (Map.Entry<ActionAnalysisMetadata, ConflictException> bad : badActions.entrySet()) {
       ConflictException ex = bad.getValue();
       try {
         ex.rethrowTyped();
@@ -390,18 +389,10 @@ public final class SkyframeBuildView {
       }
       if (culprit.functionName().equals(SkyFunctions.CONFIGURED_TARGET)) {
         return ((ConfiguredTargetKey) culprit.argument()).getLabel();
+      } else if (culprit.functionName().equals(SkyFunctions.TRANSITIVE_TARGET)) {
+        return (Label) culprit.argument();
       } else {
-        // For other types of cycles (e.g. file symlink cycles), the root cause is the furthest
-        // target dependency that itself depended on the cycle.
-        Label furthestTarget = labelToLoad;
-        for (SkyKey skyKey : cycleInfo.getPathToCycle()) {
-          if (skyKey.functionName().equals(SkyFunctions.CONFIGURED_TARGET)) {
-            furthestTarget = (Label) skyKey.argument();
-          } else {
-            break;
-          }
-        }
-        return furthestTarget;
+        return labelToLoad;
       }
     }
     return null;
@@ -437,7 +428,8 @@ public final class SkyframeBuildView {
    */
   // TODO(bazel-team): Allow analysis to return null so the value builder can exit and wait for a
   // restart deps are not present.
-  private boolean getWorkspaceStatusValues(Environment env, BuildConfiguration config) {
+  private static boolean getWorkspaceStatusValues(Environment env, BuildConfiguration config)
+      throws InterruptedException {
     env.getValue(WorkspaceStatusValue.SKY_KEY);
     Map<BuildInfoKey, BuildInfoFactory> buildInfoFactories =
         PrecomputedValue.BUILD_INFO_FACTORIES.get(env);
@@ -458,9 +450,13 @@ public final class SkyframeBuildView {
 
   /** Returns null if any build-info values are not ready. */
   @Nullable
-  CachingAnalysisEnvironment createAnalysisEnvironment(ArtifactOwner owner,
-      boolean isSystemEnv, EventHandler eventHandler,
-      Environment env, BuildConfiguration config) {
+  CachingAnalysisEnvironment createAnalysisEnvironment(
+      ArtifactOwner owner,
+      boolean isSystemEnv,
+      EventHandler eventHandler,
+      Environment env,
+      BuildConfiguration config)
+      throws InterruptedException {
     if (config != null && !getWorkspaceStatusValues(env, config)) {
       return null;
     }
@@ -481,8 +477,8 @@ public final class SkyframeBuildView {
   @Nullable
   ConfiguredTarget createConfiguredTarget(Target target, BuildConfiguration configuration,
       CachingAnalysisEnvironment analysisEnvironment,
-      ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
-      Set<ConfigMatchingProvider> configConditions) throws InterruptedException {
+      OrderedSetMultimap<Attribute, ConfiguredTarget> prerequisiteMap,
+      ImmutableMap<Label, ConfigMatchingProvider> configConditions) throws InterruptedException {
     Preconditions.checkState(enableAnalysis,
         "Already in execution phase %s %s", target, configuration);
     Preconditions.checkNotNull(analysisEnvironment);

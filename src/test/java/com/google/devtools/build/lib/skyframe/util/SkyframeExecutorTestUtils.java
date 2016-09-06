@@ -13,7 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe.util;
 
+import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -32,10 +34,8 @@ import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.util.Collection;
 import java.util.List;
-
 import javax.annotation.Nullable;
 
 /**
@@ -55,11 +55,11 @@ public class SkyframeExecutorTestUtils {
   }
 
   /**
-   * Returns an existing error info, or {@code null} if the given key is not currently in the
-   * graph.
+   * Returns an existing error info, or {@code null} if the given key is not currently in the graph.
    */
   @Nullable
-  public static ErrorInfo getExistingError(SkyframeExecutor skyframeExecutor, SkyKey key) {
+  public static ErrorInfo getExistingError(SkyframeExecutor skyframeExecutor, SkyKey key)
+      throws InterruptedException {
     return skyframeExecutor.getEvaluatorForTesting().getExistingErrorForTesting(key);
   }
 
@@ -105,6 +105,23 @@ public class SkyframeExecutorTestUtils {
   }
 
   /**
+   * Returns all configured targets currently in the graph with the given label.
+   *
+   * <p>Unlike {@link #getExistingConfiguredTarget(SkyframeExecutor, Label, BuildConfiguration)},
+   * this doesn't make the caller request a specific configuration.
+   */
+  public static Iterable<ConfiguredTarget> getExistingConfiguredTargets(
+      SkyframeExecutor skyframeExecutor, final Label label) {
+    return Iterables.filter(getAllExistingConfiguredTargets(skyframeExecutor),
+        new Predicate<ConfiguredTarget>() {
+          @Override
+          public boolean apply(ConfiguredTarget input) {
+            return input.getTarget().getLabel().equals(label);
+          }
+        });
+  }
+
+  /**
    * Returns all configured targets currently in the graph.
    */
   public static Iterable<ConfiguredTarget> getAllExistingConfiguredTargets(
@@ -146,10 +163,11 @@ public class SkyframeExecutorTestUtils {
    * Returns the error info for an existing target value, or {@code null} if there is not an
    * appropriate target value key in the graph.
    *
-   * This helper is provided so legacy tests don't need to know about details of skyframe keys.
+   * <p>This helper is provided so legacy tests don't need to know about details of skyframe keys.
    */
   @Nullable
-  public static ErrorInfo getExistingFailedTarget(SkyframeExecutor skyframeExecutor, Label label) {
+  public static ErrorInfo getExistingFailedTarget(SkyframeExecutor skyframeExecutor, Label label)
+      throws InterruptedException {
     SkyKey key = TargetMarkerValue.key(label);
     return getExistingError(skyframeExecutor, key);
   }

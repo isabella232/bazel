@@ -17,7 +17,6 @@ import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -34,7 +33,7 @@ public final class SkylarkModuleDoc extends SkylarkDoc {
   private final Map<String, SkylarkBuiltinMethodDoc> builtinMethodMap;
   private ArrayList<SkylarkJavaMethodDoc> javaMethods;
   private TreeMap<String, SkylarkMethodDoc> methodMap;
-  private String title;
+  private final String title;
 
   public SkylarkModuleDoc(SkylarkModule module, Class<?> classObject) {
     this.module = Preconditions.checkNotNull(
@@ -43,7 +42,11 @@ public final class SkylarkModuleDoc extends SkylarkDoc {
     this.builtinMethodMap = new TreeMap<>();
     this.methodMap = new TreeMap<>();
     this.javaMethods = new ArrayList<>();
-    this.title = module.name();
+    if (module.title().isEmpty()) {
+      this.title = module.name();
+    } else {
+      this.title = module.title();
+    }
   }
 
   @Override
@@ -52,16 +55,12 @@ public final class SkylarkModuleDoc extends SkylarkDoc {
   }
 
   @Override
-  public String getDocumentation() {
+  protected String getEntityDocumentation() {
     return module.doc();
   }
 
   public String getTitle() {
     return title;
-  }
-
-  public void setTitle(String title) {
-    this.title = title;
   }
 
   public SkylarkModule getAnnotation() {

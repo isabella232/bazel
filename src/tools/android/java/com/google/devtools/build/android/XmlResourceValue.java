@@ -13,16 +13,45 @@
 // limitations under the License.
 package com.google.devtools.build.android;
 
-import java.io.Writer;
+import com.google.devtools.build.android.xml.Namespaces;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Path;
 
 /**
- * An XmlValue is a value extracted from an xml resource in the resource 'values' directory.
+ * An {@link XmlResourceValue} is extracted from xml files in the resource 'values' directory.
  */
 public interface XmlResourceValue {
   /**
-   * Each XmlValue is expected to write a valid representation in xml to the supplied buffer.
-   * @param buffer The buffer for xml output.
-   * @param name The name of the value being written.
+   * Each XmlValue is expected to write a valid representation in xml to the writer.
+   *
+   * @param key The FullyQualified name for the xml resource being written.
+   * @param source The source of the value to allow for proper comment annotation.
+   * @param mergedDataWriter The target writer.
    */
-  void write(Writer buffer, FullyQualifiedName name);
+  void write(FullyQualifiedName key, Path source, AndroidDataWritingVisitor mergedDataWriter);
+
+  /** Serializes the resource value to the OutputStream and returns the bytes written. */
+  int serializeTo(int sourceId, Namespaces namespaces, OutputStream out) throws IOException;
+
+  /**
+   * Combines these xml values together and returns a single value.
+   * 
+   * @param value Another resource to be combined with this one.
+   * @return A union of the values of these two values.
+   * @throws IllegalArgumentException if either value cannot combine with the other.
+   */
+  XmlResourceValue combineWith(XmlResourceValue value);
+
+  /**
+   * Queue up writing the resource to the given {@link AndroidResourceClassWriter}.
+   * Each resource can generate one or more (in the case of styleable) fields and inner classes
+   * in the R class.
+   *
+   * @param key The FullyQualifiedName of the resource
+   * @param resourceClassWriter the R java class writer
+   */
+  void writeResourceToClass(
+      FullyQualifiedName key,
+      AndroidResourceClassWriter resourceClassWriter);
 }

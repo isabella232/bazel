@@ -20,17 +20,21 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.util.OsUtils;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
 /**
- * This class represents a Java virtual machine with a host system and a path.
- * If the JVM comes from the client, it can optionally also contain a label
- * pointing to a target that contains all the necessary files.
+ * This class represents a Java virtual machine with a host system and a path. If the JVM comes from
+ * the client, it can optionally also contain a label pointing to a target that contains all the
+ * necessary files.
  */
-@SkylarkModule(name = "jvm",
-    doc = "A configuration fragment representing the Java virtual machine.")
+@SkylarkModule(
+  name = "jvm",
+  category = SkylarkModuleCategory.CONFIGURATION_FRAGMENT,
+  doc = "A configuration fragment representing the Java virtual machine."
+)
 @Immutable
 public final class Jvm extends BuildConfiguration.Fragment {
   private final PathFragment javaHome;
@@ -38,6 +42,10 @@ public final class Jvm extends BuildConfiguration.Fragment {
   private final PathFragment javac;
   private final PathFragment jar;
   private final PathFragment java;
+
+  private static final String BIN_JAVAC = "bin/javac" + OsUtils.executableExtension();
+  private static final String BIN_JAR = "bin/jar" + OsUtils.executableExtension();
+  private static final String BIN_JAVA = "bin/java" + OsUtils.executableExtension();
 
   /**
    * Creates a Jvm instance. Either the {@code javaHome} parameter is absolute,
@@ -48,9 +56,9 @@ public final class Jvm extends BuildConfiguration.Fragment {
     Preconditions.checkArgument(javaHome.isAbsolute() ^ (jvmLabel != null));
     this.javaHome = javaHome;
     this.jvmLabel = jvmLabel;
-    this.javac = getJavaHome().getRelative("bin/javac" + OsUtils.executableExtension());
-    this.jar = getJavaHome().getRelative("bin/jar" + OsUtils.executableExtension());
-    this.java = getJavaHome().getRelative("bin/java" + OsUtils.executableExtension());
+    this.javac = getJavaHome().getRelative(BIN_JAVAC);
+    this.jar = getJavaHome().getRelative(BIN_JAR);
+    this.java = getJavaHome().getRelative(BIN_JAVA);
   }
 
   /**
@@ -93,6 +101,17 @@ public final class Jvm extends BuildConfiguration.Fragment {
    */
   public Label getJvmLabel() {
     return jvmLabel;
+  }
+
+  /**
+   * If possible, resolves java relative to the jvmLabel's repository. Otherwise, returns the
+   * same thing as getJavaExecutable().
+   */
+  public PathFragment getRunfilesJavaExecutable() {
+    if (jvmLabel == null || jvmLabel.getPackageIdentifier().getRepository().isMain()) {
+      return getJavaExecutable();
+    }
+    return jvmLabel.getPackageIdentifier().getRepository().getPathUnderExecRoot().getRelative(BIN_JAVA);
   }
 
   @Override

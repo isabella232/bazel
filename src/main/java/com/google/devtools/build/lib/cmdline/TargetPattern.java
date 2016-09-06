@@ -178,13 +178,16 @@ public abstract class TargetPattern implements Serializable {
   }
 
   /**
-   * Returns the most specific containing directory of the patterns that could be matched by this
-   * pattern.
+   * Returns a {@link PackageIdentifier} identifying the most specific containing directory of the
+   * patterns that could be matched by this pattern.
    *
-   * <p>For patterns of type {@code Type.TARGETS_BELOW_DIRECTORY}, this returns the referred-to
-   * directory. For example, for "//foo/bar/...", this returns "foo/bar".
+   * <p>Note that we are using the {@link PackageIdentifier} type as a convenience; there may not
+   * actually be a package corresponding to this directory!
    *
-   * <p>The returned value always has no leading "//" and no trailing "/".
+   * <p>For patterns of type {@code Type.TARGETS_BELOW_DIRECTORY}, this returns a
+   * {@link PackageIdentifier} that identifies the referred-to directory. For example, for a
+   * {@code Type.TARGETS_BELOW_DIRECTORY} corresponding to "//foo/bar/...", this method returns a
+   * {@link PackageIdentifier} for "foo/bar".
    */
   public abstract PackageIdentifier getDirectory();
 
@@ -279,7 +282,7 @@ public abstract class TargetPattern implements Serializable {
 
         // Interprets the label as a file target.  This loop stops as soon as the
         // first BUILD file is found (i.e. longest prefix match).
-        for (int i = pieces.size() - 1; i > 0; i--) {
+        for (int i = pieces.size() - 1; i >= 0; i--) {
           String packageName = SLASH_JOINER.join(pieces.subList(0, i));
           if (resolver.isPackage(PackageIdentifier.createInMainRepo(packageName))) {
             String targetName = SLASH_JOINER.join(pieces.subList(i, pieces.size()));
@@ -343,6 +346,7 @@ public abstract class TargetPattern implements Serializable {
         PackageIdentifier packageIdentifier, String suffix, boolean wasOriginallyAbsolute,
         boolean rulesOnly, boolean checkWildcardConflict) {
       super(Type.TARGETS_IN_PACKAGE, originalPattern, offset);
+      Preconditions.checkArgument(!packageIdentifier.getRepository().isDefault());
       this.packageIdentifier = packageIdentifier;
       this.suffix = Preconditions.checkNotNull(suffix);
       this.wasOriginallyAbsolute = wasOriginallyAbsolute;
@@ -456,6 +460,7 @@ public abstract class TargetPattern implements Serializable {
     private TargetsBelowDirectory(
         String originalPattern, String offset, PackageIdentifier directory, boolean rulesOnly) {
       super(Type.TARGETS_BELOW_DIRECTORY, originalPattern, offset);
+      Preconditions.checkArgument(!directory.getRepository().isDefault());
       this.directory = Preconditions.checkNotNull(directory);
       this.rulesOnly = rulesOnly;
     }
@@ -639,11 +644,7 @@ public abstract class TargetPattern implements Serializable {
       }
 
       if (repository == null) {
-        if (packagePart.startsWith(Label.EXTERNAL_PACKAGE_NAME.toString())) {
-          repository = PackageIdentifier.DEFAULT_REPOSITORY_NAME;
-        } else {
-          repository = PackageIdentifier.MAIN_REPOSITORY_NAME;
-        }
+        repository = RepositoryName.MAIN;
       }
 
       if (packagePart.endsWith("/...")) {

@@ -18,6 +18,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.rules.cpp.CppModuleMap;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -30,19 +31,35 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 // TODO(bazel-team): This should really be named DerivedArtifacts as it contains methods for
 // final as well as intermediate artifacts.
 public final class IntermediateArtifacts {
+  static final String LINKMAP_SUFFIX = ".linkmap";
 
   /**
-   * Extension used on the temporary zipped dsym bundle location. Must contain {@code .dSYM} for
-   * dsymutil to generate a plist file.
+   * Extension used for the zip archive containing dsym files and their associated plist. Note that
+   * the archive's path less this extension corresponds to the expected directory for dsym files
+   * relative to their binary.
    */
-  static final String TMP_DSYM_BUNDLE_SUFFIX = ".temp.app.dSYM.zip";
+  static final String DSYM_ZIP_EXTENSION = ".temp.zip";
 
   private final RuleContext ruleContext;
+  private final BuildConfiguration buildConfiguration;
   private final String archiveFileNameSuffix;
+  private final String outputPrefix;
+
+  IntermediateArtifacts(RuleContext ruleContext, String archiveFileNameSuffix,
+      String outputPrefix) {
+    this(ruleContext, archiveFileNameSuffix, outputPrefix, ruleContext.getConfiguration());
+  }
 
   IntermediateArtifacts(RuleContext ruleContext, String archiveFileNameSuffix) {
+    this(ruleContext, archiveFileNameSuffix, "", ruleContext.getConfiguration());
+  }
+ 
+  IntermediateArtifacts(RuleContext ruleContext, String archiveFileNameSuffix,
+      String outputPrefix, BuildConfiguration buildConfiguration) {
     this.ruleContext = ruleContext;
+    this.buildConfiguration = buildConfiguration;
     this.archiveFileNameSuffix = Preconditions.checkNotNull(archiveFileNameSuffix);
+    this.outputPrefix = Preconditions.checkNotNull(outputPrefix);
   }
 
   /**
@@ -56,8 +73,8 @@ public final class IntermediateArtifacts {
     Artifact artifact =
         ruleContext.getDerivedArtifact(
             entitlementsDirectory.replaceName(
-                entitlementsDirectory.getBaseName() + extension),
-            ruleContext.getConfiguration().getBinDirectory());
+                addOutputPrefix(entitlementsDirectory.getBaseName(), extension)),
+            buildConfiguration.getBinDirectory(ruleContext.getRule().getRepository()));
     return artifact;
   }
 
@@ -69,11 +86,21 @@ public final class IntermediateArtifacts {
   }
 
   /**
+   * Returns the location of this target's extension plist which contains entries required by all
+   * watch extensions (for final merging into the bundle plist).
+   */
+  public Artifact watchExtensionAutomaticPlist() {
+    return ruleContext.getRelatedArtifact(
+        ruleContext.getUniqueDirectory("plists"), "-automatic-watchExtensionInfo.plist");
+  }
+
+  /**
    * Returns a derived artifact in the bin directory obtained by appending some extension to the end
    * of the given {@link PathFragment}.
    */
   private Artifact appendExtension(PathFragment original, String extension) {
-    return scopedArtifact(FileSystemUtils.appendExtension(original, extension));
+    return scopedArtifact(FileSystemUtils.appendExtension(original,
+        addOutputPrefix("", extension)));
   }
 
   /**
@@ -82,7 +109,7 @@ public final class IntermediateArtifacts {
    */
   private Artifact appendExtension(String extension) {
     PathFragment name = new PathFragment(ruleContext.getLabel().getName());
-    return scopedArtifact(name.replaceName(name.getBaseName() + extension));
+    return scopedArtifact(name.replaceName(addOutputPrefix(name.getBaseName(), extension)));
   }
 
   /**
@@ -101,7 +128,7 @@ public final class IntermediateArtifacts {
   private Artifact appendExtensionInGenfiles(String extension) {
     PathFragment name = new PathFragment(ruleContext.getLabel().getName());
     return scopedArtifact(
-        name.replaceName(name.getBaseName() + extension), /* inGenfiles = */ true);
+        name.replaceName(addOutputPrefix(name.getBaseName(), extension)), /* inGenfiles = */ true);
   }
 
   /**
@@ -130,11 +157,19 @@ public final class IntermediateArtifacts {
   }
 
   /**
-   * The .objlist file, which contains a list of paths of object files to archive  and is read by
-   * libtool in the archive action.
+   * The .objlist file, which contains a list of paths of object files to archive and is read by
+   * clang (via -filelist flag) in the link action (for binary creation).
    */
-  public Artifact objList() {
-    return appendExtension(".objlist");
+  public Artifact linkerObjList() {
+    return appendExtension("-linker.objlist");
+  }
+
+  /**
+   * The .objlist file, which contains a list of paths of object files to archive  and is read by
+   * libtool (via -filelist flag) in the archive action.
+   */
+  public Artifact archiveObjList() {
+    return appendExtension("-archive.objlist");
   }
 
   /**
@@ -169,8 +204,8 @@ public final class IntermediateArtifacts {
   private Artifact scopedArtifact(PathFragment scopeRelative, boolean inGenfiles) {
     Root root =
         inGenfiles
-            ? ruleContext.getConfiguration().getGenfilesDirectory()
-            : ruleContext.getConfiguration().getBinDirectory();
+            ? buildConfiguration.getGenfilesDirectory(ruleContext.getRule().getRepository())
+            : buildConfiguration.getBinDirectory(ruleContext.getRule().getRepository());
 
     // The path of this artifact will be RULE_PACKAGE/SCOPERELATIVE
     return ruleContext.getPackageRelativeArtifact(scopeRelative, root);
@@ -190,13 +225,6 @@ public final class IntermediateArtifacts {
         "lib%s%s.a", basename, archiveFileNameSuffix)));
   }
 
-  /**
-   * The zipped debug symbol bundle file which contains debug symbols generated by dsymutil.
-   */
-  public Artifact dsymBundle() {
-    return appendExtension(TMP_DSYM_BUNDLE_SUFFIX);
-  }
-
   private Artifact inUniqueObjsDir(Artifact source, String extension) {
     PathFragment uniqueDir =
         new PathFragment("_objs").getRelative(ruleContext.getLabel().getName());
@@ -210,7 +238,12 @@ public final class IntermediateArtifacts {
    * artifact.
    */
   public Artifact objFile(Artifact source) {
-     return inUniqueObjsDir(source, ".o");
+    if (source.isTreeArtifact()) {
+      PathFragment rootRelativePath = source.getRootRelativePath().replaceName("obj_files");
+      return ruleContext.getTreeArtifact(rootRelativePath, ruleContext.getBinOrGenfilesDirectory());
+    } else {
+      return inUniqueObjsDir(source, ".o");
+    }
   }
 
   /**
@@ -296,32 +329,65 @@ public final class IntermediateArtifacts {
   }
 
   /**
+   * Same as {@link #swiftFrameworksFileZip()} but used to put Swift dylibs at a different location
+   * in SwiftSupport directory at the top of the IPA.
+   */
+  public Artifact swiftSupportZip() {
+    return appendExtension(".swiftsupport.zip");
+  }
+
+  /**
+   * The temp zipped debug symbol bundle file which contains debug symbols generated by dsymutil.
+   */
+  public Artifact tempDsymBundleZip(DsymOutputType dsymOutputType) {
+    return appendExtension(dsymOutputType.getSuffix() + DSYM_ZIP_EXTENSION);
+  }
+
+  /**
    * Debug symbol plist generated for a linked binary.
    */
-  public Artifact dsymPlist() {
-    return appendExtension(".app.dSYM/Contents/Info.plist");
+  public Artifact dsymPlist(DsymOutputType dsymOutputType) {
+    return appendExtension(String.format("%s/Contents/Info.plist", dsymOutputType.getSuffix()));
   }
 
   /**
    * Debug symbol file generated for a linked binary.
    */
-  public Artifact dsymSymbol() {
-    return appendExtension(String.format(
-        ".app.dSYM/Contents/Resources/DWARF/%s_bin", ruleContext.getLabel().getName()));
+  public Artifact dsymSymbol(DsymOutputType dsymOutputType) {
+    return dsymSymbol(dsymOutputType, "bin");
   }
 
   /**
-   * Breakpad debug symbol representation.
+   * Debug symbol file generated for a linked binary, for a specific architecture.
    */
-  public Artifact breakpadSym() {
-    return appendExtension(".breakpad");
+  public Artifact dsymSymbol(DsymOutputType dsymOutputType, String suffix) {
+    return appendExtension(
+        String.format(
+            "%s/Contents/Resources/DWARF/%s_%s",
+            dsymOutputType.getSuffix(),
+            ruleContext.getLabel().getName(),
+            suffix));
   }
 
   /**
-   * Breakpad debug symbol representation for a specific architecture.
+   * Representation for a specific architecture.
    */
-  public Artifact breakpadSym(String arch) {
-    return appendExtension(String.format("_%s.breakpad", arch));
+  private Artifact architectureRepresentation(String arch, String suffix) {
+    return appendExtension(String.format("_%s%s", arch, suffix));
+  }
+
+  /**
+   * Linkmap representation
+   */
+  public Artifact linkmap() {
+    return appendExtension(LINKMAP_SUFFIX);
+  }
+
+  /**
+   * Linkmap representation for a specific architecture.
+   */
+  public Artifact linkmap(String arch) {
+    return architectureRepresentation(arch, LINKMAP_SUFFIX);
   }
 
   /**
@@ -342,9 +408,6 @@ public final class IntermediateArtifacts {
    * {@link CppModuleMap} that provides the clang module map for this target.
    */
   public CppModuleMap moduleMap() {
-    if (!ObjcRuleClasses.objcConfiguration(ruleContext).moduleMapsEnabled()) {
-      throw new IllegalStateException();
-    }
     String moduleName =
         ruleContext
             .getLabel()
@@ -376,4 +439,15 @@ public final class IntermediateArtifacts {
   public Artifact unprocessedIpa() {
     return appendExtension(".unprocessed.ipa");
   }
+
+  /**
+   * Returns artifact name prefixed with an output prefix if specified.
+   */
+  private String addOutputPrefix(String baseName, String artifactName) {
+    if (!outputPrefix.isEmpty()) {
+      return String.format("%s-%s%s", baseName, outputPrefix, artifactName);
+    }
+    return String.format("%s%s", baseName, artifactName);
+  }
+
 }

@@ -1,5 +1,5 @@
 ---
-layout: community
+layout: contribute
 title: Bazel Users
 ---
 
@@ -33,6 +33,11 @@ Databricks provides cloud-based integrated workspaces based on Apache Spark™.
 InteraXon is a thought-controlled computing firm that creates hardware and
 software platforms to convert brainwaves into digital signals.
 
+## [Improbable.io](https://improbable.io/)
+
+Improbable.io develops SpatialOS, a distributed operating system that enables
+creating huge simulations inhabited by millions of complex entities.
+
 ## [Makani](https://www.google.com/makani)
 
 Makani, now a Google subsidiary, develops energy kites and uses
@@ -43,6 +48,11 @@ Bazel to build their software (including their embedded C++ software).
 Peloton Technology is an automated vehicle technology company that tackles
 truck accidents and fuel use. They use Bazel to _enable reliable builds for
 automotive safety systems_.
+
+## [Stripe](https://stripe.com)
+
+Stripe provides mobile payment solutions.  They are the main maintainers of the
+[Bazel Scala rules](https://github.com/bazelbuild/rules_scala).
 
 # Open-source projects using Bazel
 
@@ -68,6 +78,16 @@ FFruit is a free & open source Android application to the popular service
 
 A language-and-platform-neutral remote procedure call system. (Bazel is a
 supported, although not primary, build system.)
+
+## [Gulava](http://www.github.com/google/gulava/)
+
+A Java code generator that lets you write Prolog-style predicates and use them
+seamlessly from normal Java code.
+
+## [Heron](http://twitter.github.io/heron/)
+
+Heron is a realtime, distributed, fault-tolerant stream processing engine
+from Twitter.
 
 ## [Jsonnet](http://google.github.io/jsonnet/doc/)
 

@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.Mutability;
@@ -28,9 +29,7 @@ import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import java.io.IOException;
-
 import javax.annotation.Nullable;
 
 /**
@@ -60,7 +59,15 @@ public class ASTFileLookupFunction implements SkyFunction {
     //
     SkyKey pkgSkyKey = PackageLookupValue.key(fileLabel.getPackageIdentifier());
     PackageLookupValue pkgLookupValue = null;
-    pkgLookupValue = (PackageLookupValue) env.getValue(pkgSkyKey);
+    try {
+      pkgLookupValue = (PackageLookupValue) env.getValueOrThrow(
+          pkgSkyKey, BuildFileNotFoundException.class, InconsistentFilesystemException.class);
+    } catch (BuildFileNotFoundException e) {
+      throw new ASTLookupFunctionException(
+          new ErrorReadingSkylarkExtensionException(e), Transience.PERSISTENT);
+    } catch (InconsistentFilesystemException e) {
+      throw new ASTLookupFunctionException(e, Transience.PERSISTENT);
+    }
     if (pkgLookupValue == null) {
       return null;
     }
@@ -102,20 +109,23 @@ public class ASTFileLookupFunction implements SkyFunction {
       long astFileSize = fileValue.getSize();
       if (parseAsSkylark) {
         try (Mutability mutability = Mutability.create("validate")) {
-            ast = BuildFileAST.parseSkylarkFile(path, astFileSize, env.getListener(),
-                new ValidationEnvironment(
-                    ruleClassProvider.createSkylarkRuleClassEnvironment(
-                        fileLabel,
-                        mutability,
-                        env.getListener(),
-                        // the two below don't matter for extracting the ValidationEnvironment:
-                        /*astFileContentHashCode=*/null,
-                        /*importMap=*/null)
-                    .setupDynamic(Runtime.PKG_NAME, Runtime.NONE)
-                    .setupDynamic(Runtime.REPOSITORY_NAME, Runtime.NONE)));
+          ValidationEnvironment validationEnv =
+              new ValidationEnvironment(
+                  ruleClassProvider
+                      .createSkylarkRuleClassEnvironment(
+                          fileLabel,
+                          mutability,
+                          env.getListener(),
+                          // the two below don't matter for extracting the ValidationEnvironment:
+                          /*astFileContentHashCode=*/ null,
+                          /*importMap=*/ null)
+                      .setupDynamic(Runtime.PKG_NAME, Runtime.NONE)
+                      .setupDynamic(Runtime.REPOSITORY_NAME, Runtime.NONE));
+          ast = BuildFileAST.parseSkylarkFile(path, astFileSize, env.getListener());
+          ast = ast.validate(validationEnv, env.getListener());
         }
       } else {
-        ast = BuildFileAST.parseBuildFile(path, astFileSize, env.getListener(), false);
+        ast = BuildFileAST.parseBuildFile(path, astFileSize, env.getListener());
       }
     } catch (IOException e) {
       throw new ASTLookupFunctionException(new ErrorReadingSkylarkExtensionException(e),

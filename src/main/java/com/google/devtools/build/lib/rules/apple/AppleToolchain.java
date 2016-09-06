@@ -26,30 +26,38 @@ import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundLabel;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.xcode.xcodegen.proto.XcodeGenProtos.XcodeprojBuildSetting;
 
 /**
  * Utility class for resolving items for the Apple toolchain (such as common tool flags, and paths).
  */
+@SkylarkModule(
+  name = "apple_toolchain",
+  doc = "Utilities for resolving items from the Apple toolchain."
+)
 public class AppleToolchain {
+
   // These next two strings are shared secrets with the xcrunwrapper.sh to allow
   // expansion of DeveloperDir and SDKRoot and runtime, since they aren't known
   // until compile time on any given build machine.
-  private static final String DEVELOPER_DIR = "__BAZEL_XCODE_DEVELOPER_DIR__";
-  private static final String SDKROOT_DIR = "__BAZEL_XCODE_SDKROOT__";
-  
+  @VisibleForTesting public static final String DEVELOPER_DIR = "__BAZEL_XCODE_DEVELOPER_DIR__";
+  @VisibleForTesting public static final String SDKROOT_DIR = "__BAZEL_XCODE_SDKROOT__";
+
   // These two paths are framework paths relative to SDKROOT.
   @VisibleForTesting
   public static final String DEVELOPER_FRAMEWORK_PATH = "/Developer/Library/Frameworks";
   @VisibleForTesting
   public static final String SYSTEM_FRAMEWORK_PATH = "/System/Library/Frameworks";
-  
+
   // There is a handy reference to many clang warning flags at
   // http://nshipster.com/clang-diagnostics/
   // There is also a useful narrative for many Xcode settings at
@@ -72,17 +80,12 @@ public class AppleToolchain {
           .put("GCC_WARN_UNUSED_VARIABLE", "-Wunused-variable")
           .build();
 
-  private AppleToolchain() {
-    throw new UnsupportedOperationException("static-only");
-  }
-
   /**
-   * Returns the platform plist name (for example, iPhoneSimulator) for the platform corresponding
-   * to the value of {@code --ios_cpu} in the given configuration.
+   * Returns the platform plist name (for example, iPhoneSimulator) for the single-arch-context
+   * apple platform specified in the configuration.
    */
-  // TODO(bazel-team): Support non-ios platforms.
   public static String getPlatformPlistName(AppleConfiguration configuration) {
-    return Platform.forIosArch(configuration.getIosCpu()).getNameInPlist();
+    return configuration.getSingleArchPlatform().getNameInPlist();
   }
 
   /**
@@ -92,9 +95,6 @@ public class AppleToolchain {
     return platformDir(getPlatformPlistName(configuration));
   }
 
-  /**
-   * Returns the platform directory inside of Xcode for a given platform name (e.g. iphoneos).
-   */
   public static String platformDir(String platformName) {
     return DEVELOPER_DIR + "/Platforms/" + platformName + ".platform";
   }
@@ -102,6 +102,10 @@ public class AppleToolchain {
   /**
    * Returns the platform directory inside of Xcode for a given configuration.
    */
+  @SkylarkCallable(
+    name = "sdk_dir",
+    doc = "Returns the platform directory inside of Xcode for a given configuration."
+  )
   public static String sdkDir() {
     return SDKROOT_DIR;
   }
@@ -109,6 +113,10 @@ public class AppleToolchain {
   /**
    * Returns the platform frameworks directory inside of Xcode for a given configuration.
    */
+  @SkylarkCallable(
+    name = "platform_developer_framework_dir",
+    doc = "Returns the platform frameworks directory inside of Xcode for a given configuration."
+  )
   public static String platformDeveloperFrameworkDir(AppleConfiguration configuration) {
     return platformDir(configuration) + "/Developer/Library/Frameworks";
   }
@@ -131,6 +139,10 @@ public class AppleToolchain {
         break;
       case MACOS_X:
         relativePath = DEVELOPER_FRAMEWORK_PATH;
+        break;
+      case WATCHOS_DEVICE:
+      case WATCHOS_SIMULATOR:
+        relativePath = SYSTEM_FRAMEWORK_PATH;
         break;
       default:
         throw new IllegalArgumentException("Unhandled platform " + targetPlatform);
@@ -169,18 +181,30 @@ public class AppleToolchain {
   }
 
   /**
+   * The default label of the build-wide {@code xcode_config} configuration rule.
+   */
+  @Immutable
+  public static final class XcodeConfigLabel extends LateBoundLabel<BuildConfiguration> {
+    public XcodeConfigLabel(String toolsRepository) {
+      super(toolsRepository + AppleCommandLineOptions.DEFAULT_XCODE_VERSION_CONFIG_LABEL,
+          AppleConfiguration.class);
+    }
+
+    @Override
+    public Label resolve(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+      return configuration.getFragment(AppleConfiguration.class).getXcodeConfigLabel();
+    }
+  }
+
+  /**
    * Base rule definition to be ancestor for rules which may require an xcode toolchain.
    */
   public static class RequiresXcodeConfigRule implements RuleDefinition {
-    public static final LateBoundLabel<BuildConfiguration> XCODE_CONFIG_LABEL =
-        new LateBoundLabel<BuildConfiguration>(
-            AppleCommandLineOptions.DEFAULT_XCODE_VERSION_CONFIG_LABEL, AppleConfiguration.class) {
-          @Override
-          public Label getDefault(Rule rule, AttributeMap attributes,
-              BuildConfiguration configuration) {
-            return configuration.getFragment(AppleConfiguration.class).getXcodeConfigLabel();
-          }
-        };
+    private final String toolsRepository;
+
+    public RequiresXcodeConfigRule(String toolsRepository) {
+      this.toolsRepository = toolsRepository;
+    }
 
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
@@ -190,7 +214,7 @@ public class AppleToolchain {
               .checkConstraints()
               .direct_compile_time_input()
               .cfg(HOST)
-              .value(XCODE_CONFIG_LABEL))
+              .value(new XcodeConfigLabel(toolsRepository)))
           .build();
     }
     @Override

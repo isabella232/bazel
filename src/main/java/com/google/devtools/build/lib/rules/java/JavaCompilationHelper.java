@@ -17,6 +17,7 @@ import static com.google.devtools.build.lib.analysis.config.BuildConfiguration.S
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
@@ -31,18 +32,16 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.rules.java.JavaCompilationArgs.ClasspathType;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.JavaClasspathMode;
+import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
 import javax.annotation.Nullable;
 
 /**
@@ -53,11 +52,6 @@ import javax.annotation.Nullable;
  */
 public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
 
-  /**
-   * Maximum memory to use for GenClass for generating the gen jar.
-   */
-  private static final String GENCLASS_MAX_MEMORY = "-Xmx64m";
-
   private JavaTargetAttributes.Builder attributes;
   private JavaTargetAttributes builtAttributes;
   private final ImmutableList<String> customJavacOpts;
@@ -65,14 +59,16 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
   private final List<Artifact> translations = new ArrayList<>();
   private boolean translationsFrozen;
   private final JavaSemantics semantics;
+  private final String implicitAttributesSuffix;
 
   public JavaCompilationHelper(RuleContext ruleContext, JavaSemantics semantics,
       ImmutableList<String> javacOpts, JavaTargetAttributes.Builder attributes,
       String implicitAttributesSuffix) {
     super(ruleContext, implicitAttributesSuffix);
+    this.implicitAttributesSuffix = implicitAttributesSuffix;
     this.attributes = attributes;
     this.customJavacOpts = javacOpts;
-    this.customJavacJvmOpts = javaToolchain.getJavacJvmOptions();
+    this.customJavacJvmOpts = javaToolchain.getJvmOptions();
     this.semantics = semantics;
   }
 
@@ -134,8 +130,8 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     builder.addClasspathResources(attributes.getClassPathResources());
     builder.setBootclasspathEntries(getBootclasspathOrDefault());
     builder.setExtdirInputs(getExtdirInputs());
-    builder.setLangtoolsJar(getLangtoolsJar());
-    builder.setJavaBuilderJar(getJavaBuilderJar());
+    builder.setLangtoolsJar(javaToolchain.getJavac());
+    builder.setJavaBuilderJar(javaToolchain.getJavaBuilder());
     builder.addTranslations(getTranslations());
     builder.setOutputJar(outputJar);
     builder.setManifestProtoOutput(manifestProtoOutput);
@@ -147,6 +143,7 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     builder.addSourceJars(attributes.getSourceJars());
     builder.setJavacOpts(customJavacOpts);
     builder.setJavacJvmOpts(customJavacJvmOpts);
+    builder.setJavacExecutionInfo(getExecutionInfo());
     builder.setCompressJar(true);
     builder.setSourceGenDirectory(sourceGenDir(outputJar));
     builder.setTempDirectory(tempDir(outputJar));
@@ -154,11 +151,20 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     builder.addProcessorPaths(attributes.getProcessorPath());
     builder.addProcessorNames(attributes.getProcessorNames());
     builder.setStrictJavaDeps(attributes.getStrictJavaDeps());
-    builder.addDirectJars(attributes.getDirectJars());
+    builder.setDirectJars(attributes.getDirectJars());
     builder.addCompileTimeDependencyArtifacts(attributes.getCompileTimeDependencyArtifacts());
     builder.setRuleKind(attributes.getRuleKind());
-    builder.setTargetLabel(attributes.getTargetLabel());
+    builder.setTargetLabel(
+        attributes.getTargetLabel() == null
+            ? ruleContext.getLabel() : attributes.getTargetLabel());
     getAnalysisEnvironment().registerAction(builder.build());
+  }
+
+  private ImmutableMap<String, String> getExecutionInfo() {
+    if (javaToolchain.getJavacSupportsWorkers()) {
+      return ImmutableMap.of("supports-workers", "1");
+    }
+    return ImmutableMap.of();
   }
 
   /** Returns the bootclasspath explicit set in attributes if present, or else the default. */
@@ -220,8 +226,7 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
   private boolean shouldInstrumentJar() {
     // TODO(bazel-team): What about source jars?
     return getConfiguration().isCodeCoverageEnabled() && attributes.hasSourceFiles() &&
-        getConfiguration().getInstrumentationFilter().isIncluded(
-            getRuleContext().getLabel().toString());
+        InstrumentedFilesCollector.shouldIncludeLocalSources(getRuleContext());
   }
 
   private boolean shouldUseHeaderCompilation() {
@@ -261,26 +266,31 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
                 runtimeJar.getRoot());
 
     JavaTargetAttributes attributes = getAttributes();
-    JavaHeaderCompileActionBuilder builder = new JavaHeaderCompileActionBuilder(getRuleContext());
+    JavaHeaderCompileActionBuilder builder =
+        new JavaHeaderCompileActionBuilder(getRuleContext(), implicitAttributesSuffix);
     builder.addSourceFiles(attributes.getSourceFiles());
     builder.addSourceJars(attributes.getSourceJars());
     builder.setClasspathEntries(attributes.getCompileTimeClassPath());
     builder.addAllBootclasspathEntries(getBootclasspathOrDefault());
     builder.addAllExtClasspathEntries(getExtdirInputs());
-    // TODO(cushon): restrict to only API-generating annotation processors
-    builder.addProcessorPaths(attributes.getProcessorPath());
-    builder.addProcessorNames(attributes.getProcessorNames());
+    if (getJavaConfiguration().optimizeHeaderCompilationAnnotationProcessing()) {
+      builder.addProcessorPaths(attributes.getApiGeneratingProcessorPath());
+      builder.addProcessorNames(attributes.getApiGeneratingProcessorNames());
+    } else {
+      builder.addProcessorPaths(attributes.getProcessorPath());
+      builder.addProcessorNames(attributes.getProcessorNames());
+    }
     builder.setJavacOpts(getJavacOpts());
     builder.setTempDirectory(tempDir(headerJar));
     builder.setOutputJar(headerJar);
     builder.setOutputDepsProto(headerDeps);
     builder.setStrictJavaDeps(attributes.getStrictJavaDeps());
     builder.addCompileTimeDependencyArtifacts(attributes.getCompileTimeDependencyArtifacts());
-    builder.addDirectJars(attributes.getDirectJars());
+    builder.setDirectJars(attributes.getDirectJars());
     builder.setRuleKind(attributes.getRuleKind());
     builder.setTargetLabel(attributes.getTargetLabel());
     builder.setJavaBaseInputs(getHostJavabaseInputsNonStatic(ruleContext));
-    builder.setJavacJar(getLangtoolsJar());
+    builder.setJavacJar(javaToolchain.getJavac());
     builder.build();
 
     artifactBuilder.setCompileTimeDependencies(headerDeps);
@@ -337,25 +347,32 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
    */
   public void createGenJarAction(Artifact classJar, Artifact manifestProto,
       Artifact genClassJar) {
-    getRuleContext().registerAction(new SpawnAction.Builder()
-      .addInput(manifestProto)
-      .addInput(classJar)
-      .addOutput(genClassJar)
-      .addTransitiveInputs(getHostJavabaseInputsNonStatic(getRuleContext()))
-      .setJarExecutable(
-          getRuleContext().getHostConfiguration().getFragment(Jvm.class).getJavaExecutable(),
-          getGenClassJar(ruleContext),
-          ImmutableList.of("-client", GENCLASS_MAX_MEMORY))
-      .setCommandLine(CustomCommandLine.builder()
-          .addExecPath("--manifest_proto", manifestProto)
-          .addExecPath("--class_jar", classJar)
-          .addExecPath("--output_jar", genClassJar)
-          .add("--temp_dir").addPath(tempDir(genClassJar))
-          .build())
-      .useParameterFile(ParameterFileType.SHELL_QUOTED)
-      .setProgressMessage("Building genclass jar " + genClassJar.prettyPrint())
-      .setMnemonic("JavaSourceJar")
-      .build(getRuleContext()));
+    getRuleContext()
+        .registerAction(
+            new SpawnAction.Builder()
+                .addInput(manifestProto)
+                .addInput(classJar)
+                .addOutput(genClassJar)
+                .addTransitiveInputs(getHostJavabaseInputsNonStatic(getRuleContext()))
+                .setJarExecutable(
+                    getRuleContext()
+                        .getHostConfiguration()
+                        .getFragment(Jvm.class)
+                        .getJavaExecutable(),
+                    getGenClassJar(ruleContext),
+                    javaToolchain.getJvmOptions())
+                .setCommandLine(
+                    CustomCommandLine.builder()
+                        .addExecPath("--manifest_proto", manifestProto)
+                        .addExecPath("--class_jar", classJar)
+                        .addExecPath("--output_jar", genClassJar)
+                        .add("--temp_dir")
+                        .addPath(tempDir(genClassJar))
+                        .build())
+                .useParameterFile(ParameterFileType.SHELL_QUOTED)
+                .setProgressMessage("Building genclass jar " + genClassJar.prettyPrint())
+                .setMnemonic("JavaSourceJar")
+                .build(getRuleContext()));
   }
 
   /** Returns the GenClass deploy jar Artifact. */
@@ -418,14 +435,15 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     builder.addResources(attributes.getResources());
     builder.addClasspathResources(attributes.getClassPathResources());
     builder.setExtdirInputs(getExtdirInputs());
-    builder.setLangtoolsJar(getLangtoolsJar());
+    builder.setLangtoolsJar(javaToolchain.getJavac());
     builder.addTranslations(getTranslations());
     builder.setCompressJar(true);
     builder.setTempDirectory(tempDir(resourceJar));
     builder.setClassDirectory(classDir(resourceJar));
-    builder.setJavaBuilderJar(getJavaBuilderJar());
+    builder.setJavaBuilderJar(javaToolchain.getJavaBuilder());
     builder.setJavacOpts(getDefaultJavacOptsFromRule(getRuleContext()));
-    builder.setJavacJvmOpts(javaToolchain.getJavacJvmOptions());
+    builder.setJavacJvmOpts(javaToolchain.getJvmOptions());
+    builder.setTargetLabel(ruleContext.getLabel());
     getAnalysisEnvironment().registerAction(builder.build());
     return resourceJar;
   }
@@ -436,6 +454,7 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     builder.setJavaExecutable(
         ruleContext.getHostConfiguration().getFragment(Jvm.class).getJavaExecutable());
     builder.setJavaBaseInputs(getHostJavabaseInputsNonStatic(ruleContext));
+    builder.setTargetLabel(ruleContext.getLabel());
     return builder;
   }
 
@@ -463,7 +482,7 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
    */
   private PathFragment workDir(Artifact outputJar, String suffix) {
     String basename = FileSystemUtils.removeExtension(outputJar.getExecPath().getBaseName());
-    return getConfiguration().getBinDirectory().getExecPath()
+    return getConfiguration().getBinDirectory(ruleContext.getRule().getRepository()).getExecPath()
         .getRelative(ruleContext.getUniqueDirectory("_javac"))
         .getRelative(basename + suffix);
   }
@@ -509,10 +528,10 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     return jar;
   }
 
-  private void addArgsAndJarsToAttributes(JavaCompilationArgs args, Iterable<Artifact> directJars) {
+  private void addArgsAndJarsToAttributes(
+      JavaCompilationArgs args, NestedSet<Artifact> directJars) {
     // Can only be non-null when isStrict() returns true.
     if (directJars != null) {
-      attributes.addDirectCompileTimeClassPathEntries(directJars);
       attributes.addDirectJars(directJars);
     }
 
@@ -529,19 +548,6 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     addArgsAndJarsToAttributes(args, directJars);
   }
 
-  private void addProvidersToAttributesInternal(
-      Iterable<? extends SourcesJavaCompilationArgsProvider> deps, boolean isNeverLink) {
-    JavaCompilationArgs args = JavaCompilationArgs.builder()
-        .addSourcesTransitiveCompilationArgs(deps, true,
-            isNeverLink ? ClasspathType.COMPILE_ONLY : ClasspathType.BOTH)
-        .build();
-
-    NestedSet<Artifact> directJars = isStrict()
-        ? getNonRecursiveCompileTimeJarsFromProvider(deps, isNeverLink)
-        : null;
-    addArgsAndJarsToAttributes(args, directJars);
-  }
-
   private boolean isStrict() {
     return getStrictJavaDeps() != OFF;
   }
@@ -551,14 +557,6 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
     JavaCompilationArgs.Builder builder = JavaCompilationArgs.builder();
     builder.addTransitiveTargets(deps, /*recursive=*/false);
     return builder.build().getCompileTimeJars();
-  }
-
-  private NestedSet<Artifact> getNonRecursiveCompileTimeJarsFromProvider(
-      Iterable<? extends SourcesJavaCompilationArgsProvider> deps, boolean isNeverLink) {
-    return JavaCompilationArgs.builder()
-        .addSourcesTransitiveCompilationArgs(deps, false,
-            isNeverLink ? ClasspathType.COMPILE_ONLY : ClasspathType.BOTH)
-        .build().getCompileTimeJars();
   }
 
   static void addDependencyArtifactsToAttributes(
@@ -590,13 +588,6 @@ public final class JavaCompilationHelper extends BaseJavaCompilationHelper {
       addDependencyArtifactsToAttributes(
           attributes, AnalysisUtils.getProviders(deps, JavaCompilationArgsProvider.class));
     }
-  }
-
-  public void addProvidersToAttributes(Iterable<? extends SourcesJavaCompilationArgsProvider> deps,
-      boolean isNeverLink) {
-    // see addLibrariesToAttributes() for explanation
-    attributes.setStrictJavaDeps(getStrictJavaDeps());
-    addProvidersToAttributesInternal(deps, isNeverLink);
   }
 
   /**

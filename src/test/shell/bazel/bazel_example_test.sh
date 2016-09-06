@@ -23,6 +23,9 @@ source $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-setup.sh \
 
 function set_up() {
   copy_examples
+  cat > WORKSPACE <<EOF
+workspace(name = "io_bazel")
+EOF
 }
 
 #
@@ -77,20 +80,6 @@ function test_java_test_with_junitrunner() {
   assert_test_ok "${java_native_tests}:custom_with_test_class"
 }
 
-function test_java_test_with_workspace_name() {
-  local java_pkg=examples/java-native/src/main/java/com/example/myproject
-  # Use named workspace and test if we can still execute hello-world
-  bazel clean
-
-  rm -f WORKSPACE
-  cat >WORKSPACE <<'EOF'
-workspace(name = "toto")
-EOF
-
-  assert_build_output ./bazel-bin/${java_pkg}/hello-world ${java_pkg}:hello-world
-  assert_binary_run_from_subdir "bazel-bin/${java_pkg}/hello-world foo" "Hello foo"
-}
-
 function test_genrule_and_genquery() {
   # The --javabase flag is to force the tools/jdk:jdk label to be used
   # so it appears in the dependency list.
@@ -122,6 +111,20 @@ function test_native_python() {
   assert_build //examples/py_native:bin --python2_path=python
   assert_test_ok //examples/py_native:test --python2_path=python
   assert_test_fails //examples/py_native:fail --python2_path=python
+}
+
+function test_native_python_with_zip() {
+  assert_build //examples/py_native:bin --python2_path=python --build_python_zip
+  # run the python package directly
+  ./bazel-bin/examples/py_native/bin >& $TEST_log \
+    || fail "//examples/py_native:bin execution failed"
+  expect_log "Fib(5) == 8"
+  # Using python <zipfile> to run the python package
+  python ./bazel-bin/examples/py_native/bin >& $TEST_log \
+    || fail "//examples/py_native:bin execution failed"
+  expect_log "Fib(5) == 8"
+  assert_test_ok //examples/py_native:test --python2_path=python --build_python_zip
+  assert_test_fails //examples/py_native:fail --python2_path=python --build_python_zip
 }
 
 function test_shell() {
@@ -166,14 +169,6 @@ function test_java_test_skylark() {
   assert_build //${javatests}:pass
   assert_test_ok //${javatests}:pass
   assert_test_fails //${javatests}:fail
-}
-
-function test_protobuf() {
-  setup_protoc_support
-  local jar=bazel-bin/examples/proto/libtest_proto.jar
-  assert_build_output $jar //examples/proto:test_proto
-  unzip -v $jar | grep -q 'KeyVal\.class' \
-    || fail "Did not find KeyVal class in proto jar."
 }
 
 run_suite "examples"

@@ -16,7 +16,7 @@ package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.skyframe.SkyFunction;
@@ -30,19 +30,19 @@ public class CoverageReportFunction implements SkyFunction {
   CoverageReportFunction() {}
 
   @Override
-  public SkyValue compute(SkyKey skyKey, Environment env) {
+  public SkyValue compute(SkyKey skyKey, Environment env) throws InterruptedException {
     Preconditions.checkState(
         CoverageReportValue.SKY_KEY.equals(skyKey), String.format(
             "Expected %s for SkyKey but got %s instead", CoverageReportValue.SKY_KEY, skyKey));
 
-    ImmutableList <Action> actions = PrecomputedValue.COVERAGE_REPORT_KEY.get(env);
+    ImmutableList<ActionAnalysisMetadata> actions = PrecomputedValue.COVERAGE_REPORT_KEY.get(env);
     if (actions == null) {
       return null;
     }
 
     ImmutableSet.Builder<Artifact> outputs = new ImmutableSet.Builder<>();
 
-    for (Action action : actions) {
+    for (ActionAnalysisMetadata action : actions) {
       outputs.addAll(action.getOutputs());
     }
 

@@ -1,13 +1,46 @@
 ---
 layout: documentation
-title: Skylark Cookbook
+title: Extensions examples
 ---
-# Skylark cookbook
+# Extensions examples
+
+## <a name="macro"></a>Macro creating a rule
+
+An example of a macro creating a rule.
+
+`empty.bzl`:
+
+```python
+def _impl(ctx):
+  print("This rule does nothing")
+
+empty = rule(implementation=_impl)
+```
+
+`extension.bzl`:
+
+```python
+# Loading the rule. The rule doesn't have to be in a separate file.
+load("//pkg:empty.bzl", "empty")
+
+def macro(name, visibility=None):
+  # Creating the rule.
+  empty(name = name, visibility = visibility)
+```
+
+`BUILD`:
+
+```python
+load("//pkg:extension.bzl", "macro")
+
+macro(name = "myrule")
+```
 
 ## <a name="macro_native"></a>Macro creating a native rule
 
-An example of a macro creating a native rule. Native rules are accessed using
-the <a href="lib/native.html">native</a> module.
+An example of a macro creating a native rule. Native rules are special rules
+that are automatically available (without <code>load</code>). They are
+accessed using the <a href="lib/native.html">native</a> module.
 
 `extension.bzl`:
 
@@ -30,37 +63,45 @@ load("//pkg:extension.bzl", "macro")
 macro(name = "myrule")
 ```
 
-## <a name="macro_skylark"></a>Macro creating a Skylark rule
+## <a name="macro_compound"></a>Macro multiple rules
 
-An example of a macro creating a Skylark rule.
-
-`empty.bzl`:
+There's currently no easy way to create a rule that directly uses the
+action of a native rule. You can work around this using macros:
 
 ```python
+def cc_and_something_else_binary(name, srcs, deps, csrcs, cdeps)
+   cc_binary_name = "%s.cc_binary" % name
+
+   native.cc_binary(
+      name = cc_binary_name,
+      srcs = csrcs,
+      deps = cdeps,
+      visibility = ["//visibility:private"]
+  )
+
+  _cc_and_something_else_binary(
+    name = name,
+    srcs = srcs,
+    deps = deps,
+    # A label attribute so that this depends on the internal rule.
+    cc_binary = cc_binary_name,
+    # Redundant labels attributes so that the rule with this target name knows
+    # about everything it would know about if cc_and_something_else_binary
+    # were an actual rule instead of a macro.
+    csrcs = csrcs,
+    cdeps = cdeps)
+
 def _impl(ctx):
-  print("This rule does nothing")
+  return struct([...],
+                # When instrumenting this rule, again hide implementation from
+                # users.
+                instrumented_files(
+                  source_attributes = ["srcs", "csrcs"],
+                  dependency_attributes = ["deps", "cdeps"]))
 
-empty = rule(implementation=_impl)
+_cc_and_something_else_binary = rule(implementation=_impl)
 ```
 
-`extension.bzl`:
-
-```python
-# Loading the Skylark rule. The rule doesn't have to be in a separate file.
-load("//pkg:empty.bzl", "empty")
-
-def macro(name, visibility=None):
-  # Creating the Skylark rule.
-  empty(name = name, visibility = visibility)
-```
-
-`BUILD`:
-
-```python
-load("//pkg:extension.bzl", "macro")
-
-macro(name = "myrule")
-```
 
 ## <a name="conditional-instantiation"></a>Conditional instantiation
 
@@ -73,8 +114,8 @@ native.existing_rule("descriptor_proto")
 ```
 
 This is useful to avoid instantiating the same rule twice, which is an
-error. For example, the following rule will simulate a test suite, instantiating
-tests for diverse flavors of the same test.
+error. For example, the following macro will simulate a test suite,
+instantiating tests for diverse flavors of the same test.
 
 `extension.bzl`:
 
@@ -398,7 +439,7 @@ def _impl(ctx):
 execute = rule(
   implementation=_impl,
   attrs={
-      "binary": attr.label(cfg=HOST_CFG, mandatory=True, allow_files=True,
+      "binary": attr.label(cfg="host", mandatory=True, allow_files=True,
                            executable=True),
       "input_content": attr.string(),
       "out": attr.output(mandatory=True),
@@ -457,7 +498,7 @@ execute = rule(
   executable=True,
   attrs={
       "command": attr.string(),
-      "data": attr.label_list(cfg=DATA_CFG, allow_files=True),
+      "data": attr.label_list(cfg="data", allow_files=True),
       },
 )
 ```
@@ -487,9 +528,14 @@ execute(
 
 Bazel needs to know about all dependencies before doing the analysis phase and
 calling the implementation function. Dependencies can be computed based on the
-rule attributes and the configuration: to do so, use a function as the default
+rule attributes: to do so, use a function as the default
 value of an attribute (the attribute must be private and have type `label` or
-`list of labels`).
+`list of labels`). The parameters of this function must correspond to the
+attributes that are accessed in the function body.
+
+Note: For legacy reasons, the function takes the configuration as an additional
+parameter. Please do not rely on the configuration since it will be removed in
+the future.
 
 The example below computes the md5 sum of a file. The file can be preprocessed
 using a filter. The exact dependencies depend on the filter chosen by the user.
@@ -503,10 +549,10 @@ _filters = {
   "none": None,
 }
 
-def _get_filter(attr_map, cfg):
+def _get_filter(filter, cfg=None): # requires attribute "filter"
   # Return the value for the attribute "_filter_bin"
   # It can be a label or None.
-  return _filters[attr_map.filter]
+  return _filters[filter]
 
 def _impl(ctx):
   src = ctx.file.src
@@ -844,7 +890,7 @@ macro(
 
 ## <a name="debugging-tips"></a>Debugging tips
 
-Here are some examples on how to debug Skylark macros and rules using
+Here are some examples on how to debug macros and rules using
 <a href="lib/globals.html#print">print</a>.
 
 `debug.bzl`:

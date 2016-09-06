@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.unix;
 
 import com.google.devtools.build.lib.UnixJniLoader;
-
 import java.io.Closeable;
 import java.io.FileDescriptor;
 import java.io.IOException;

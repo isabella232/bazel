@@ -15,6 +15,9 @@
 package com.google.devtools.build.lib.rules.apple;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.Locale;
@@ -22,39 +25,56 @@ import java.util.Set;
 
 import javax.annotation.Nullable;
 
-/**
- * An enum that can be used to distinguish between various apple platforms.
- */
+/** An enum that can be used to distinguish between various apple platforms. */
+@SkylarkModule(
+  name = "platform",
+  category = SkylarkModuleCategory.NONE,
+  doc = "Distinguishes between various apple platforms."
+)
 public enum Platform {
-  IOS_DEVICE("iPhoneOS"),
-  IOS_SIMULATOR("iPhoneSimulator"),
-  MACOS_X("MacOSX"),
-  TVOS_DEVICE("AppleTVOS"),
-  TVOS_SIMULATOR("AppleTVSimulator"),
-  WATCHOS_DEVICE("WatchOS"),
-  WATCHOS_SIMULATOR("WatchSimulator");
 
-  private static final Set<String> IOS_SIMULATOR_ARCHS = ImmutableSet.of("i386", "x86_64");
-  private static final Set<String> IOS_DEVICE_ARCHS =
-      ImmutableSet.of("armv6", "armv7", "armv7s", "arm64");
-  
+  IOS_DEVICE("iPhoneOS", PlatformType.IOS),
+  IOS_SIMULATOR("iPhoneSimulator", PlatformType.IOS),
+  MACOS_X("MacOSX", PlatformType.MACOSX),
+  TVOS_DEVICE("AppleTVOS", PlatformType.TVOS),
+  TVOS_SIMULATOR("AppleTVSimulator", PlatformType.TVOS),
+  WATCHOS_DEVICE("WatchOS", PlatformType.WATCHOS),
+  WATCHOS_SIMULATOR("WatchSimulator", PlatformType.WATCHOS);
+
   private static final Set<String> IOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("ios_x86_64", "ios_i386");
+  private static final Set<String> WATCHOS_SIMULATOR_TARGET_CPUS =
+      ImmutableSet.of("watchos_i386");
+  private static final Set<String> WATCHOS_DEVICE_TARGET_CPUS =
+      ImmutableSet.of("watchos_armv7k");
   private static final Set<String> IOS_DEVICE_TARGET_CPUS =
-      ImmutableSet.of("ios_armv7", "ios_arm64");
+      ImmutableSet.of("ios_armv6", "ios_arm64", "ios_armv7", "ios_armv7s");
   private static final Set<String> MACOSX_TARGET_CPUS =
       ImmutableSet.of("darwin_x86_64");
 
   private final String nameInPlist;
+  private final PlatformType platformType;
 
-  Platform(String nameInPlist) {
+  Platform(String nameInPlist, PlatformType platformType) {
     this.nameInPlist = Preconditions.checkNotNull(nameInPlist);
+    this.platformType = platformType;
+  }
+
+  /**
+   * Returns the platform type of this platform.
+   */
+  public PlatformType getType() {
+    return platformType;
   }
 
   /**
    * Returns the name of the "platform" as it appears in the CFBundleSupportedPlatforms plist
    * setting.
    */
+  @SkylarkCallable(name = "name_in_plist", structField = true,
+    doc = "The name of the platform as it appears in the CFBundleSupportedPlatforms plist "
+        + "setting. This name can also be converted to lowercase and passed to command-line "
+        + "tools, such as ibtool and actool.")
   public String getNameInPlist() {
     return nameInPlist;
   }
@@ -66,32 +86,16 @@ public enum Platform {
     return nameInPlist.toLowerCase(Locale.US);
   }
 
-  /**
-   * Returns the iOS platform for the given iOS architecture.
-   *
-   * <p>If this method is used in non-iOS contexts, results are undefined. If the input happens
-   * to share an architecture with some iOS platform, this will return that platform even if it is
-   * incorrect (for example, IOS_SIMULATOR for the x86_64 of darwin_x86_64).
-   * 
-   * @throws IllegalArgumentException if there is no valid ios platform for the given architecture
-   */
-  public static Platform forIosArch(String arch) {
-    if (IOS_SIMULATOR_ARCHS.contains(arch)) {
-      return IOS_SIMULATOR;
-    } else if (IOS_DEVICE_ARCHS.contains(arch)) {
-      return IOS_DEVICE;
-    } else {
-      throw new IllegalArgumentException(
-          "No supported ios platform registered for architecture " + arch);
-    }
-  }
-  
   @Nullable
   private static Platform forTargetCpuNullable(String targetCpu) {
     if (IOS_SIMULATOR_TARGET_CPUS.contains(targetCpu)) {
       return IOS_SIMULATOR;
     } else if (IOS_DEVICE_TARGET_CPUS.contains(targetCpu)) {
       return IOS_DEVICE;
+    } else if (WATCHOS_SIMULATOR_TARGET_CPUS.contains(targetCpu)) {
+      return WATCHOS_SIMULATOR;
+    } else if (WATCHOS_DEVICE_TARGET_CPUS.contains(targetCpu)) {
+      return WATCHOS_DEVICE;
     } else if (MACOSX_TARGET_CPUS.contains(targetCpu)) {
       return MACOS_X;
     } else {
@@ -100,10 +104,22 @@ public enum Platform {
   }
 
   /**
-   * Returns the platform for the given target cpu.
+   * Returns the platform for the given target cpu and platform type.
    * 
+   * @param platformType platform type that the given cpu value is implied for
+   * @param arch architecture representation, such as 'arm64'
    * @throws IllegalArgumentException if there is no valid apple platform for the given target cpu
    */
+  public static Platform forTarget(PlatformType platformType, String arch) {
+    return forTargetCpu(String.format("%s_%s", platformType.toString(), arch));
+  }
+
+ /**
+  * Returns the platform for the given target cpu.
+  * 
+  * @param targetCpu cpu value with platform type prefix, such as 'ios_arm64'
+  * @throws IllegalArgumentException if there is no valid apple platform for the given target cpu
+  */
   public static Platform forTargetCpu(String targetCpu) {
     Platform platform = forTargetCpuNullable(targetCpu);
     if (platform != null) {
@@ -119,5 +135,36 @@ public enum Platform {
    */
   public static boolean isApplePlatform(String targetCpu) {
     return forTargetCpuNullable(targetCpu) != null;
+  }
+
+  /**
+   * Value used to describe Apple platform "type". A {@link Platform} is implied from a platform
+   * type (for example, watchOS) together with a cpu value (for example, armv7).
+   */
+  // TODO(cparsons): Use these values in static retrieval methods in this class.
+  public enum PlatformType {
+    IOS,
+    WATCHOS,
+    TVOS,
+    MACOSX;
+    
+    @Override
+    public String toString() {
+      return name().toLowerCase();
+    }
+    
+    /**
+     * Returns the {@link PlatformType} with given name (case insensitive).
+     * 
+     * @throws IllegalArgumentException if the name does not match a valid platform type.
+     */
+    public static PlatformType fromString(String name) {
+      for (PlatformType platformType : PlatformType.values()) {
+        if (name.equalsIgnoreCase(platformType.toString())) {
+          return platformType;
+        }
+      }
+      throw new IllegalArgumentException(String.format("Unsupported platform type \"%s\"", name));
+    }
   }
 }

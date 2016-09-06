@@ -16,10 +16,8 @@ package com.google.devtools.build.lib.skyframe;
 
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-
 import javax.annotation.Nullable;
 
 /**
@@ -32,8 +30,7 @@ public class ExternalPackageFunction implements SkyFunction {
 
   @Nullable
   @Override
-  public SkyValue compute(SkyKey skyKey, Environment env)
-      throws SkyFunctionException, InterruptedException {
+  public SkyValue compute(SkyKey skyKey, Environment env) throws InterruptedException {
     RootedPath workspacePath = (RootedPath) skyKey.argument();
     SkyKey key = WorkspaceFileValue.key(workspacePath);
     WorkspaceFileValue value = (WorkspaceFileValue) env.getValue(key);

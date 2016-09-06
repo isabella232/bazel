@@ -14,20 +14,31 @@
 package com.google.devtools.build.android.xml;
 
 import com.google.common.base.MoreObjects;
+import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.android.AndroidDataWritingVisitor;
+import com.google.devtools.build.android.AndroidDataWritingVisitor.ValuesResourceDefinition;
+import com.google.devtools.build.android.AndroidResourceClassWriter;
 import com.google.devtools.build.android.FullyQualifiedName;
 import com.google.devtools.build.android.XmlResourceValue;
-
-import java.io.Writer;
-import java.util.Map;
+import com.google.devtools.build.android.XmlResourceValues;
+import com.google.devtools.build.android.proto.SerializeFormat;
+import com.google.devtools.build.android.proto.SerializeFormat.DataValueXml.XmlType;
+import com.google.protobuf.CodedOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Path;
+import java.util.Map.Entry;
 import java.util.Objects;
+import javax.annotation.concurrent.Immutable;
+import javax.xml.namespace.QName;
 
 /**
  * Represents an Android Plural Resource.
  *
- * <p>Plurals are a localization construct (http://developer.android.com/guide/topics/resources/
- * string-resource.html#Plurals) that are basically a map of key to value. They are defined in
- * xml as:
- * <code>
+ * <p>
+ * Plurals are a localization construct (http://developer.android.com/guide/topics/resources/
+ * string-resource.html#Plurals) that are basically a map of key to value. They are defined in xml
+ * as: <code>
  *   &lt;plurals name="plural_name"&gt;
  *     &lt;item quantity=["zero" | "one" | "two" | "few" | "many" | "other"]&gt;
  *       text_string
@@ -35,27 +46,66 @@ import java.util.Objects;
  *   &lt;/plurals&gt;
  * </code>
  */
+@Immutable
 public class PluralXmlResourceValue implements XmlResourceValue {
 
-  private Map<String, String> values;
+  private static final QName PLURALS = QName.valueOf("plurals");
 
-  private PluralXmlResourceValue(Map<String, String> values) {
+  private final ImmutableMap<String, String> values;
+
+  private final ImmutableMap<String, String> attributes;
+
+  private PluralXmlResourceValue(
+      ImmutableMap<String, String> attributes, ImmutableMap<String, String> values) {
+    this.attributes = attributes;
     this.values = values;
   }
 
-  public static XmlResourceValue of(Map<String, String> values) {
-    return new PluralXmlResourceValue(values);
+  public static XmlResourceValue createWithoutAttributes(ImmutableMap<String, String> values) {
+    return createWithAttributesAndValues(ImmutableMap.<String, String>of(), values);
+  }
+
+  public static XmlResourceValue createWithAttributesAndValues(
+      ImmutableMap<String, String> attributes, ImmutableMap<String, String> values) {
+    return new PluralXmlResourceValue(attributes, values);
   }
 
   @Override
-  public void write(Writer buffer, FullyQualifiedName name) {
-    // TODO(corysmith): Implement write.
-    throw new UnsupportedOperationException();
+  public void write(
+      FullyQualifiedName key, Path source, AndroidDataWritingVisitor mergedDataWriter) {
+
+    ValuesResourceDefinition definition =
+        mergedDataWriter
+            .define(key)
+            .derivedFrom(source)
+            .startTag(PLURALS)
+            .named(key)
+            .addAttributesFrom(attributes.entrySet())
+            .closeTag();
+
+    for (Entry<String, String> plural : values.entrySet()) {
+      definition =
+          definition
+              .startItemTag()
+              .attribute("quantity")
+              .setTo(plural.getKey())
+              .closeTag()
+              .addCharactersOf(plural.getValue())
+              .endTag()
+              .addCharactersOf("\n");
+    }
+    definition.endTag().save();
+  }
+
+  @Override
+  public void writeResourceToClass(FullyQualifiedName key,
+      AndroidResourceClassWriter resourceClassWriter) {
+    resourceClassWriter.writeSimpleResource(key.type(), key.name());
   }
 
   @Override
   public int hashCode() {
-    return values.hashCode();
+    return Objects.hash(attributes, values);
   }
 
   @Override
@@ -64,11 +114,46 @@ public class PluralXmlResourceValue implements XmlResourceValue {
       return false;
     }
     PluralXmlResourceValue other = (PluralXmlResourceValue) obj;
-    return Objects.equals(values, other.values);
+    return Objects.equals(values, other.values) && Objects.equals(attributes, other.attributes);
   }
 
   @Override
   public String toString() {
-    return MoreObjects.toStringHelper(getClass()).add("values", values).toString();
+    return MoreObjects.toStringHelper(getClass())
+        .add("values", values)
+        .add("attributes", attributes)
+        .toString();
+  }
+
+  @SuppressWarnings("deprecation")
+  public static XmlResourceValue from(SerializeFormat.DataValueXml proto) {
+    return createWithAttributesAndValues(
+        ImmutableMap.copyOf(proto.getAttribute()),
+        ImmutableMap.copyOf(proto.getMappedStringValue()));
+  }
+
+  @Override
+  public int serializeTo(int sourceId, Namespaces namespaces, OutputStream output)
+      throws IOException {
+    SerializeFormat.DataValue.Builder builder =
+        XmlResourceValues.newSerializableDataValueBuilder(sourceId);
+    SerializeFormat.DataValue value =
+        builder
+            .setXmlValue(
+                builder
+                    .getXmlValueBuilder()
+                    .setType(XmlType.PLURAL)
+                    .putAllNamespace(namespaces.asMap())
+                    .putAllAttribute(attributes)
+                    .putAllMappedStringValue(values))
+            .build();
+    value.writeDelimitedTo(output);
+    return CodedOutputStream.computeUInt32SizeNoTag(value.getSerializedSize())
+        + value.getSerializedSize();
+  }
+
+  @Override
+  public XmlResourceValue combineWith(XmlResourceValue value) {
+    throw new IllegalArgumentException(this + " is not a combinable resource.");
   }
 }

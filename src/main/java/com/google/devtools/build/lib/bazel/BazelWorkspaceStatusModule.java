@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.actions.SimpleActionContextProvider;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.BuildInfo;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.Key;
@@ -41,6 +42,7 @@ import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.GotOptionsEvent;
+import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.shell.CommandResult;
 import com.google.devtools.build.lib.util.CommandBuilder;
@@ -50,7 +52,6 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsBase;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -71,7 +72,6 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
     private final Options options;
     private final String username;
     private final String hostname;
-    private final long timestamp;
     private final com.google.devtools.build.lib.shell.Command getWorkspaceStatusCommand;
 
     private BazelWorkspaceStatusAction(
@@ -79,7 +79,8 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
         Map<String, String> clientEnv,
         Path workspace,
         Artifact stableStatus,
-        Artifact volatileStatus) {
+        Artifact volatileStatus,
+        String hostname) {
       super(
           ActionOwner.SYSTEM_ACTION_OWNER,
           Artifact.NO_ARTIFACTS,
@@ -88,8 +89,7 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
       this.stableStatus = stableStatus;
       this.volatileStatus = volatileStatus;
       this.username = USER_NAME.value();
-      this.hostname = NetUtil.findShortHostName();
-      this.timestamp = System.currentTimeMillis();
+      this.hostname = hostname;
       this.getWorkspaceStatusCommand =
           options.workspaceStatusCommand.equals(PathFragment.EMPTY_FRAGMENT)
               ? null
@@ -139,6 +139,7 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
                 BuildInfo.BUILD_HOST + " " + hostname,
                 BuildInfo.BUILD_USER + " " + username);
         FileSystemUtils.writeContent(stableStatus.getPath(), info.getBytes(StandardCharsets.UTF_8));
+        long timestamp = System.currentTimeMillis();
         String volatileInfo =
             joiner.join(
                 BuildInfo.BUILD_TIMESTAMP + " " + timestamp,
@@ -209,6 +210,9 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
   }
 
   private class BazelStatusActionFactory implements WorkspaceStatusAction.Factory {
+
+    private String hostname;
+
     @Override
     public Map<String, String> createDummyWorkspaceStatus() {
       return ImmutableMap.of();
@@ -225,12 +229,28 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
           new PathFragment("volatile-status.txt"), root, artifactOwner);
 
       return new BazelWorkspaceStatusAction(options, env.getClientEnv(),
-          env.getDirectories().getWorkspace(), stableArtifact, volatileArtifact);
+          env.getDirectories().getWorkspace(), stableArtifact, volatileArtifact, getHostname());
+    }
+
+    /**
+     * Returns cached short hostname.
+     *
+     * <p>Hostname lookup performs reverse DNS lookup which in bad cases can take seconds. To
+     * speedup builds we only lookup hostname once and cache the result. Therefore if hostname
+     * changes during bazel server lifetime, bazel will not see the change.
+     */
+    private String getHostname() {
+      if (hostname == null) {
+        hostname = NetUtil.findShortHostName();
+      }
+
+      return hostname;
     }
   }
 
   @ExecutionStrategy(contextType = WorkspaceStatusAction.Context.class)
   private class BazelWorkspaceStatusActionContext implements WorkspaceStatusAction.Context {
+
     @Override
     public ImmutableMap<String, Key> getStableKeys() {
       return ImmutableMap.of(
@@ -271,7 +291,7 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
 
   @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
-    return command.builds()
+    return "build".equals(command.name())
         ? ImmutableList.<Class<? extends OptionsBase>>of(WorkspaceStatusAction.Options.class)
         : ImmutableList.<Class<? extends OptionsBase>>of();
   }
@@ -287,7 +307,7 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
   }
 
   @Override
-  public WorkspaceStatusAction.Factory getWorkspaceStatusActionFactory() {
-    return new BazelStatusActionFactory();
+  public void workspaceInit(BlazeDirectories directories, WorkspaceBuilder builder) {
+    builder.setWorkspaceStatusActionFactory(new BazelStatusActionFactory());
   }
 }

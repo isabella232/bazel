@@ -17,10 +17,12 @@ package com.google.devtools.build.lib.rules.apple;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Multimap;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.DefaultLabelConverter;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
+import com.google.devtools.build.lib.rules.apple.Platform.PlatformType;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
@@ -56,8 +58,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
 
   @Option(
     name = "watchos_sdk_version",
-    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
-    defaultValue = DEFAULT_WATCHOS_SDK_VERSION,
+    defaultValue = "null",
     converter = DottedVersionConverter.class,
     category = "build",
     help = "Specifies the version of the WatchOS SDK to use to build WatchOS applications."
@@ -66,8 +67,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
 
   @Option(
     name = "tvos_sdk_version",
-    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
-    defaultValue = DEFAULT_APPLETVOS_SDK_VERSION,
+    defaultValue = "null",
     converter = DottedVersionConverter.class,
     category = "build",
     help = "Specifies the version of the AppleTVOS SDK to use to build AppleTVOS applications."
@@ -76,8 +76,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
 
   @Option(
     name = "macosx_sdk_version",
-    // TODO(bazel-team): Make this flag optional, and infer SDKROOT based on executor default.
-    defaultValue = DEFAULT_MACOSX_SDK_VERSION,
+    defaultValue = "null",
     converter = DottedVersionConverter.class,
     category = "build",
     help = "Specifies the version of the Mac OS X SDK to use to build Mac OS X applications."
@@ -88,12 +87,47 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @VisibleForTesting public static final String DEFAULT_WATCHOS_SDK_VERSION = "2.0";
   @VisibleForTesting public static final String DEFAULT_MACOSX_SDK_VERSION = "10.10";
   @VisibleForTesting public static final String DEFAULT_APPLETVOS_SDK_VERSION = "1.0";
+  @VisibleForTesting static final String DEFAULT_IOS_CPU = "x86_64";
+
+  /**
+   * The default watchos CPU value.
+   */
+  public static final String DEFAULT_WATCHOS_CPU = "i386";
 
   @Option(name = "ios_cpu",
       defaultValue = DEFAULT_IOS_CPU,
       category = "build",
       help = "Specifies to target CPU of iOS compilation.")
   public String iosCpu;
+
+  @Option(name = "apple_platform_type",
+      defaultValue = "IOS",
+      category = "undocumented",
+      converter = PlatformTypeConverter.class,
+      help =
+          "Don't set this value from the command line - it is derived from other flags and "
+          + "configuration transitions derived from rule attributes")
+  public PlatformType applePlatformType;
+
+  @Option(name = "apple_split_cpu",
+      defaultValue = "",
+      category = "undocumented",
+      help =
+          "Don't set this value from the command line - it is derived from other flags and "
+          + "configuration transitions derived from rule attributes")
+  public String appleSplitCpu;
+
+  // This option exists because two configurations are not allowed to have the same cache key
+  // (partially derived from options). Since we have multiple transitions that may result in the
+  // same configuration values at runtime we need an artificial way to distinguish between them.
+  // This option must only be set by those transitions for this purpose.
+  // TODO(bazel-team): Remove this once we have dynamic configurations but make sure that different
+  // configurations (e.g. by min os version) always use different output paths.
+  @Option(name = "apple configuration distinguisher",
+      defaultValue = "UNKNOWN",
+      converter = ConfigurationDistinguisherConverter.class,
+      category = "undocumented")
+  public ConfigurationDistinguisher configurationDistinguisher;
 
   @Option(name = "ios_multi_cpus",
       converter = CommaSeparatedOptionListConverter.class,
@@ -102,19 +136,24 @@ public class AppleCommandLineOptions extends FragmentOptions {
       help = "Comma-separated list of architectures to build an ios_application with. The result "
           + "is a universal binary containing all specified architectures.")
   public List<String> iosMultiCpus;
-  
-  @VisibleForTesting static final String DEFAULT_IOS_CPU = "x86_64";
-  
+
+  @Option(name = "watchos_cpus",
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = DEFAULT_WATCHOS_CPU,
+      category = "flags",
+      help = "Comma-separated list of architectures for which to build apple watchos binaries.")
+  public List<String> watchosCpus;
+
   @Option(name = "default_ios_provisioning_profile",
       defaultValue = "",
       category = "undocumented",
       converter = DefaultProvisioningProfileConverter.class)
   public Label defaultProvisioningProfile;
-  
+
   @Option(name = "xcode_version_config",
-      defaultValue = "",
+      defaultValue = "@bazel_tools" + DEFAULT_XCODE_VERSION_CONFIG_LABEL,
       category = "undocumented",
-      converter = XcodeVersionConfigConverter.class,
+      converter = LabelConverter.class,
       help = "The label of the xcode_config rule to be used for selecting the xcode version "
           + "in the build configuration")
   public Label xcodeVersionConfig;
@@ -123,8 +162,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
    * The default label of the build-wide {@code xcode_config} configuration rule. This can be
    * changed from the default using the {@code xcode_version_config} build flag.
    */
-  static final String DEFAULT_XCODE_VERSION_CONFIG_LABEL =
-      Constants.TOOLS_REPOSITORY + "//tools/objc:host_xcodes";
+  static final String DEFAULT_XCODE_VERSION_CONFIG_LABEL = "//tools/objc:host_xcodes";
 
   /** Converter for --default_ios_provisioning_profile. */
   public static class DefaultProvisioningProfileConverter extends DefaultLabelConverter {
@@ -142,22 +180,15 @@ public class AppleCommandLineOptions extends FragmentOptions {
              + "Values: 'none', 'embedded_markers', 'embedded'.")
   public AppleBitcodeMode appleBitcodeMode;
 
-  /** Converter for {@code --xcode_version_config}. */
-  public static class XcodeVersionConfigConverter extends DefaultLabelConverter {
-    public XcodeVersionConfigConverter() {
-      super(DEFAULT_XCODE_VERSION_CONFIG_LABEL);
-    }
-  }
-  
   private Platform getPlatform() {
     for (String architecture : iosMultiCpus) {
-      if (Platform.forIosArch(architecture) == Platform.IOS_DEVICE) {
+      if (Platform.forTarget(PlatformType.IOS, architecture) == Platform.IOS_DEVICE) {
         return Platform.IOS_DEVICE;
       }
     }
-    return Platform.forIosArch(iosCpu);
+    return Platform.forTarget(PlatformType.IOS, iosCpu);
   }
-  
+
   @Override
   public void addAllLabels(Multimap<String, Label> labelMap) {
     if (getPlatform() == Platform.IOS_DEVICE) {
@@ -165,37 +196,37 @@ public class AppleCommandLineOptions extends FragmentOptions {
     }
     labelMap.put("xcode_version_config", xcodeVersionConfig);
   }
-  
+
   /**
    * Represents the Apple Bitcode mode for compilation steps.
-   * 
+   *
    * <p>Bitcode is an intermediate representation of a compiled program. For many platforms,
    * Apple requires app submissions to contain bitcode in order to be uploaded to the app store.
-   * 
+   *
    * <p>This is a build-wide value, as bitcode mode needs to be consistent among a target and
    * its compiled dependencies.
    */
   public enum AppleBitcodeMode {
 
-    /** 
-     * Do not compile bitcode.
-     */
-    NONE("none"),
+    /** Do not compile bitcode. */
+    NONE("none", ImmutableList.<String>of()),
     /**
-     * Compile the minimal set of bitcode markers. This is often the best option for
-     * developer/debug builds.
+     * Compile the minimal set of bitcode markers. This is often the best option for developer/debug
+     * builds.
      */
-    EMBEDDED_MARKERS("embedded_markers", "-fembed-bitcode-marker"),
-    /**
-     * Fully embed bitcode in compiled files. This is often the best option for release builds.
-     */
-    EMBEDDED("embedded", "-fembed-bitcode");
+    EMBEDDED_MARKERS(
+        "embedded_markers", ImmutableList.of("bitcode_embedded_markers"), "-fembed-bitcode-marker"),
+    /** Fully embed bitcode in compiled files. This is often the best option for release builds. */
+    EMBEDDED("embedded", ImmutableList.of("bitcode_embedded"), "-fembed-bitcode");
 
     private final String mode;
+    private final ImmutableList<String> featureNames;
     private final ImmutableList<String> compilerFlags;
 
-    private AppleBitcodeMode(String mode, String... compilerFlags) {
+    private AppleBitcodeMode(
+        String mode, ImmutableList<String> featureNames, String... compilerFlags) {
       this.mode = mode;
+      this.featureNames = featureNames;
       this.compilerFlags = ImmutableList.copyOf(compilerFlags);
     }
 
@@ -204,9 +235,12 @@ public class AppleCommandLineOptions extends FragmentOptions {
       return mode;
     }
 
-    /**
-     * Returns the flags that should be added to compile actions to use this bitcode setting.
-     */
+    /** Returns the names of any crosstool features that correspond to this bitcode mode. */
+    public ImmutableList<String> getFeatureNames() {
+      return featureNames;
+    }
+
+    /** Returns the flags that should be added to compile actions to use this bitcode setting. */
     public ImmutableList<String> getCompilerFlags() {
       return compilerFlags;
     }
@@ -229,8 +263,27 @@ public class AppleCommandLineOptions extends FragmentOptions {
     host.xcodeVersionConfig = xcodeVersionConfig;
     host.xcodeVersion = xcodeVersion;
     host.iosSdkVersion = iosSdkVersion;
+    host.watchOsSdkVersion = watchOsSdkVersion;
+    host.tvOsSdkVersion = tvOsSdkVersion;
+    host.macOsXSdkVersion = macOsXSdkVersion;
     host.appleBitcodeMode = appleBitcodeMode;
 
     return host;
+  }
+
+  /** Converter for the Apple configuration distinguisher. */
+  public static final class ConfigurationDistinguisherConverter
+      extends EnumConverter<ConfigurationDistinguisher> {
+    public ConfigurationDistinguisherConverter() {
+      super(ConfigurationDistinguisher.class, "Apple rule configuration distinguisher");
+    }
+  }
+
+  /** Flag converter for {@link PlatformType}. */
+  public static final class PlatformTypeConverter
+      extends EnumConverter<PlatformType> {
+    public PlatformTypeConverter() {
+      super(PlatformType.class, "Apple platform type");
+    }
   }
 }

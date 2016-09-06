@@ -26,70 +26,40 @@ import java.io.IOException;
  */
 @RunWith(JUnit4.class)
 public class LineWrappingAnsiTerminalWriterTest {
-
-  private class LoggingTerminalWriter implements AnsiTerminalWriter {
-    // Strings for recording the non-append calls
-    static final String NEWLINE = "[NL]";
-    static final String OK = "[OK]";
-    static final String FAIL = "[FAIL]";
-    static final String NORMAL = "[NORMAL]";
-
-    String transcript;
-
-    LoggingTerminalWriter() {
-      this.transcript = "";
-    }
-
-    @Override
-    public AnsiTerminalWriter append(String text) throws IOException {
-      transcript += text;
-      return this;
-    }
-
-    @Override
-    public AnsiTerminalWriter newline() throws IOException {
-      transcript += NEWLINE;
-      return this;
-    }
-
-    @Override
-    public AnsiTerminalWriter okStatus() throws IOException {
-      transcript += OK;
-      return this;
-    }
-
-    @Override
-    public AnsiTerminalWriter failStatus() throws IOException {
-      transcript += FAIL;
-      return this;
-    }
-
-    @Override
-    public AnsiTerminalWriter normal() throws IOException {
-      transcript += NORMAL;
-      return this;
-    }
-  }
+  static final String NL = LoggingTerminalWriter.NEWLINE;
+  static final String OK = LoggingTerminalWriter.OK;
+  static final String FAIL = LoggingTerminalWriter.FAIL;
+  static final String NORMAL = LoggingTerminalWriter.NORMAL;
 
   @Test
   public void testSimpleLineWrapping() throws IOException {
     LoggingTerminalWriter terminal = new LoggingTerminalWriter();
     (new LineWrappingAnsiTerminalWriter(terminal, 5, '+')).append("abcdefghij");
-    assertEquals("abcd+[NL]efgh+[NL]ij", terminal.transcript);
+    assertEquals("abcd+" + NL + "efgh+" + NL + "ij", terminal.getTranscript());
   }
 
   @Test
   public void testAlwaysWrap() throws IOException {
     LoggingTerminalWriter terminal = new LoggingTerminalWriter();
     (new LineWrappingAnsiTerminalWriter(terminal, 5, '+')).append("12345").newline();
-    assertEquals("1234+[NL]5[NL]", terminal.transcript);
+    assertEquals("1234+" + NL + "5" + NL, terminal.getTranscript());
+  }
+
+  @Test
+  public void testWrapLate() throws IOException {
+    LoggingTerminalWriter terminal = new LoggingTerminalWriter();
+    (new LineWrappingAnsiTerminalWriter(terminal, 5, '+')).append("1234");
+    // Lines are only wrapped, once a character is written that cannot fit in the current line, and
+    // not already once the last usable character of a line is used. Hence, in this example, we do
+    // not want to see the continuation character.
+    assertEquals("1234", terminal.getTranscript());
   }
 
   @Test
   public void testNewlineTranslated() throws IOException {
     LoggingTerminalWriter terminal = new LoggingTerminalWriter();
     (new LineWrappingAnsiTerminalWriter(terminal, 80, '+')).append("foo\nbar\n");
-    assertEquals("foo[NL]bar[NL]", terminal.transcript);
+    assertEquals("foo" + NL + "bar" + NL, terminal.getTranscript());
   }
 
   @Test
@@ -102,7 +72,7 @@ public class LineWrappingAnsiTerminalWriterTest {
         .newline()
         .append("ABC\nABC")
         .newline();
-    assertEquals("123[NL]abc[NL]ABC[NL]ABC[NL]", terminal.transcript);
+    assertEquals("123" + NL + "abc" + NL + "ABC" + NL + "ABC" + NL, terminal.getTranscript());
   }
 
   @Test
@@ -115,6 +85,6 @@ public class LineWrappingAnsiTerminalWriterTest {
         .append("fail")
         .normal()
         .append("normal");
-    assertEquals("[OK]ok[FAIL]fail[NORMAL]normal", terminal.transcript);
+    assertEquals(OK + "ok" + FAIL + "fail" + NORMAL + "normal", terminal.getTranscript());
   }
 }

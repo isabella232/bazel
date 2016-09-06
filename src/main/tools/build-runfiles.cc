@@ -88,12 +88,6 @@ enum FileType {
   FILE_TYPE_SYMLINK
 };
 
-enum LinkAlgorithm {
-  LINK_ALGORITHM_SYMLINK,
-  LINK_ALGORITHM_HARDLINK,
-  LINK_ALGORITHM_JUNCTION,
-};
-
 struct FileInfo {
   FileType type;
   std::string symlink_target;
@@ -111,9 +105,8 @@ typedef std::map<std::string, FileInfo> FileInfoMap;
 
 class RunfilesCreator {
  public:
-  explicit RunfilesCreator(const std::string &output_base, bool windows_compatible)
+  explicit RunfilesCreator(const std::string &output_base)
       : output_base_(output_base),
-        windows_compatible_(windows_compatible),
         output_filename_("MANIFEST"),
         temp_filename_(output_filename_ + ".tmp") {
     SetupOutputBase();
@@ -262,7 +255,15 @@ class RunfilesCreator {
       FileInfoMap::iterator expected_it = manifest_.find(entry_path);
       if (expected_it == manifest_.end() ||
           expected_it->second != actual_info) {
+#if !defined(__CYGWIN__)
         DelTree(entry_path, actual_info.type);
+#else
+        // On Windows, if deleting failed, lamely assume that
+        // the link points to the right place.
+        if (!DelTree(entry_path, actual_info.type)) {
+          manifest_.erase(expected_it);
+        }
+#endif
       } else {
         manifest_.erase(expected_it);
         if (actual_info.type == FILE_TYPE_DIRECTORY) {
@@ -299,26 +300,8 @@ class RunfilesCreator {
           break;
         case FILE_TYPE_SYMLINK:
           {
-            LinkAlgorithm algorithm;
             const std::string& target = it->second.symlink_target;
-            if (windows_compatible_) {
-              struct stat st;
-              StatOrDie(target.c_str(), &st);
-              algorithm = S_ISDIR(st.st_mode)
-                  ? LINK_ALGORITHM_JUNCTION : LINK_ALGORITHM_HARDLINK;
-            } else {
-              algorithm = LINK_ALGORITHM_SYMLINK;
-            }
-
-            int (*link_function)(const char *oldpath, const char *newpath);
-
-            switch (algorithm) {
-              case LINK_ALGORITHM_JUNCTION:  // Emulated using symlinks
-              case LINK_ALGORITHM_SYMLINK: link_function = symlink; break;
-              case LINK_ALGORITHM_HARDLINK: link_function = link; break;
-              default: PDIE("Unknown link algoritm for '%s'", target.c_str());
-            }
-            if (link_function(target.c_str(), path.c_str()) != 0) {
+            if (symlink(target.c_str(), path.c_str()) != 0) {
               PDIE("symlinking '%s' -> '%s'", path.c_str(), target.c_str());
             }
           }
@@ -381,12 +364,15 @@ class RunfilesCreator {
     }
   }
 
-  void DelTree(const std::string &path, FileType file_type) {
+  bool DelTree(const std::string &path, FileType file_type) {
     if (file_type != FILE_TYPE_DIRECTORY) {
       if (unlink(path.c_str()) != 0) {
+#if !defined(__CYGWIN__)
         PDIE("unlinking '%s'", path.c_str());
+#endif
+        return false;
       }
-      return;
+      return true;
     }
 
     EnsureDirReadAndWritePerms(path);
@@ -411,11 +397,11 @@ class RunfilesCreator {
     if (rmdir(path.c_str()) != 0) {
       PDIE("rmdir '%s'", path.c_str());
     }
+    return true;
   }
 
  private:
   std::string output_base_;
-  bool windows_compatible_;
   std::string output_filename_;
   std::string temp_filename_;
 
@@ -428,7 +414,6 @@ int main(int argc, char **argv) {
   argc--; argv++;
   bool allow_relative = false;
   bool use_metadata = false;
-  bool windows_compatible = false;
 
   while (argc >= 1) {
     if (strcmp(argv[0], "--allow_relative") == 0) {
@@ -437,9 +422,6 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[0], "--use_metadata") == 0) {
       use_metadata = true;
       argc--; argv++;
-    } else if (strcmp(argv[0], "--windows_compatible") == 0) {
-      windows_compatible = true;
-      argc--; argv++;
     } else {
       break;
     }
@@ -447,7 +429,7 @@ int main(int argc, char **argv) {
 
   if (argc != 2) {
     fprintf(stderr, "usage: %s "
-            "[--allow_relative] [--use_metadata] [--windows_compatible] "
+            "[--allow_relative] [--use_metadata] "
             "INPUT RUNFILES\n",
             argv0);
     return 1;
@@ -465,7 +447,7 @@ int main(int argc, char **argv) {
     manifest_file = std::string(cwd_buf) + '/' + manifest_file;
   }
 
-  RunfilesCreator runfiles_creator(output_base_dir, windows_compatible);
+  RunfilesCreator runfiles_creator(output_base_dir);
   runfiles_creator.ReadManifest(manifest_file, allow_relative, use_metadata);
   runfiles_creator.CreateRunfiles();
 

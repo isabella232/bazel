@@ -15,19 +15,9 @@ package com.google.devtools.build.android;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
-
-import com.android.ide.common.res2.AssetSet;
-import com.android.ide.common.res2.ResourceSet;
-
-import java.io.IOException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
-import java.nio.file.FileVisitOption;
-import java.nio.file.FileVisitor;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -38,8 +28,12 @@ import java.util.regex.Pattern;
  * {@link UnvalidatedAndroidData} -> {@link MergedAndroidData} -> {@link DensityFilteredAndroidData}
  *      -> {@link DependencyAndroidData}
  */
-class UnvalidatedAndroidData {
-  static final Pattern VALID_REGEX = Pattern.compile(".*:.*:.+");
+class UnvalidatedAndroidData extends UnvalidatedAndroidDirectories {
+  private static final Pattern VALID_REGEX = Pattern.compile(".*:.*:.+");
+
+  static String expectedFormat() {
+    return "resources[#resources]:assets[#assets]:manifest";
+  }
 
   public static UnvalidatedAndroidData valueOf(String text) {
     return valueOf(text, FileSystems.getDefault());
@@ -49,7 +43,7 @@ class UnvalidatedAndroidData {
   static UnvalidatedAndroidData valueOf(String text, FileSystem fileSystem) {
     if (!VALID_REGEX.matcher(text).find()) {
       throw new IllegalArgumentException(
-          text + " is not in the format 'resources[#resources]:assets[#assets]:manifest'");
+          text + " is not in the format '" + expectedFormat() + "'");
     }
     String[] parts = text.split(":");
     return new UnvalidatedAndroidData(
@@ -58,61 +52,16 @@ class UnvalidatedAndroidData {
         exists(fileSystem.getPath(parts[2])));
   }
 
-  private static ImmutableList<Path> splitPaths(String pathsString, FileSystem fileSystem) {
-    if (pathsString.length() == 0) {
-      return ImmutableList.of();
-    }
-    ImmutableList.Builder<Path> paths = new ImmutableList.Builder<>();
-    for (String pathString : pathsString.split("#")) {
-      paths.add(exists(fileSystem.getPath(pathString)));
-    }
-    return paths.build();
-  }
-
-  private static Path exists(Path path) {
-    if (!Files.exists(path)) {
-      throw new IllegalArgumentException(path + " does not exist");
-    }
-    return path;
-  }
-
   private final Path manifest;
-  private final ImmutableList<Path> assetDirs;
-  private final ImmutableList<Path> resourceDirs;
 
   public UnvalidatedAndroidData(
       ImmutableList<Path> resourceDirs, ImmutableList<Path> assetDirs, Path manifest) {
-    this.resourceDirs = resourceDirs;
-    this.assetDirs = assetDirs;
+    super(resourceDirs, assetDirs);
     this.manifest = manifest;
   }
 
   public Path getManifest() {
     return manifest;
-  }
-
-  public AssetSet addToAssets(AssetSet assets) {
-    for (Path assetDir : assetDirs) {
-      assets.addSource(assetDir.toFile());
-    }
-    return assets;
-  }
-
-  public ResourceSet addToResourceSet(ResourceSet resources) {
-    for (Path resourceDir : resourceDirs) {
-      resources.addSource(resourceDir.toFile());
-    }
-    return resources;
-  }
-
-  public UnvalidatedAndroidData modify(ImmutableList<DirectoryModifier> modifiers) {
-    ImmutableList<Path> modifiedResources = resourceDirs;
-    ImmutableList<Path> modifiedAssets = assetDirs;
-    for (DirectoryModifier modifier : modifiers) {
-      modifiedAssets = modifier.modify(modifiedAssets);
-      modifiedResources = modifier.modify(modifiedResources);
-    }
-    return new UnvalidatedAndroidData(modifiedResources, modifiedAssets, manifest);
   }
 
   @Override
@@ -139,36 +88,4 @@ class UnvalidatedAndroidData {
         && Objects.equals(other.manifest, manifest);
   }
 
-  /**
-   * Adds all the resource directories as ResourceSets. This acts a loose merge
-   * strategy as it does not test for overrides.
-   * @param resourceSets A list of resource sets to append to.
-   */
-  void addAsResourceSets(List<ResourceSet> resourceSets) {
-    for (Path resourceDir : resourceDirs) {
-      ResourceSet set = new ResourceSet("primary:" + resourceDir.toString());
-      set.addSource(resourceDir.toFile());
-      resourceSets.add(set);
-    }
-  }
-
-  /**
-   * Adds all the asset directories as AssetSets. This acts a loose merge
-   * strategy as it does not test for overrides.
-   * @param assetSets A list of asset sets to append to.
-   */
-  void addAsAssetSets(List<AssetSet> assetSets) {
-    for (Path assetDir : assetDirs) {
-      AssetSet set = new AssetSet("primary:" + assetDir.toString());
-      set.addSource(assetDir.toFile());
-      assetSets.add(set);
-    }
-  }
-
-  public void walkResources(final FileVisitor<Path> fileVisitor) throws IOException {
-    for (Path path : resourceDirs) {
-      Files.walkFileTree(
-          path, ImmutableSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, fileVisitor);
-    }
-  }
 }

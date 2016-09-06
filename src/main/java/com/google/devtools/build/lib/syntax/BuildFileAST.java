@@ -13,16 +13,15 @@
 // limitations under the License.
 package com.google.devtools.build.lib.syntax;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.vfs.Path;
-
 import java.io.IOException;
 import java.util.List;
-
 import javax.annotation.Nullable;
 
 /**
@@ -63,11 +62,12 @@ public class BuildFileAST extends ASTNode {
       ImmutableList<Statement> stmts,
       boolean containsErrors,
       String contentHashCode,
-      Location location) {
+      Location location,
+      ImmutableList<Comment> comments) {
     this.stmts = stmts;
     this.containsErrors = containsErrors;
     this.contentHashCode = contentHashCode;
-    this.comments = ImmutableList.of();
+    this.comments = comments;
     this.setLocation(location);
   }
 
@@ -80,7 +80,8 @@ public class BuildFileAST extends ASTNode {
         stmts.subList(firstStatement, lastStatement),
         containsErrors,
         null,
-        stmts.get(firstStatement).getLocation());
+        stmts.get(firstStatement).getLocation(),
+        ImmutableList.<Comment>of());
   }
 
   /** Collects all load statements */
@@ -185,18 +186,16 @@ public class BuildFileAST extends ASTNode {
    *
    * @throws IOException if the file cannot not be read.
    */
-  public static BuildFileAST parseBuildFile(Path buildFile, EventHandler eventHandler,
-                                            boolean parsePython)
+  public static BuildFileAST parseBuildFile(Path buildFile, EventHandler eventHandler)
       throws IOException {
-    return parseBuildFile(buildFile, buildFile.getFileSize(), eventHandler, parsePython);
+    return parseBuildFile(buildFile, buildFile.getFileSize(), eventHandler);
   }
 
   public static BuildFileAST parseBuildFile(Path buildFile, long fileSize,
-                                            EventHandler eventHandler,
-                                            boolean parsePython)
+                                            EventHandler eventHandler)
       throws IOException {
     ParserInputSource inputSource = ParserInputSource.create(buildFile, fileSize);
-    return parseBuildFile(inputSource, eventHandler, parsePython);
+    return parseBuildFile(inputSource, eventHandler);
   }
 
   /**
@@ -205,37 +204,61 @@ public class BuildFileAST extends ASTNode {
    */
   public static BuildFileAST parseBuildFile(ParserInputSource input,
                                             List<Statement> preludeStatements,
-                                            EventHandler eventHandler,
-                                            boolean parsePython) {
-    Parser.ParseResult result = Parser.parseFile(input, eventHandler, parsePython);
+                                            EventHandler eventHandler) {
+    Parser.ParseResult result = Parser.parseFile(input, eventHandler, false);
     return new BuildFileAST(preludeStatements, result);
   }
 
-  public static BuildFileAST parseBuildFile(ParserInputSource input, EventHandler eventHandler,
-      boolean parsePython) {
-    Parser.ParseResult result = Parser.parseFile(input, eventHandler, parsePython);
+  public static BuildFileAST parseBuildFile(ParserInputSource input, EventHandler eventHandler) {
+    Parser.ParseResult result = Parser.parseFile(input, eventHandler, false);
     return new BuildFileAST(ImmutableList.<Statement>of(), result);
   }
 
   /**
-   * Parse the specified Skylark file, returning its AST. All errors during
-   * scanning or parsing will be reported to the reporter.
+   * Parse the specified Skylark file, returning its AST. All errors during scanning or parsing will
+   * be reported to the reporter.
    *
    * @throws IOException if the file cannot not be read.
    */
-  public static BuildFileAST parseSkylarkFile(Path file, EventHandler eventHandler,
-      ValidationEnvironment validationEnvironment) throws IOException {
-    return parseSkylarkFile(file, file.getFileSize(), eventHandler,
-        validationEnvironment);
+  public static BuildFileAST parseSkylarkFile(Path file, EventHandler eventHandler)
+      throws IOException {
+    return parseSkylarkFile(file, file.getFileSize(), eventHandler);
   }
 
-  public static BuildFileAST parseSkylarkFile(Path file, long fileSize, EventHandler eventHandler,
-      ValidationEnvironment validationEnvironment) throws IOException {
+  public static BuildFileAST parseSkylarkFile(Path file, long fileSize, EventHandler eventHandler)
+      throws IOException {
     ParserInputSource input = ParserInputSource.create(file, fileSize);
-    Parser.ParseResult result =
-        Parser.parseFileForSkylark(input, eventHandler, validationEnvironment);
+    Parser.ParseResult result = Parser.parseFileForSkylark(input, eventHandler);
     return new BuildFileAST(ImmutableList.<Statement>of(), result,
         HashCode.fromBytes(file.getMD5Digest()).toString());
+  }
+
+  /**
+   * Run static checks on the AST.
+   *
+   * @return a new AST (or the same), with the containsErrors flag updated.
+   */
+  public BuildFileAST validate(ValidationEnvironment validationEnv, EventHandler eventHandler) {
+    boolean valid = validationEnv.validateAst(stmts, eventHandler);
+    if (valid || containsErrors) {
+      return this;
+    }
+    return new BuildFileAST(stmts, true, contentHashCode, getLocation(), comments);
+  }
+
+  public static BuildFileAST parseBuildString(EventHandler eventHandler, String... content) {
+    String str = Joiner.on("\n").join(content);
+    ParserInputSource input = ParserInputSource.create(str, null);
+    Parser.ParseResult result = Parser.parseFile(input, eventHandler, false);
+    return new BuildFileAST(ImmutableList.<Statement>of(), result, null);
+  }
+
+  // TODO(laurentlb): Merge parseSkylarkString and parseBuildString.
+  public static BuildFileAST parseSkylarkString(EventHandler eventHandler, String... content) {
+    String str = Joiner.on("\n").join(content);
+    ParserInputSource input = ParserInputSource.create(str, null);
+    Parser.ParseResult result = Parser.parseFileForSkylark(input, eventHandler);
+    return new BuildFileAST(ImmutableList.<Statement>of(), result, null);
   }
 
   /**
@@ -243,9 +266,27 @@ public class BuildFileAST extends ASTNode {
    *
    * @return true if the input file is syntactically valid
    */
-  public static boolean checkSyntax(ParserInputSource input,
-                                    EventHandler eventHandler, boolean parsePython) {
-    return !parseBuildFile(input, eventHandler, parsePython).containsErrors();
+  public static boolean checkSyntax(
+      ParserInputSource input, EventHandler eventHandler, boolean parsePython) {
+    Parser.ParseResult result = Parser.parseFile(input, eventHandler, parsePython);
+    return !result.containsErrors;
+  }
+
+  /**
+   * Evaluates the code and return the value of the last statement if it's an
+   * Expression or else null.
+   */
+  @Nullable public Object eval(Environment env) throws EvalException, InterruptedException {
+    Object last = null;
+    for (Statement statement : stmts) {
+      if (statement instanceof ExpressionStatement) {
+        last = ((ExpressionStatement) statement).getExpression().eval(env);
+      } else {
+        statement.exec(env);
+        last = null;
+      }
+    }
+    return last;
   }
 
   /**

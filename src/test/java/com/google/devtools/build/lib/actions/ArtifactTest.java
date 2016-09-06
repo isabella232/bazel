@@ -24,7 +24,7 @@ import static org.junit.Assert.fail;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.devtools.build.lib.actions.Action.MiddlemanType;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.LabelArtifactOwner;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -201,7 +201,7 @@ public class ArtifactTest {
 
   @Test
   public void testAddExpandedArtifacts() throws Exception {
-    List<ArtifactFile> expanded = new ArrayList<>();
+    List<Artifact> expanded = new ArrayList<>();
     MutableActionGraph actionGraph = new MapBasedActionGraph();
     List<Artifact> original = getFooBarArtifacts(actionGraph, true);
     Artifact.addExpandedArtifacts(original, expanded,
@@ -209,7 +209,7 @@ public class ArtifactTest {
 
     List<Artifact> manuallyExpanded = new ArrayList<>();
     for (Artifact artifact : original) {
-      Action action = actionGraph.getGeneratingAction(artifact);
+      ActionAnalysisMetadata action = actionGraph.getGeneratingAction(artifact);
       if (artifact.isMiddlemanArtifact()) {
         Iterables.addAll(manuallyExpanded, action.getInputs());
       } else {
@@ -252,7 +252,7 @@ public class ArtifactTest {
   // TODO consider tests for the future
   @Test
   public void testAddExpandedArtifactsNewActionGraph() throws Exception {
-    List<ArtifactFile> expanded = new ArrayList<>();
+    List<Artifact> expanded = new ArrayList<>();
     MutableActionGraph actionGraph = new MapBasedActionGraph();
     List<Artifact> original = getFooBarArtifacts(actionGraph, true);
     Artifact.addExpandedArtifacts(original, expanded,
@@ -260,7 +260,7 @@ public class ArtifactTest {
 
     List<Artifact> manuallyExpanded = new ArrayList<>();
     for (Artifact artifact : original) {
-      Action action = actionGraph.getGeneratingAction(artifact);
+      ActionAnalysisMetadata action = actionGraph.getGeneratingAction(artifact);
       if (artifact.isMiddlemanArtifact()) {
         Iterables.addAll(manuallyExpanded, action.getInputs());
       } else {

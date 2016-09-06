@@ -140,7 +140,7 @@ genrule(
 )
 EOF
   bazel build @a//b/c:echo-d &> $TEST_log || fail "Build failed"
-  assert_contains "bazel-out/local_.*-fastbuild/genfiles/external/a/b/c" \
+  assert_contains "bazel-out/local.*-fastbuild/genfiles/external/a/b/c" \
     "bazel-genfiles/external/a/b/c/d"
 }
 
@@ -285,6 +285,45 @@ EOF
   bazel build @r//a:gr --define=ARG=four || fail "build failed"
   assert_contains "four" bazel-genfiles/external/r/a/gro
 
+}
+
+function top_level_dir_changes_helper() {
+  batch_flag="$1"
+  mkdir -p r/subdir m
+  touch r/one r/subdir/two
+
+  cat > m/WORKSPACE <<'EOF'
+new_local_repository(
+    name = "r",
+    path = "../r",
+    build_file_content = """
+genrule(
+    name = "fg",
+    cmd = "ls $(SRCS) > $@",
+    srcs=glob(["**"]),
+    outs = ["fg.out"],
+)""",
+)
+EOF
+  cd m
+  bazel "$batch_flag" build @r//:fg &> $TEST_log || \
+    fail "Expected build to succeed"
+  touch ../r/three
+  bazel "$batch_flag" build @r//:fg &> $TEST_log || \
+    fail "Expected build to succeed"
+  assert_contains "external/r/three" bazel-genfiles/external/r/fg.out
+  touch ../r/subdir/four
+  bazel "$batch_flag" build @r//:fg &> $TEST_log || \
+    fail "Expected build to succeed"
+  assert_contains "external/r/subdir/four" bazel-genfiles/external/r/fg.out
+}
+
+function test_top_level_dir_changes_batch() {
+  top_level_dir_changes_helper --batch
+}
+
+function test_top_level_dir_changes_nobatch() {
+  top_level_dir_changes_helper --nobatch
 }
 
 run_suite "//external correctness tests"

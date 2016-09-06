@@ -94,8 +94,26 @@ public class GroupedList<T> implements Iterable<Collection<T>> {
     size -= toRemove.size();
   }
 
-  /** Returns the number of elements in this list. */
-  public int size() {
+  /** Returns the group at position {@code i}. {@code i} must be less than {@link #listSize()}. */
+  @SuppressWarnings("unchecked") // Cast of Object to List<T> or T.
+  public List<T> get(int i) {
+    Object obj = elements.get(i);
+    if (obj instanceof List) {
+      return (List<T>) obj;
+    }
+    return ImmutableList.of((T) obj);
+  }
+
+  /** Returns the number of groups in this list. */
+  public int listSize() {
+    return elements.size();
+  }
+
+  /**
+   * Returns the number of individual elements of type {@link T} in this list, as opposed to the
+   * number of groups -- equivalent to adding up the sizes of each group in this list.
+   */
+  public int numElements() {
     return size;
   }
 
@@ -104,10 +122,27 @@ public class GroupedList<T> implements Iterable<Collection<T>> {
     return elements.isEmpty();
   }
 
+  /**
+   * Returns true if this list contains {@code needle}. Takes time proportional to list size. Call
+   * {@link #toSet} instead and use the result if doing multiple contains checks.
+   */
+  public boolean expensiveContains(T needle) {
+    for (Object obj : elements) {
+      if (obj instanceof List) {
+        if (((List) obj).contains(needle)) {
+          return true;
+        }
+      } else if (obj.equals(needle)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private static final Object EMPTY_LIST = new Object();
 
   public Object compress() {
-    switch (size()) {
+    switch (numElements()) {
       case 0:
         return EMPTY_LIST;
       case 1:

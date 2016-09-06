@@ -14,6 +14,7 @@ java_library(
         ":javac_turbine_compiler",
         ":zip_output_file_manager",
         ":zip_util",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:javac_options",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins:dependency",
         "//src/java_tools/buildjar/java/com/google/devtools/build/java/turbine:turbine_options",
         "//src/java_tools/buildjar/java/com/google/devtools/build/java/turbine:turbine_options_parser",
@@ -65,6 +66,7 @@ java_library(
     name = "javac_turbine_java_compiler",
     srcs = ["JavacTurbineJavaCompiler.java"],
     deps = [
+        ":javac_turbine_compile_request",
         ":tree_pruner",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins:dependency",
         "//third_party:jsr305",

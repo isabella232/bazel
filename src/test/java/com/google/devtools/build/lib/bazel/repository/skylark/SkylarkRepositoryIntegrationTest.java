@@ -18,16 +18,14 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.analysis.ConfigurationCollectionFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
-import com.google.devtools.build.lib.packages.util.MockCcSupport;
-import com.google.devtools.build.lib.packages.util.MockToolsConfig;
+import com.google.devtools.build.lib.packages.NoSuchPackageException;
+import com.google.devtools.build.lib.rules.cpp.FdoSupportFunction;
+import com.google.devtools.build.lib.rules.cpp.FdoSupportValue;
 import com.google.devtools.build.lib.rules.repository.LocalRepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
@@ -35,7 +33,6 @@ import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryLoaderFunction;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
-import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 
@@ -43,8 +40,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.io.IOException;
-import java.util.Collection;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -63,66 +58,26 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
    * inject the SkylarkRepositoryFunction in the list of SkyFunctions. In Bazel, this function is
    * injected by the corresponding @{code BlazeModule}.
    */
-  private class CustomAnalysisMock extends AnalysisMock {
-
-    private final AnalysisMock proxied;
-
+  private static class CustomAnalysisMock extends AnalysisMock.Delegate {
     CustomAnalysisMock(AnalysisMock proxied) {
-      this.proxied = proxied;
+      super(proxied);
     }
 
     @Override
-    public ImmutableMap<SkyFunctionName, SkyFunction> getSkyFunctions(
-        BlazeDirectories directories) {
+    public ImmutableMap<SkyFunctionName, SkyFunction> getSkyFunctions() {
       // Add both the local repository and the skylark repository functions
       RepositoryFunction localRepositoryFunction = new LocalRepositoryFunction();
-      localRepositoryFunction.setDirectories(directories);
       SkylarkRepositoryFunction skylarkRepositoryFunction = new SkylarkRepositoryFunction();
-      skylarkRepositoryFunction.setDirectories(directories);
       ImmutableMap<String, RepositoryFunction> repositoryHandlers =
           ImmutableMap.of(LocalRepositoryRule.NAME, localRepositoryFunction);
 
       return ImmutableMap.of(
           SkyFunctions.REPOSITORY_DIRECTORY,
           new RepositoryDelegatorFunction(
-              directories, repositoryHandlers, skylarkRepositoryFunction, new AtomicBoolean(true)),
+              repositoryHandlers, skylarkRepositoryFunction, new AtomicBoolean(true)),
           SkyFunctions.REPOSITORY,
-          new RepositoryLoaderFunction());
-    }
-
-    @Override
-    public void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException {
-      proxied.setupMockClient(mockToolsConfig);
-    }
-
-    @Override
-    public void setupMockWorkspaceFiles(Path embeddedBinariesRoot) throws IOException {
-      proxied.setupMockWorkspaceFiles(embeddedBinariesRoot);
-    }
-
-    @Override
-    public ConfigurationFactory createConfigurationFactory() {
-      return proxied.createConfigurationFactory();
-    }
-
-    @Override
-    public ConfigurationFactory createFullConfigurationFactory() {
-      return proxied.createFullConfigurationFactory();
-    }
-
-    @Override
-    public ConfigurationCollectionFactory createConfigurationCollectionFactory() {
-      return proxied.createConfigurationCollectionFactory();
-    }
-
-    @Override
-    public Collection<String> getOptionOverrides() {
-      return proxied.getOptionOverrides();
-    }
-
-    @Override
-    public MockCcSupport ccSupport() {
-      return proxied.ccSupport();
+          new RepositoryLoaderFunction(),
+          FdoSupportValue.SKYFUNCTION, new FdoSupportFunction());
     }
   }
 
@@ -144,6 +99,13 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
       ruleProvider = builder.build();
     }
     return ruleProvider;
+  }
+
+  @Override
+  protected void invalidatePackages() throws InterruptedException {
+    // Repository shuffling breaks access to config-needed paths like //tools/jdk:toolchain and
+    // these tests don't do anything interesting with configurations anyway. So exempt them.
+    invalidatePackages(/*alsoConfigs=*/false);
   }
 
   @Test
@@ -299,5 +261,50 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
     assertDoesNotContainEvent("cycle");
     assertContainsEvent("Maybe repository 'foo' was defined later in your WORKSPACE file?");
     assertContainsEvent("Failed to load Skylark extension '@foo//:def.bzl'.");
+  }
+
+  @Test
+  public void testLoadDoesNotHideWorkspaceError() throws Exception {
+    reporter.removeHandler(failFastHandler);
+    scratch.file("/repo2/data.txt", "data");
+    scratch.file("/repo2/BUILD", "exports_files_(['data.txt'])");
+    scratch.file("/repo2/def.bzl", "def macro():", "  print('bleh')");
+    scratch.file("/repo2/WORKSPACE");
+    scratch.overwriteFile(
+        rootDirectory.getRelative("WORKSPACE").getPathString(),
+        "local_repository(name='bleh')",
+        "local_repository(name='foo', path='/repo2')",
+        "load('@foo//:def.bzl', 'repo')",
+        "repo(name='foobar')");
+    try {
+      invalidatePackages();
+      getTarget("@foo//:data.txt");
+      fail();
+    } catch (NoSuchPackageException e) {
+      // This is expected
+      assertThat(e.getMessage()).contains("Could not load //external package");
+    }
+    assertContainsEvent("missing value for mandatory attribute 'path' in 'local_repository' rule");
+  }
+
+  @Test
+  public void testLoadDoesNotHideWorkspaceFunction() throws Exception {
+    scratch.file("def.bzl", "def macro():", "  print('bleh')");
+    scratch.overwriteFile(
+        rootDirectory.getRelative("WORKSPACE").getPathString(),
+        "workspace(name='bleh')",
+        "local_repository(name='bazel_tools', path=__workspace_dir__)",
+        "load('//:def.bzl', 'macro')");
+    scratch.overwriteFile("tools/genrule/genrule-setup.sh");
+    scratch.overwriteFile("tools/genrule/BUILD", "exports_files(['genrule-setup.sh'])");
+    scratch.file("data.txt");
+    scratch.file("BUILD",
+        "genrule(",
+        "  name='data', ",
+        "  outs=['data.out'],",
+        "  srcs=['data.txt'],",
+        "  cmd='cp $< $@')");
+    invalidatePackages();
+    assertThat(getRuleContext(getConfiguredTarget("//:data")).getWorkspaceName()).isEqualTo("bleh");
   }
 }

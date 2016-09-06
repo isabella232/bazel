@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URL;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -53,27 +54,32 @@ public class HttpDownloader {
   private final Path outputDirectory;
   private final EventHandler eventHandler;
   private final ScheduledExecutorService scheduler;
+  private final Map<String, String> clientEnv;
 
-  private HttpDownloader(EventHandler eventHandler, String urlString, String sha256,
-      Path outputDirectory, String type) {
+  private HttpDownloader(
+      EventHandler eventHandler, String urlString, String sha256, Path outputDirectory,
+      String type, Map<String, String> clientEnv) {
     this.urlString = urlString;
     this.sha256 = sha256;
     this.outputDirectory = outputDirectory;
     this.eventHandler = eventHandler;
     this.scheduler = Executors.newScheduledThreadPool(1);
     this.type = type;
+    this.clientEnv = clientEnv;
   }
 
   @Nullable
-  public static Path download(Rule rule, Path outputDirectory, EventHandler eventHandler)
-      throws RepositoryFunctionException {
+  public static Path download(
+      Rule rule, Path outputDirectory, EventHandler eventHandler, Map<String, String> clientEnv)
+      throws RepositoryFunctionException, InterruptedException {
     AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
     String url = mapper.get("url", Type.STRING);
     String sha256 = mapper.get("sha256", Type.STRING);
     String type = mapper.has("type", Type.STRING) ? mapper.get("type", Type.STRING) : "";
 
     try {
-      return new HttpDownloader(eventHandler, url, sha256, outputDirectory, type).download();
+      return new HttpDownloader(eventHandler, url, sha256, outputDirectory, type, clientEnv)
+          .download();
     } catch (IOException e) {
       throw new RepositoryFunctionException(new IOException("Error downloading from "
           + url + " to " + outputDirectory + ": " + e.getMessage()),
@@ -83,10 +89,11 @@ public class HttpDownloader {
 
   @Nullable
   public static Path download(
-      String url, String sha256, String type, Path output, EventHandler eventHandler)
-      throws RepositoryFunctionException {
+      String url, String sha256, String type, Path output, EventHandler eventHandler, Map<String,
+      String> clientEnv)
+      throws RepositoryFunctionException, InterruptedException {
     try {
-      return new HttpDownloader(eventHandler, url, sha256, output, type).download();
+      return new HttpDownloader(eventHandler, url, sha256, output, type, clientEnv).download();
     } catch (IOException e) {
       throw new RepositoryFunctionException(
           new IOException(
@@ -98,7 +105,7 @@ public class HttpDownloader {
   /**
    * Attempt to download a file from the repository's URL. Returns the path to the file downloaded.
    */
-  public Path download() throws IOException {
+  public Path download() throws IOException, InterruptedException {
     URL url = new URL(urlString);
     Path destination;
     if (type == null) {
@@ -129,13 +136,16 @@ public class HttpDownloader {
     final ScheduledFuture<?> loggerHandle = getLoggerHandle(totalBytes);
 
     try (OutputStream out = destination.getOutputStream();
-         HttpConnection connection = HttpConnection.createAndConnect(url)) {
+         HttpConnection connection = HttpConnection.createAndConnect(url, this.clientEnv)) {
       InputStream inputStream = connection.getInputStream();
       int read;
       byte[] buf = new byte[BUFFER_SIZE];
       while ((read = inputStream.read(buf)) > 0) {
         totalBytes.addAndGet(read);
         out.write(buf, 0, read);
+        if (Thread.interrupted()) {
+          throw new InterruptedException("Download interrupted");
+        }
       }
       if (connection.getContentLength() != -1
           && totalBytes.get() != connection.getContentLength()) {

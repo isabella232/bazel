@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.packages.util;
 
+import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
@@ -21,12 +22,12 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CToolchain;
 import com.google.protobuf.TextFormat;
-
 import java.io.IOException;
 
 /**
@@ -171,19 +172,155 @@ public abstract class MockCcSupport {
           + "  }"
           + "}";
 
-  public static final String THIN_LTO_CONFIGURATION =
+  public static final String HOST_AND_NONHOST_CONFIGURATION =
       ""
           + "feature { "
-          + "  name: 'thin_lto'"
+          + "  name: 'host'"
           + "  flag_set {"
           + "    action: 'c-compile'"
           + "    action: 'c++-compile'"
           + "    flag_group {"
-          + "      flag: '-Xclang-only=-Wno-inconsistent-missing-override'"
-          + "      flag: '-flto'"
-          + "      flag: '-O2'"
+          + "      flag: '-host'"
           + "    }"
           + "  }"
+          + "}"
+          + "feature { "
+          + "  name: 'nonhost'"
+          + "  flag_set {"
+          + "    action: 'c-compile'"
+          + "    action: 'c++-compile'"
+          + "    flag_group {"
+          + "      flag: '-nonhost'"
+          + "    }"
+          + "  }"
+          + "}";
+
+  public static final String THIN_LTO_CONFIGURATION =
+      ""
+          + "feature { "
+          + "  name: 'thin_lto'"
+          + "  requires { feature: 'nonhost' }"
+          + "  flag_set {"
+          + "    action: 'c-compile'"
+          + "    action: 'c++-compile'"
+          + "    flag_group {"
+          + "      flag: '-flto=thin'"
+          + "    }"
+          + "  }"
+          + "}";
+
+  public static final String STATIC_LINK_TWEAKED_CONFIGURATION =
+      ""
+          + "artifact_name_pattern {"
+          + "   category_name: 'static_library'"
+          + "   pattern: 'lib%{base_name}.tweaked.a'"
+          + "}";
+
+  public static final String STATIC_LINK_AS_DOT_A_CONFIGURATION =
+      ""
+          + "artifact_name_pattern {"
+          + "   category_name: 'static_library'"
+          + "   pattern: 'lib%{base_name}.a'"
+          + "}";
+
+  public static final String STATIC_LINK_BAD_TEMPLATE_CONFIGURATION =
+      ""
+          + "artifact_name_pattern {"
+          + "   category_name: 'static_library'"
+          + "   pattern: 'foo%{bad_variable}bar'"
+          + "}";
+
+  public static final String INCOMPLETE_EXECUTABLE_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.EXECUTABLE.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.EXECUTABLE.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
+          + "}";
+
+  public static final String INCOMPLETE_DYNAMIC_LIBRARY_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.DYNAMIC_LIBRARY.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.DYNAMIC_LIBRARY.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
+          + "}";
+  public static final String INCOMPLETE_STATIC_LIBRARY_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
+          + "}";
+  public static final String INCOMPLETE_PIC_STATIC_LIBRARY_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.PIC_STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.PIC_STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
+          + "}";
+  public static final String INCOMPLETE_ALWAYS_LINK_STATIC_LIBRARY_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.ALWAYS_LINK_STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.ALWAYS_LINK_STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
+          + "}";
+  public static final String INCOMPLETE_ALWAYS_LINK_PIC_STATIC_LIBRARY_EXECUTABLE_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.ALWAYS_LINK_PIC_STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.ALWAYS_LINK_PIC_STATIC_LIBRARY.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
+          + "}";
+  public static final String INCOMPLETE_INTERFACE_DYNAMIC_LIBRARY_ACTION_CONFIG =
+      ""
+          + "action_config {"
+          + "   config_name: '"
+          + LinkTargetType.INTERFACE_DYNAMIC_LIBRARY.getActionName()
+          + "'"
+          + "   action_name: '"
+          + LinkTargetType.INTERFACE_DYNAMIC_LIBRARY.getActionName()
+          + "'"
+          + "   tool {"
+          + "      tool_path: 'DUMMY_TOOL'"
+          + "   }"
           + "}";
 
   /** Filter to remove implicit dependencies of C/C++ rules. */
@@ -223,9 +360,10 @@ public abstract class MockCcSupport {
    * @param partialToolchain A string representation of a CToolchain protocol buffer; note that
    *        this is allowed to be a partial buffer (required fields may be omitted).
    */
-  public void setupCrosstool(MockToolsConfig config, String partialToolchain) throws IOException {
+  public void setupCrosstool(MockToolsConfig config, String... partialToolchain)
+      throws IOException {
     CToolchain.Builder toolchainBuilder = CToolchain.newBuilder();
-    TextFormat.merge(partialToolchain, toolchainBuilder);
+    TextFormat.merge(Joiner.on("\n").join(partialToolchain), toolchainBuilder);
     setupCrosstool(config, toolchainBuilder.buildPartial());
   }
 

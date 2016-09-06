@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.query2.engine;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.query2.engine.Lexer.TokenKind;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -33,54 +32,67 @@ import java.util.Set;
  *        | expr ('-' expr)+
  * </pre>
  */
-class BinaryOperatorExpression extends QueryExpression {
+public class BinaryOperatorExpression extends QueryExpression {
 
   private final Lexer.TokenKind operator; // ::= INTERSECT/CARET | UNION/PLUS | EXCEPT/MINUS
   private final ImmutableList<QueryExpression> operands;
 
-  BinaryOperatorExpression(Lexer.TokenKind operator,
-                           List<QueryExpression> operands) {
+  public BinaryOperatorExpression(Lexer.TokenKind operator, List<QueryExpression> operands) {
     Preconditions.checkState(operands.size() > 1);
     this.operator = operator;
     this.operands = ImmutableList.copyOf(operands);
   }
 
-  Lexer.TokenKind getOperator() {
+  public Lexer.TokenKind getOperator() {
     return operator;
   }
 
-  ImmutableList<QueryExpression> getOperands() {
+  public ImmutableList<QueryExpression> getOperands() {
     return operands;
   }
 
   @Override
-  public <T> void eval(QueryEnvironment<T> env, Callback<T> callback)
+  public <T> void eval(QueryEnvironment<T> env, VariableContext<T> context, Callback<T> callback)
       throws QueryException, InterruptedException {
 
     if (operator == TokenKind.PLUS || operator == TokenKind.UNION) {
       for (QueryExpression operand : operands) {
-        env.eval(operand, callback);
+        env.eval(operand, context, callback);
       }
       return;
     }
-    // We cannot do differences with partial results. So we fully evaluate the operands
-    Set<T> lhsValue = QueryUtil.evalAll(env, operands.get(0));
-    for (int i = 1; i < operands.size(); i++) {
-      Set<T> rhsValue = QueryUtil.evalAll(env, operands.get(i));
-      switch (operator) {
-        case INTERSECT:
-        case CARET:
-          lhsValue.retainAll(rhsValue);
-          break;
-        case EXCEPT:
-        case MINUS:
-          lhsValue.removeAll(rhsValue);
-          break;
-        case UNION:
-        case PLUS:
-        default:
-          throw new IllegalStateException("operator=" + operator);
+
+    // Once we have fully evaluated the left-hand side, we can stream-process the right-hand side
+    // for minus operations. Note that this is suboptimal if the left-hand side results are very
+    // large compared to the right-hand side. Which is the case is hard to know before evaluating.
+    // We could consider determining this dynamically, however, by evaluating both the left and
+    // right hand side partially until one side finishes sooner.
+    final Set<T> lhsValue = QueryUtil.evalAll(env, context, operands.get(0));
+    if (operator == TokenKind.EXCEPT || operator == TokenKind.MINUS) {
+      for (int i = 1; i < operands.size(); i++) {
+        env.eval(operands.get(i), context,
+            new Callback<T>() {
+              @Override
+              public void process(Iterable<T> partialResult)
+                  throws QueryException, InterruptedException {
+                for (T target : partialResult) {
+                  lhsValue.remove(target);
+                }
+              }
+            });
       }
+      callback.process(lhsValue);
+      return;
+    }
+
+    // Intersection is not associative, so we are forced to pin both the left-hand and right-hand
+    // side of the operation at the same time.
+    // TODO(bazel-team): Consider keeping just the name / label of the right-hand side results
+    // instead of the potentially heavy-weight instances of type T.
+    Preconditions.checkState(operator == TokenKind.INTERSECT || operator == TokenKind.CARET,
+        operator);
+    for (int i = 1; i < operands.size(); i++) {
+      lhsValue.retainAll(QueryUtil.evalAll(env, context, operands.get(i)));
     }
     callback.process(lhsValue);
   }

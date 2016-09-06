@@ -23,17 +23,16 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.SkylarkProviderValidationUtil;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.AspectParameters;
-import com.google.devtools.build.lib.rules.SkylarkRuleClassFunctions.SkylarkAspect;
+import com.google.devtools.build.lib.packages.SkylarkAspect;
+import com.google.devtools.build.lib.packages.SkylarkClassObject;
 import com.google.devtools.build.lib.rules.SkylarkRuleContext;
 import com.google.devtools.build.lib.rules.SkylarkRuleContext.Kind;
-import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalExceptionWithStackTrace;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.syntax.SkylarkType;
-
 import java.util.Map;
 
 /**
@@ -41,11 +40,9 @@ import java.util.Map;
  */
 public class SkylarkAspectFactory implements ConfiguredAspectFactory {
 
-  private final String name;
   private final SkylarkAspect skylarkAspect;
 
-  public SkylarkAspectFactory(String name, SkylarkAspect skylarkAspect) {
-    this.name = name;
+  public SkylarkAspectFactory(SkylarkAspect skylarkAspect) {
     this.skylarkAspect = skylarkAspect;
   }
 
@@ -86,7 +83,8 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
           return null;
         }
 
-        ConfiguredAspect.Builder builder = new ConfiguredAspect.Builder(name, ruleContext);
+        ConfiguredAspect.Builder builder = new ConfiguredAspect.Builder(
+            skylarkAspect.getName(), ruleContext);
 
         SkylarkClassObject struct = (SkylarkClassObject) aspectSkylarkObject;
         Location loc = struct.getCreationLoc();
@@ -126,7 +124,7 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
     if (e instanceof EvalExceptionWithStackTrace) {
       ((EvalExceptionWithStackTrace) e)
           .registerPhantomFuncall(
-              String.format("%s(...)", name),
+              String.format("%s(...)", skylarkAspect.getName()),
               base.getTarget().getAssociatedRule().getLocation(),
               skylarkAspect.getImplementation());
     }

@@ -19,8 +19,6 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedSet;
-import com.google.common.collect.Sets;
-import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.BuildView;
 import com.google.devtools.build.lib.analysis.OutputGroupProvider;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
@@ -42,7 +40,6 @@ import com.google.devtools.common.options.OptionsProvider;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
@@ -70,7 +67,8 @@ public class BuildRequest implements OptionsClassProvider {
             category = "strategy",
             help = "The number of concurrent jobs to run. "
                 + "0 means build sequentially. Values above " + MAX_JOBS
-                + " are not allowed.")
+                + " are not allowed, and values above "
+                + JOBS_TOO_HIGH_WARNING + " may cause memory issues.")
     public int jobs;
 
     @Option(name = "progress_report_interval",
@@ -86,7 +84,7 @@ public class BuildRequest implements OptionsClassProvider {
             defaultValue = "null",
             category = "verbosity",
             converter = OptionsUtils.PathFragmentConverter.class,
-            help = "Causes " + Constants.PRODUCT_NAME + " to explain each executed step of the "
+            help = "Causes the build system to explain each executed step of the "
             + "build. The explanation is written to the specified log file.")
     public PathFragment explanationPath;
 
@@ -245,18 +243,12 @@ public class BuildRequest implements OptionsClassProvider {
                 + "the --cpu option is ignored.")
     public List<String> multiCpus;
 
-    @Option(name = "experimental_check_output_files",
+    @Option(name = "output_tree_tracking",
+            oldName =  "experimental_output_tree_tracking",
             defaultValue = "true",
             category = "undocumented",
-            help = "Check for modifications made to the output files of a build. Consider setting "
-                + "this flag to false to see the effect on incremental build times.")
-    public boolean checkOutputFiles;
-
-    @Option(name = "experimental_output_tree_tracking",
-            defaultValue = "false",
-            category = "undocumented",
             help = "If set, tell the output service (if any) to track when files in the output "
-                + "tree have been modified externally (not by " + Constants.PRODUCT_NAME + "). "
+                + "tree have been modified externally (not by the build system). "
                 + "This should improve incremental build speed when an appropriate output service "
                 + "is enabled.")
     public boolean finalizeActions;
@@ -270,8 +262,8 @@ public class BuildRequest implements OptionsClassProvider {
     )
     public List<String> aspects;
 
-    public String getSymlinkPrefix() {
-      return symlinkPrefix == null ? Constants.PRODUCT_NAME + "-" : symlinkPrefix;
+    public String getSymlinkPrefix(String productName) {
+      return symlinkPrefix == null ? productName + "-" : symlinkPrefix;
     }
   }
 
@@ -480,10 +472,6 @@ public class BuildRequest implements OptionsClassProvider {
           "Invalid parameter for --jobs: %d. Only values 0 <= jobs <= %d are allowed.", jobs,
           MAX_JOBS));
     }
-    if (jobs > JOBS_TOO_HIGH_WARNING) {
-      warnings.add(
-          String.format("High value for --jobs: %d. You may run into memory issues", jobs));
-    }
 
     int localTestJobs = getExecutionOptions().localTestJobs;
     if (localTestJobs < 0) {
@@ -509,31 +497,7 @@ public class BuildRequest implements OptionsClassProvider {
   public TopLevelArtifactContext getTopLevelArtifactContext() {
     return new TopLevelArtifactContext(
         getOptions(ExecutionOptions.class).testStrategy.equals("exclusive"),
-        determineOutputGroups());
-  }
-
-  private ImmutableSortedSet<String> determineOutputGroups() {
-    Set<String> current = Sets.newHashSet();
-
-    boolean overridesDefaultOutputGroups = false;
-    for (String outputGroup : getBuildOptions().outputGroups) {
-      overridesDefaultOutputGroups |= !(outputGroup.startsWith("+") || outputGroup.startsWith("-"));
-    }
-    if (!overridesDefaultOutputGroups) {
-      current.addAll(OutputGroupProvider.DEFAULT_GROUPS);
-    }
-
-    for (String outputGroup : getBuildOptions().outputGroups) {
-      if (outputGroup.startsWith("+")) {
-        current.add(outputGroup.substring(1));
-      } else if (outputGroup.startsWith("-")) {
-        current.remove(outputGroup.substring(1));
-      } else {
-        current.add(outputGroup);
-      }
-    }
-
-    return ImmutableSortedSet.copyOf(current);
+        OutputGroupProvider.determineOutputGroups(getBuildOptions().outputGroups));
   }
 
   public ImmutableSortedSet<String> getMultiCpus() {

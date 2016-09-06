@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Su
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.rules.test.TestEnvironmentProvider;
 import com.google.devtools.build.lib.syntax.Type;
@@ -78,7 +79,7 @@ public class TestSupport {
     String runMemleaks =
         ruleContext.getFragment(ObjcConfiguration.class).runMemleaks() ? "true" : "false";
 
-    Map<String, String> testEnv = ruleContext.getConfiguration().getTestEnv();
+    ImmutableMap<String, String> testEnv = ruleContext.getConfiguration().getTestEnv();
 
     // The substitutions below are common for simulator and lab device.
     ImmutableList.Builder<Substitution> substitutions =
@@ -126,15 +127,14 @@ public class TestSupport {
    */
   private ImmutableList<Substitution> substitutionsForSimulator() {
     ImmutableList.Builder<Substitution> substitutions = new ImmutableList.Builder<Substitution>()
-        .add(Substitution.of("%(iossim_path)s", iossim().getRootRelativePath().getPathString()))
         .add(Substitution.of("%(std_redirect_dylib_path)s",
-            stdRedirectDylib().getRootRelativePath().getPathString()))
+            stdRedirectDylib().getRunfilesPathString()))
         .addAll(deviceSubstitutions().getSubstitutionsForTestRunnerScript());
 
     Optional<Artifact> testRunner = testRunner();
     if (testRunner.isPresent()) {
       substitutions.add(
-          Substitution.of("%(testrunner_binary)s", testRunner.get().getRootRelativePathString()));
+          Substitution.of("%(testrunner_binary)s", testRunner.get().getRunfilesPathString()));
     }
     return substitutions.build();
   }
@@ -170,10 +170,6 @@ public class TestSupport {
     } else {
       throw new IllegalStateException("Expected 0 or 1 files in xctest_app, got: " + files);
     }
-  }
-
-  private Artifact iossim() {
-    return ruleContext.getPrerequisiteArtifact(SimulatorRule.IOSSIM_ATTR, Mode.HOST);
   }
 
   private Artifact stdRedirectDylib() {
@@ -230,7 +226,6 @@ public class TestSupport {
         .addTransitiveArtifacts(plugins());
     if (!runWithLabDevice()) {
       runfilesBuilder
-          .addArtifact(iossim())
           .addArtifact(stdRedirectDylib())
           .addTransitiveArtifacts(deviceRunfiles())
           .addArtifacts(testRunner().asSet());
@@ -251,16 +246,20 @@ public class TestSupport {
    * builder.
    */
   public Map<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider> getExtraProviders() {
+    IosDeviceProvider deviceProvider =
+        ruleContext.getPrerequisite(IosTest.TARGET_DEVICE, Mode.TARGET, IosDeviceProvider.class);
+    DottedVersion xcodeVersion = deviceProvider.getXcodeVersion();
     AppleConfiguration configuration = ruleContext.getFragment(AppleConfiguration.class);
 
     ImmutableMap.Builder<String, String> envBuilder = ImmutableMap.builder();
 
-    envBuilder.putAll(configuration.getEnvironmentForIosAction());
-    envBuilder.putAll(configuration.getAppleHostSystemEnv());
+    if (xcodeVersion != null) {
+      envBuilder.putAll(configuration.getXcodeVersionEnv(xcodeVersion));
+    }
 
     if (ruleContext.getConfiguration().isCodeCoverageEnabled()) {
       envBuilder.put("COVERAGE_GCOV_PATH",
-          ruleContext.getHostPrerequisiteArtifact(IosTest.GCOV_ATTR).getExecPathString());
+          ruleContext.getHostPrerequisiteArtifact(IosTest.OBJC_GCOV_ATTR).getExecPathString());
       envBuilder.put("APPLE_COVERAGE", "1");
     }
 

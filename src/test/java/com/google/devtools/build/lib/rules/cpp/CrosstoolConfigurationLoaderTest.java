@@ -28,17 +28,21 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.config.ConfigurationEnvironment;
+import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.flags.InvocationPolicyEnforcer;
 import com.google.devtools.build.lib.packages.util.MockCcSupport;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
+import com.google.devtools.common.options.OptionsParser;
+import com.google.devtools.common.options.OptionsParsingException;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -56,12 +60,25 @@ import java.util.Collections;
 public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
   private static final Collection<String> NO_FEATURES = Collections.emptySet();
 
+  private BuildOptions createBuildOptionsForTest(String... args) {
+    ImmutableList<Class<? extends FragmentOptions>> testFragments =
+        TestRuleClassProvider.getRuleClassProvider().getConfigurationOptions();
+    OptionsParser optionsParser = OptionsParser.newOptionsParser(testFragments);
+    try {
+      optionsParser.parse(args);
+      InvocationPolicyEnforcer optionsPolicyEnforcer = analysisMock.getInvocationPolicyEnforcer();
+      optionsPolicyEnforcer.enforce(optionsParser);
+    } catch (OptionsParsingException e) {
+      throw new IllegalStateException(e);
+    }
+    return BuildOptions.of(testFragments, optionsParser);
+  }
+
   private CppConfiguration create(CppConfigurationLoader loader, String... args) throws Exception {
     ConfigurationEnvironment env =
         new ConfigurationEnvironment.TargetProviderEnvironment(
             skyframeExecutor.getPackageManager(), reporter, directories);
-    return loader.create(env, BuildOptions.of(
-        TestRuleClassProvider.getRuleClassProvider().getOptionFragments(), args));
+    return loader.create(env, createBuildOptionsForTest(args));
   }
 
   private CppConfigurationLoader loader(String crosstoolFileContents) throws IOException {
@@ -674,7 +691,7 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
             TestConstants.TOOLS_REPOSITORY,
             new PathFragment(
                 new PathFragment(TestConstants.TOOLS_REPOSITORY_PATH), new PathFragment(path)));
-    return packageIdentifier.getPathFragment();
+    return packageIdentifier.getSourceRoot();
   }
 
   private void checkToolchainB(CppConfigurationLoader loader, LipoMode lipoMode, String... args)

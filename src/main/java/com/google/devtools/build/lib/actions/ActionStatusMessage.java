@@ -20,16 +20,18 @@ package com.google.devtools.build.lib.actions;
  * used to notify any interested parties.
  */
 public class ActionStatusMessage {
-  private final ActionMetadata action;
+  private final ActionExecutionMetadata action;
   private final String message;
+  private final String strategy;
   public static final String PREPARING = "Preparing";
 
-  private ActionStatusMessage(ActionMetadata action, String message) {
+  private ActionStatusMessage(ActionExecutionMetadata action, String message, String strategy) {
     this.action = action;
     this.message = message;
+    this.strategy = strategy;
   }
 
-  public ActionMetadata getActionMetadata() {
+  public ActionExecutionMetadata getActionMetadata() {
     return action;
   }
 
@@ -37,23 +39,31 @@ public class ActionStatusMessage {
     return message;
   }
 
+  /**
+   * Return the strategy of the action; null if not created by {@link #runningStrategy}.
+   */
+  public String getStrategy() {
+    return strategy;
+  }
+
   /** Creates "Analyzing" status message. */
-  public static ActionStatusMessage analysisStrategy(ActionMetadata action) {
-    return new ActionStatusMessage(action, "Analyzing");
+  public static ActionStatusMessage analysisStrategy(ActionExecutionMetadata action) {
+    return new ActionStatusMessage(action, "Analyzing", null);
   }
 
   /** Creates "Preparing" status message. */
-  public static ActionStatusMessage preparingStrategy(ActionMetadata action) {
-    return new ActionStatusMessage(action, PREPARING);
+  public static ActionStatusMessage preparingStrategy(ActionExecutionMetadata action) {
+    return new ActionStatusMessage(action, PREPARING, null);
   }
 
   /** Creates "Scheduling" status message. */
-  public static ActionStatusMessage schedulingStrategy(ActionMetadata action) {
-    return new ActionStatusMessage(action, "Scheduling");
+  public static ActionStatusMessage schedulingStrategy(ActionExecutionMetadata action) {
+    return new ActionStatusMessage(action, "Scheduling", null);
   }
 
   /** Creates "Running (strategy)" status message. */
-  public static ActionStatusMessage runningStrategy(ActionMetadata action, String strategy) {
-    return new ActionStatusMessage(action, String.format("Running (%s)", strategy));
+  public static ActionStatusMessage runningStrategy(
+      ActionExecutionMetadata action, String strategy) {
+    return new ActionStatusMessage(action, String.format("Running (%s)", strategy), strategy);
   }
 }

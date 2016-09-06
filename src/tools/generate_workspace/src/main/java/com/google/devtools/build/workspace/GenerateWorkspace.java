@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.workspace;
 
+import com.google.common.collect.Lists;
 import com.google.common.io.Files;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.StoredEventHandler;
@@ -23,9 +24,9 @@ import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.UnixFileSystem;
+import com.google.devtools.build.workspace.maven.DefaultModelResolver;
 import com.google.devtools.build.workspace.maven.Resolver;
 import com.google.devtools.common.options.OptionsParser;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -43,9 +44,10 @@ public class GenerateWorkspace {
   private final EventHandler handler;
   private final FileSystem fileSystem;
   private final Resolver resolver;
+  private final List<String> inputs;
   private final Path outputDir;
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws InterruptedException {
     OptionsParser parser = OptionsParser.newOptionsParser(GenerateWorkspaceOptions.class);
     parser.parseAndExitUponError(args);
     GenerateWorkspaceOptions options = parser.getOptions(GenerateWorkspaceOptions.class);
@@ -82,7 +84,8 @@ public class GenerateWorkspace {
   private GenerateWorkspace(String outputDir) {
     this.handler = new EventHandler();
     this.fileSystem = getFileSystem();
-    this.resolver = new Resolver(handler);
+    this.resolver = new Resolver(handler, new DefaultModelResolver());
+    this.inputs = Lists.newArrayList();
     if (outputDir.isEmpty()) {
       this.outputDir = fileSystem.getPath(Files.createTempDir().toString());
     } else {
@@ -95,23 +98,28 @@ public class GenerateWorkspace {
         ? new JavaIoFileSystem() : new UnixFileSystem();
   }
 
-  private void generateFromWorkspace(List<String> projects) {
+  private void generateFromWorkspace(List<String> projects) throws InterruptedException {
     for (String project : projects) {
       WorkspaceResolver workspaceResolver = new WorkspaceResolver(resolver, handler);
-      Path projectPath = fileSystem.getPath(getAbsolute(project));
-      Package externalPackage = workspaceResolver.parse(projectPath.getRelative("WORKSPACE"));
+      Path projectPath = fileSystem.getPath(getAbsolute(project)).getRelative("WORKSPACE");
+      Package externalPackage = workspaceResolver.parse(projectPath);
+      inputs.add(projectPath.getPathString());
       workspaceResolver.resolveTransitiveDependencies(externalPackage);
     }
   }
 
   private void generateFromPom(List<String> projects) {
     for (String project : projects) {
-      resolver.resolvePomDependencies(getAbsolute(project));
+      String pomFile = resolver.resolvePomDependencies(getAbsolute(project));
+      if (pomFile != null) {
+        inputs.add(pomFile);
+      }
     }
   }
 
   private void generateFromArtifacts(List<String> artifacts) {
     for (String artifactCoord : artifacts) {
+      inputs.add(artifactCoord);
       resolver.resolveArtifact(artifactCoord);
     }
   }
@@ -142,8 +150,9 @@ public class GenerateWorkspace {
 
     try (PrintStream workspaceStream = new PrintStream(workspaceFile);
          PrintStream buildStream = new PrintStream(buildFile)) {
-      resolver.writeWorkspace(workspaceStream);
-      resolver.writeBuild(buildStream);
+      ResultWriter writer = new ResultWriter(inputs, resolver.getRules());
+      writer.writeWorkspace(workspaceStream);
+      writer.writeBuild(buildStream);
     } catch (IOException e) {
       handler.handle(Event.error(
           "Could not write WORKSPACE and BUILD files to " + outputDir + ": " + e.getMessage()));

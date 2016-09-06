@@ -50,14 +50,14 @@ public class ParserTest extends EvaluationTestCase {
     buildEnvironment = newBuildEnvironment();
   }
 
-  private Parser.ParseResult parseFileWithComments(String... input) {
-    return buildEnvironment.parseFileWithComments(input);
+  private BuildFileAST parseFileWithComments(String... input) {
+    return BuildFileAST.parseBuildString(buildEnvironment.getEventHandler(), input);
   }
 
   /** Parses build code (not Skylark) */
   @Override
   protected List<Statement> parseFile(String... input) {
-    return buildEnvironment.parseFile(input);
+    return parseFileWithComments(input).getStatements();
   }
 
   /** Parses a build code (not Skylark) with PythonProcessing enabled */
@@ -446,6 +446,10 @@ public class ParserTest extends EvaluationTestCase {
   @Test
   public void testAugmentedAssign() throws Exception {
     assertEquals("[x = x + 1\n]", parseFile("x += 1").toString());
+    assertEquals("[x = x - 1\n]", parseFile("x -= 1").toString());
+    assertEquals("[x = x * 1\n]", parseFile("x *= 1").toString());
+    assertEquals("[x = x / 1\n]", parseFile("x /= 1").toString());
+    assertEquals("[x = x % 1\n]", parseFile("x %= 1").toString());
   }
 
   @Test
@@ -819,7 +823,7 @@ public class ParserTest extends EvaluationTestCase {
 
   @Test
   public void testParseBuildFileWithComments() throws Exception {
-    Parser.ParseResult result = parseFileWithComments(
+    BuildFileAST result = parseFileWithComments(
       "# Test BUILD file",
       "# with multi-line comment",
       "",
@@ -828,13 +832,13 @@ public class ParserTest extends EvaluationTestCase {
       "   outs = [ 'result.txt',",
       "           'result.log'],",
       "   cmd = 'touch result.txt result.log')");
-    assertThat(result.statements).hasSize(1);
-    assertThat(result.comments).hasSize(2);
+    assertThat(result.getStatements()).hasSize(1);
+    assertThat(result.getComments()).hasSize(2);
   }
 
   @Test
   public void testParseBuildFileWithManyComments() throws Exception {
-    Parser.ParseResult result = parseFileWithComments(
+    BuildFileAST result = parseFileWithComments(
         "# 1",
         "# 2",
         "",
@@ -850,9 +854,9 @@ public class ParserTest extends EvaluationTestCase {
         "           'result.log'], # 13",
         "   cmd = 'touch result.txt result.log')",
         "# 15");
-    assertThat(result.statements).hasSize(1); // Single genrule
+    assertThat(result.getStatements()).hasSize(1); // Single genrule
     StringBuilder commentLines = new StringBuilder();
-    for (Comment comment : result.comments) {
+    for (Comment comment : result.getComments()) {
       // Comments start and end on the same line
       assertEquals(comment.getLocation().getStartLineAndColumn().getLine() + " ends on "
           + comment.getLocation().getEndLineAndColumn().getLine(),
@@ -865,7 +869,7 @@ public class ParserTest extends EvaluationTestCase {
       commentLines.append(") ");
     }
     assertWithMessage("Found: " + commentLines)
-        .that(result.comments.size()).isEqualTo(10); // One per '#'
+        .that(result.getComments().size()).isEqualTo(10); // One per '#'
   }
 
   @Test
@@ -1125,7 +1129,7 @@ public class ParserTest extends EvaluationTestCase {
   private void invalidImportTest(String importString, String expectedMsg) {
     setFailFast(false);
     parseFileForSkylark("load('" + importString + "', 'fun_test')\n"); 
-    assertContainsError(expectedMsg);    
+    assertContainsError(expectedMsg);
   }
 
   @Test
@@ -1142,12 +1146,12 @@ public class ParserTest extends EvaluationTestCase {
 
   @Test
   public void testInvalidRelativePathBzlExtImplicit() throws Exception {
-    invalidImportTest("file.bzl", SkylarkImports.BZL_EXT_IMPLICIT_MSG);
+    invalidImportTest("file.bzl", SkylarkImports.INVALID_PATH_SYNTAX);
   }
 
   @Test
   public void testInvalidRelativePathNoSubdirs() throws Exception {
-    invalidImportTest("path/to/file", SkylarkImports.RELATIVE_PATH_NO_SUBDIRS_MSG);
+    invalidImportTest("path/to/file", SkylarkImports.INVALID_PATH_SYNTAX);
   }
 
   @Test
@@ -1240,6 +1244,11 @@ public class ParserTest extends EvaluationTestCase {
     LoadStatement stmt = (LoadStatement) statements.get(0);
     assertEquals("/foo/bar/file", stmt.getImport().getImportString());
     assertThat(stmt.getSymbols()).hasSize(1);
+    Identifier sym = stmt.getSymbols().get(0);
+    int startOffset = sym.getLocation().getStartOffset();
+    int endOffset = sym.getLocation().getEndOffset();
+    assertThat(startOffset).named("getStartOffset()").isEqualTo(22);
+    assertThat(endOffset).named("getEndOffset()").isEqualTo(startOffset + 10);
   }
 
   @Test
@@ -1283,7 +1292,18 @@ public class ParserTest extends EvaluationTestCase {
 
   @Test
   public void testLoadAlias() throws Exception {
-    runLoadAliasTestForSymbols("my_alias = 'lawl'", "my_alias");
+    List<Statement> statements = parseFileForSkylark(
+        "load('/foo/bar/file', my_alias = 'lawl')\n");
+    LoadStatement stmt = (LoadStatement) statements.get(0);
+    ImmutableList<Identifier> actualSymbols = stmt.getSymbols();
+
+    assertThat(actualSymbols).hasSize(1);
+    Identifier sym = actualSymbols.get(0);
+    assertThat(sym.getName()).isEqualTo("my_alias");
+    int startOffset = sym.getLocation().getStartOffset();
+    int endOffset = sym.getLocation().getEndOffset();
+    assertThat(startOffset).named("getStartOffset()").isEqualTo(22);
+    assertThat(endOffset).named("getEndOffset()").isEqualTo(startOffset + 8);
   }
 
   @Test
@@ -1422,7 +1442,18 @@ public class ParserTest extends EvaluationTestCase {
         "def func(a):",
         // no if
         "  else: return a");
-    assertContainsError("syntax error at 'else'");
+    assertContainsError("syntax error at 'else': not allowed here.");
+  }
+
+  @Test
+  public void testForElse() throws Exception {
+    setFailFast(false);
+    parseFileForSkylark(
+        "def func(a):",
+        "  for i in range(a):",
+        "    print(i)",
+        "  else: return a");
+    assertContainsError("syntax error at 'else': not allowed here.");
   }
 
   @Test

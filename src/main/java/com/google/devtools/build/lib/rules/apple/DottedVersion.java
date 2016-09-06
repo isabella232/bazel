@@ -19,6 +19,9 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 
 import java.util.ArrayList;
 import java.util.Objects;
@@ -34,8 +37,7 @@ import java.util.regex.Pattern;
  *
  * <p>Dotted versions are ordered using natural integer sorting on components in order from first to
  * last where any missing element is considered to have the value 0 if they don't contain any
- * non-numeric characters. For example:
- * <pre>
+ * non-numeric characters. For example: <pre>
  *   3.1.25 > 3.1.1
  *   3.1.20 > 3.1.2
  *   3.1.1 > 3.1
@@ -48,8 +50,7 @@ import java.util.regex.Pattern;
  * component with a smaller integer. If the integers are the same, the alphabetic sequences are
  * compared lexicographically, and if <i>they</i> turn out to be the same, the final (optional)
  * integer is compared. As with the leading integer, this final integer is considered to be 0 if not
- * present. For example:
- * <pre>
+ * present. For example: <pre>
  *   3.1.1 > 3.1.1beta3
  *   3.1.1beta1 > 3.1.0
  *   3.1 > 3.1.0alpha1
@@ -62,6 +63,13 @@ import java.util.regex.Pattern;
  *
  * <p>This class is immutable and can safely be shared among threads.
  */
+@SkylarkModule(
+  name = "DottedVersion",
+  category = SkylarkModuleCategory.NONE,
+  doc =
+      "A value representing a version with multiple components, seperated by periods, such as "
+          + "1.2.3.4."
+)
 public final class DottedVersion implements Comparable<DottedVersion> {
   private static final Splitter DOT_SPLITTER = Splitter.on('.');
   private static final Pattern COMPONENT_PATTERN = Pattern.compile("(\\d+)(?:([a-z]+)(\\d*))?");
@@ -132,6 +140,9 @@ public final class DottedVersion implements Comparable<DottedVersion> {
   }
 
   @Override
+  @SkylarkCallable(name = "compare_to", 
+    doc = "Compares based on most signifigant (first) not-matching version component. "
+        + "So, for example, 1.2.3 > 1.2.4")
   public int compareTo(DottedVersion other) {
     int maxComponents = Math.max(components.size(), other.components.size());
     for (int componentIndex = 0; componentIndex < maxComponents; componentIndex++) {

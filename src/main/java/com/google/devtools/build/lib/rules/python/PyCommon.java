@@ -40,13 +40,15 @@ import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.SkylarkClassObject;
+import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector.LocalMetadataCollector;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
-import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
@@ -56,7 +58,6 @@ import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.GeneratedMessage.GeneratedExtension;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -137,18 +138,37 @@ public final class PyCommon {
   public void addCommonTransitiveInfoProviders(RuleConfiguredTargetBuilder builder,
       PythonSemantics semantics, NestedSet<Artifact> filesToBuild) {
 
-    SkylarkClassObject sourcesProvider =
-        new SkylarkClassObject(ImmutableMap.<String, Object>of(
-            TRANSITIVE_PYTHON_SRCS, SkylarkNestedSet.of(Artifact.class, transitivePythonSources),
-            IS_USING_SHARED_LIBRARY, usesSharedLibraries()), "No such attribute '%s'");
     builder
-        .add(InstrumentedFilesProvider.class, InstrumentedFilesCollector.collect(ruleContext,
-            semantics.getCoverageInstrumentationSpec(), METADATA_COLLECTOR, filesToBuild))
-        .addSkylarkTransitiveInfo(PYTHON_SKYLARK_PROVIDER_NAME, sourcesProvider)
+        .add(
+            InstrumentedFilesProvider.class,
+            InstrumentedFilesCollector.collect(
+                ruleContext,
+                semantics.getCoverageInstrumentationSpec(),
+                METADATA_COLLECTOR,
+                filesToBuild))
+        .addSkylarkTransitiveInfo(
+            PYTHON_SKYLARK_PROVIDER_NAME,
+            createSourceProvider(this.transitivePythonSources, usesSharedLibraries()))
         // Python targets are not really compilable. The best we can do is make sure that all
         // generated source files are ready.
         .addOutputGroup(OutputGroupProvider.FILES_TO_COMPILE, transitivePythonSources)
         .addOutputGroup(OutputGroupProvider.COMPILATION_PREREQUISITES, transitivePythonSources);
+  }
+
+  /**
+   * Returns a Skylark struct for exposing transitive Python sources:
+   *
+   *     addSkylarkTransitiveInfo(PYTHON_SKYLARK_PROVIDER_NAME, createSourceProvider(...))
+   */
+  public static SkylarkClassObject createSourceProvider(
+      NestedSet<Artifact> transitivePythonSources, boolean isUsingSharedLibrary) {
+    return SkylarkClassObjectConstructor.STRUCT.create(
+        ImmutableMap.<String, Object>of(
+            TRANSITIVE_PYTHON_SRCS,
+            SkylarkNestedSet.of(Artifact.class, transitivePythonSources),
+            IS_USING_SHARED_LIBRARY,
+            isUsingSharedLibrary),
+        "No such attribute '%s'");
   }
 
   public PythonVersion getDefaultPythonVersion() {
@@ -179,15 +199,16 @@ public final class PyCommon {
     List<Artifact> sourceFiles = new ArrayList<>();
     // TODO(bazel-team): Need to get the transitive deps closure, not just the
     //                 sources of the rule.
-    for (FileProvider src : ruleContext
-        .getPrerequisites("srcs", Mode.TARGET, FileProvider.class)) {
+    for (TransitiveInfoCollection src : ruleContext
+        .getPrerequisitesIf("srcs", Mode.TARGET, FileProvider.class)) {
       // Make sure that none of the sources contain hyphens.
       if (Util.containsHyphen(src.getLabel().getPackageFragment())) {
         ruleContext.attributeError("srcs",
             src.getLabel() + ": paths to Python packages may not contain '-'");
       }
-      Iterable<Artifact> pySrcs = FileType.filter(src.getFilesToBuild(),
-          PyRuleClasses.PYTHON_SOURCE);
+      Iterable<Artifact> pySrcs =
+          FileType.filter(
+              src.getProvider(FileProvider.class).getFilesToBuild(), PyRuleClasses.PYTHON_SOURCE);
       Iterables.addAll(sourceFiles, pySrcs);
       if (Iterables.isEmpty(pySrcs)) {
         ruleContext.attributeWarning("srcs",
@@ -375,10 +396,8 @@ public final class PyCommon {
     }
   }
 
-  /**
-   * @return A String that is the full path to the main python entry point.
-   */
-  public String determineMainExecutableSource() {
+  /** @return A String that is the full path to the main python entry point. */
+  public String determineMainExecutableSource(boolean withWorkspaceName) {
     String mainSourceName;
     Rule target = ruleContext.getRule();
     boolean explicitMain = target.isAttributeValueExplicitlySpecified("main");
@@ -404,8 +423,8 @@ public final class PyCommon {
         } else {
           ruleContext.attributeError("srcs",
               buildMultipleMainMatchesErrorText(explicitMain, mainSourceName,
-                  mainArtifact.getRootRelativePath().toString(),
-                  outItem.getRootRelativePath().toString()));
+                  mainArtifact.getRunfilesPath().toString(),
+                  outItem.getRunfilesPath().toString()));
         }
       }
     }
@@ -414,9 +433,16 @@ public final class PyCommon {
       ruleContext.attributeError("srcs", buildNoMainMatchesErrorText(explicitMain, mainSourceName));
       return null;
     }
+    if (!withWorkspaceName) {
+      return mainArtifact.getRunfilesPath().getPathString();
+    }
+    PathFragment workspaceName = new PathFragment(
+        ruleContext.getRule().getPackage().getWorkspaceName());
+    return workspaceName.getRelative(mainArtifact.getRunfilesPath()).getPathString();
+  }
 
-    PathFragment workspaceName = new PathFragment(ruleContext.getRule().getWorkspaceName());
-    return workspaceName.getRelative(mainArtifact.getRootRelativePath()).getPathString();
+  public String determineMainExecutableSource() {
+    return determineMainExecutableSource(true);
   }
 
   public Artifact getExecutable() {
@@ -486,7 +512,7 @@ public final class PyCommon {
     SpawnAction.Builder builder = new SpawnAction.Builder()
         .setResources(PY_COMPILE_RESOURCE_SET)
         .setExecutable(pythonBinary)
-        .setProgressMessage("Compiling Python")
+        .setProgressMessage("Compiling Python " + source.prettyPrint())
         .addInputArgument(
             ruleContext.getPrerequisiteArtifact(pythonPrecompileAttribute, Mode.HOST))
         .setMnemonic("PyCompile");
@@ -494,9 +520,7 @@ public final class PyCommon {
     TransitiveInfoCollection pythonTarget =
         ruleContext.getPrerequisite(hostPython2RuntimeAttribute, Mode.HOST);
     if (pythonTarget != null) {
-      builder.addInputs(pythonTarget
-          .getProvider(FileProvider.class)
-          .getFilesToBuild());
+      builder.addTransitiveInputs(pythonTarget.getProvider(FileProvider.class).getFilesToBuild());
     }
 
     builder.addInputArgument(source);
@@ -560,7 +584,8 @@ public final class PyCommon {
   }
 
   // Used purely to set the legacy ActionType of the ExtraActionInfo.
-  private static class PyPseudoAction extends PseudoAction<PythonInfo> {
+  @Immutable
+  private static final class PyPseudoAction extends PseudoAction<PythonInfo> {
     private static final UUID ACTION_UUID = UUID.fromString("8d720129-bc1a-481f-8c4c-dbe11dcef319");
 
     public PyPseudoAction(ActionOwner owner,
@@ -568,11 +593,6 @@ public final class PyCommon {
         String mnemonic, GeneratedExtension<ExtraActionInfo, PythonInfo> infoExtension,
         PythonInfo info) {
       super(ACTION_UUID, owner, inputs, outputs, mnemonic, infoExtension, info);
-    }
-
-    @Override
-    public ExtraActionInfo.Builder getExtraActionInfo() {
-      return super.getExtraActionInfo();
     }
   }
 }

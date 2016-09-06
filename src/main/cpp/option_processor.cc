@@ -163,46 +163,6 @@ OptionProcessor::OptionProcessor()
     : initialized_(false), parsed_startup_options_(new BlazeStartupOptions()) {
 }
 
-// Return the path of the depot .blazerc file.
-string OptionProcessor::FindDepotBlazerc(const string& workspace) {
-  // Package semantics are ignored here, but that's acceptable because
-  // blaze.blazerc is a configuration file.
-  vector<string> candidates;
-  BlazeStartupOptions::WorkspaceRcFileSearchPath(&candidates);
-  for (const auto& candidate : candidates) {
-    string blazerc = blaze_util::JoinPath(workspace, candidate);
-    if (!access(blazerc.c_str(), R_OK)) {
-      return blazerc;
-    }
-  }
-
-  return "";
-}
-
-// Return the path of the .blazerc file that sits alongside the binary.
-// This allows for canary or cross-platform Blazes operating on the same depot
-// to have customized behavior.
-string OptionProcessor::FindAlongsideBinaryBlazerc(const string& cwd,
-                                                   const string& arg0) {
-  string path = arg0[0] == '/' ? arg0 : blaze_util::JoinPath(cwd, arg0);
-  string base = blaze_util::Basename(arg0);
-  string binary_blazerc_path = path + "." + base + "rc";
-  if (!access(binary_blazerc_path.c_str(), R_OK)) {
-    return binary_blazerc_path;
-  }
-  return "";
-}
-
-// Return the path of the bazelrc file that sits in /etc.
-// This allows for installing Bazel on system-wide directory.
-string OptionProcessor::FindSystemWideBlazerc() {
-  string path = BlazeStartupOptions::SystemWideRcPath();
-  if (!path.empty() && !access(path.c_str(), R_OK)) {
-    return path;
-  }
-  return "";
-}
-
 // Return the path to the user's rc file.  If cmdLineRcFile != NULL,
 // use it, dying if it is not readable.  Otherwise, return the first
 // readable file called rc_basename from [workspace, $HOME]
@@ -282,9 +242,8 @@ blaze_exit_code::ExitCode OptionProcessor::ParseOptions(
   // small one and this way I don't have to care about memory management.
   vector<string> candidate_blazerc_paths;
   if (use_master_blazerc) {
-    candidate_blazerc_paths.push_back(FindDepotBlazerc(workspace));
-    candidate_blazerc_paths.push_back(FindAlongsideBinaryBlazerc(cwd, args[0]));
-    candidate_blazerc_paths.push_back(FindSystemWideBlazerc());
+    BlazeStartupOptions::FindCandidateBlazercPaths(workspace, cwd, args[0],
+                                                   &candidate_blazerc_paths);
   }
 
   string user_blazerc_path;
@@ -424,6 +383,14 @@ blaze_exit_code::ExitCode OptionProcessor::ParseStartupOptions(string *error) {
 // the command and the arguments. NB: Keep the options added here in sync with
 // BlazeCommandDispatcher.INTERNAL_COMMAND_OPTIONS!
 void OptionProcessor::AddRcfileArgsAndOptions(bool batch, const string& cwd) {
+  // Provide terminal options as coming from the least important rc file.
+  command_arguments_.push_back("--rc_source=client");
+  command_arguments_.push_back("--default_override=0:common=--isatty=" +
+                               ToString(IsStandardTerminal()));
+  command_arguments_.push_back(
+      "--default_override=0:common=--terminal_columns=" +
+      ToString(GetTerminalColumns()));
+
   // Push the options mapping .blazerc numbers to filenames.
   for (int i_blazerc = 0; i_blazerc < blazercs_.size(); i_blazerc++) {
     const RcFile* blazerc = blazercs_[i_blazerc];
@@ -442,23 +409,27 @@ void OptionProcessor::AddRcfileArgsAndOptions(bool batch, const string& cwd) {
     for (int ii = 0; ii < it->second.size(); ii++) {
       const RcOption& rcoption = it->second[ii];
       command_arguments_.push_back(
-          "--default_override=" + ToString(rcoption.rcfile_index()) + ":"
+          "--default_override=" + ToString(rcoption.rcfile_index() + 1) + ":"
           + it->first + "=" + rcoption.option());
     }
   }
-
-  // Splice the terminal options.
-  command_arguments_.push_back(
-      "--isatty=" + ToString(IsStandardTerminal()));
-  command_arguments_.push_back(
-      "--terminal_columns=" + ToString(GetTerminalColumns()));
 
   // Pass the client environment to the server in server mode.
   if (batch) {
     command_arguments_.push_back("--ignore_client_env");
   } else {
     for (char** env = environ; *env != NULL; env++) {
-      command_arguments_.push_back("--client_env=" + string(*env));
+      string env_str(*env);
+      int pos = env_str.find("=");
+      if (pos != string::npos) {
+        string name = env_str.substr(0, pos);
+        if (name == "PATH" || name == "TMP") {
+          string value = env_str.substr(pos + 1);
+          value = ConvertPathList(value);
+          env_str = name + "=" + value;
+        }
+      }
+      command_arguments_.push_back("--client_env=" + env_str);
     }
   }
   command_arguments_.push_back("--client_cwd=" + blaze::ConvertPath(cwd));

@@ -74,9 +74,10 @@ docker_build(
 )
 ```
 
-## Metadata
+## Image Configuration
 
-You can set layer metadata on these same rules by simply adding (supported) arguments to the rule, for instance:
+You can set image configuration on these same rules by simply adding (supported) arguments to the
+rule, for instance:
 
 ```python
 docker_build(
@@ -92,7 +93,8 @@ Will have a similar effect as the Dockerfile construct:
 ENTRYPOINT ["foo", "bar", "baz"]
 ```
 
-For the set of supported metadata, and ways to construct layers, see here.
+For the set of supported configuration options see
+[here](https://github.com/opencontainers/image-spec/blob/v0.2.0/serialization.md)
 
 
 ### Using
@@ -132,7 +134,7 @@ bazel run my/image:helloworld gcr.io/my-project/my-awesome-image:v0.9
 ```
 
 __Nota Bene:__ the `docker images` command will show a really old timestamp
-because `docker_build` remove all timestamps from the build to make it
+because `docker_build` removes all timestamps from the build to make it
 reproducible.
 
 ## Pulling images and deb files from the internet
@@ -146,8 +148,8 @@ load("@bazel_tools//tools/build_defs/docker:docker.bzl", "docker_build")
 
 docker_build(
     name = "java",
-    base = "@docker-debian//:wheezy",
-    debs = ["@openjdk-7-jre-headless//file"],
+    base = "@docker_debian//:wheezy",
+    debs = ["@openjdk_7_jre_headless//file"],
 )
 ```
 
@@ -155,7 +157,7 @@ Using the WORKSPACE file to add the actual files:
 
 ```python
 new_http_archive(
-    name = "docker-debian",
+    name = "docker_debian",
     url = "https://codeload.github.com/tianon/docker-brew-debian/zip/e9bafb113f432c48c7e86c616424cb4b2f2c7a51",
     build_file = "debian.BUILD",
     type = "zip",
@@ -163,7 +165,7 @@ new_http_archive(
 )
 
 http_file(
-   name = "openjdk-7-jre-headless",
+   name = "openjdk_7_jre_headless",
    url = "http://security.debian.org/debian-security/pool/updates/main/o/openjdk-7/openjdk-7-jre-headless_7u79-2.5.5-1~deb7u1_amd64.deb",
    sha256 = "b632f0864450161d475c012dcfcc37a1243d9ebf7ff9d6292150955616d71c23",
 )
@@ -233,7 +235,7 @@ docker_build(name, base, data_path, directory, files, mode, tars, debs, symlinks
             that target. It is used for incremental loading of the layer.
         </p>
         <p>
-            <b>Note:</b> this target is not suitable for direct comsumption.
+            <b>Note:</b> this target is not suitable for direct consumption.
             It is used for incremental loading and non-docker rules should
             depends on the docker image (<i>name</i>.tar) instead.
         </p>
@@ -363,11 +365,22 @@ docker_build(name, base, data_path, directory, files, mode, tars, debs, symlinks
       </td>
     </tr>
     <tr>
+      <td><code>user</code></td>
+      <td>
+        <code>String, optional</code>
+        <p><a href="https://docs.docker.com/reference/builder/#user">The user
+               that the image should run as.</a></p>
+        <p>Because building the image never happens inside a docker container,
+               this user does not affect the other actions (e.g.,
+               adding files).</p>
+      </td>
+    </tr>
+    <tr>
       <td><code>entrypoint</code></td>
       <td>
         <code>String or string list, optional</code>
         <p><a href="https://docs.docker.com/reference/builder/#entrypoint">List
-               of entrypoints to add in the layer.</a></p>
+               of entrypoints to add in the image.</a></p>
       </td>
     </tr>
     <tr>
@@ -375,7 +388,7 @@ docker_build(name, base, data_path, directory, files, mode, tars, debs, symlinks
       <td>
         <code>String or string list, optional</code>
         <p><a href="https://docs.docker.com/reference/builder/#cmd">List
-               of commands to execute in the layer.</a></p>
+               of commands to execute in the image.</a></p>
       </td>
     </tr>
     <tr>
@@ -436,7 +449,7 @@ docker_build(name, base, data_path, directory, files, mode, tars, debs, symlinks
         <code>String, optional</code>
         <p><a href="https://docs.docker.com/reference/builder/#workdir">Initial
                working directory when running the docker image.</a></p>
-        <p>Because building the image never happen inside a docker container,
+        <p>Because building the image never happens inside a docker container,
                this working directory does not affect the other actions (e.g.,
                adding files).</p>
       </td>

@@ -15,12 +15,13 @@
 package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkStaticness;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
-
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -66,6 +67,31 @@ public class CcLinkingOutputs {
 
   public ImmutableList<LibraryToLink> getExecutionDynamicLibraries() {
     return executionDynamicLibraries;
+  }
+
+  /**
+   * Returns a map from library identifiers to sets of LibraryToLink from this CcLinkingOutputs
+   * which share that library identifier.
+   */
+  public ImmutableSetMultimap<String, LibraryToLink> getLibrariesByIdentifier() {
+    return getLibrariesByIdentifier(
+        Iterables.concat(
+            staticLibraries, picStaticLibraries, dynamicLibraries, executionDynamicLibraries));
+  }
+
+  /**
+   * Gathers up a map from library identifiers to sets of LibraryToLink which share that library
+   * identifier.
+   */
+  public static ImmutableSetMultimap<String, LibraryToLink> getLibrariesByIdentifier(
+      Iterable<LibraryToLink> inputs) {
+    ImmutableSetMultimap.Builder<String, LibraryToLink> result =
+        new ImmutableSetMultimap.Builder<>();
+    for (LibraryToLink library : inputs) {
+      Preconditions.checkNotNull(library.getLibraryIdentifier());
+      result.put(library.getLibraryIdentifier(), library);
+    }
+    return result.build();
   }
 
   /**
@@ -152,7 +178,8 @@ public class CcLinkingOutputs {
     List<LibraryToLink> libraries = new ArrayList<>();
     Set<String> identifiers = new HashSet<>();
     for (LibraryToLink library : candidates) {
-      if (identifiers.add(libraryIdentifierOf(library.getOriginalLibraryArtifact()))) {
+      Preconditions.checkNotNull(library.getLibraryIdentifier());
+      if (identifiers.add(library.getLibraryIdentifier())) {
         libraries.add(library);
       }
     }
@@ -163,7 +190,7 @@ public class CcLinkingOutputs {
    * Returns the library identifier of an artifact: a string that is different for different
    * libraries, but is the same for the shared, static and pic versions of the same library.
    */
-  private static String libraryIdentifierOf(Artifact libraryArtifact) {
+  public static String libraryIdentifierOf(Artifact libraryArtifact) {
     String name = libraryArtifact.getRootRelativePath().getPathString();
     String basename = FileSystemUtils.removeExtension(name);
     // Need to special-case file types with double extension.

@@ -27,11 +27,13 @@ import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.Builder;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.ComputedSubstitution;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Template;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder;
@@ -51,7 +53,7 @@ import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -80,24 +82,23 @@ public class BazelJavaSemantics implements JavaSemantics {
   @Override
   public void checkRule(RuleContext ruleContext, JavaCommon javaCommon) {
   }
-  
+
+  @Override
+  public void checkForProtoLibraryAndJavaProtoLibraryOnSameProto(
+      RuleContext ruleContext, JavaCommon javaCommon) {}
+
   private String getMainClassInternal(RuleContext ruleContext, ImmutableList<Artifact> sources) {
-    String mainClass = ruleContext.getRule().isAttrDefined("main_class", Type.STRING)
-        ? ruleContext.attributes().get("main_class", Type.STRING) : "";
-    boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
-    boolean useTestrunner = ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)
-        && !useLegacyJavaTest(ruleContext);
-
-    if (createExecutable) {
-      if (useTestrunner) {
-        mainClass = "com.google.testing.junit.runner.BazelTestRunner";
-      } else { /* java_binary or non-Junit java_test */
-        if (mainClass.isEmpty()) {
-          mainClass = JavaCommon.determinePrimaryClass(ruleContext, sources);
-        }
-      }
+    if (!ruleContext.attributes().get("create_executable", Type.BOOLEAN)) {
+      return null;
     }
-
+    if (ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)
+        && !useLegacyJavaTest(ruleContext)) {
+      return "com.google.testing.junit.runner.BazelTestRunner";
+    }
+    String mainClass = ruleContext.attributes().get("main_class", Type.STRING);
+    if (mainClass.isEmpty()) {
+      mainClass = JavaCommon.determinePrimaryClass(ruleContext, sources);
+    }
     return mainClass;
   }
 
@@ -146,7 +147,7 @@ public class BazelJavaSemantics implements JavaSemantics {
 
   @Override
   public void buildJavaCommandLine(Collection<Artifact> outputs, BuildConfiguration configuration,
-      CustomCommandLine.Builder result) {
+      Builder result, Label targetLabel) {
   }
 
   @Override
@@ -161,27 +162,32 @@ public class BazelJavaSemantics implements JavaSemantics {
     Preconditions.checkNotNull(javaExecutable);
 
     List<Substitution> arguments = new ArrayList<>();
-    String workspacePrefix = ruleContext.getWorkspaceName();
-    if (!workspacePrefix.isEmpty()) {
-      workspacePrefix += "/";
+    String workspaceName = ruleContext.getWorkspaceName();
+    final String workspacePrefix = workspaceName + (workspaceName.isEmpty() ? "" : "/");
+    final boolean isRunfilesEnabled = ruleContext.getConfiguration().runfilesEnabled();
+    if (!isRunfilesEnabled) {
+      arguments.add(Substitution.of("%runfiles_manifest_only%", "1"));
     }
     arguments.add(Substitution.of("%workspace_prefix%", workspacePrefix));
     arguments.add(Substitution.of("%javabin%", javaExecutable));
     arguments.add(Substitution.of("%needs_runfiles%",
         ruleContext.getFragment(Jvm.class).getJavaExecutable().isAbsolute() ? "0" : "1"));
-    arguments.add(new ComputedSubstitution("%classpath%") {
-      @Override
-      public String getValue() {
-        StringBuilder buffer = new StringBuilder();
-        Iterable<Artifact> jars = javaCommon.getRuntimeClasspath();
-        appendRunfilesRelativeEntries(buffer, jars, ':');
-        return buffer.toString();
-      }
-    });
+    arguments.add(
+        new ComputedSubstitution("%classpath%") {
+          @Override
+          public String getValue() {
+            StringBuilder buffer = new StringBuilder();
+            Iterable<Artifact> jars = javaCommon.getRuntimeClasspath();
+            char delimiter = File.pathSeparatorChar;
+            appendRunfilesRelativeEntries(
+                buffer, jars, workspacePrefix, delimiter, isRunfilesEnabled);
+            return buffer.toString();
+          }
+        });
 
     arguments.add(Substitution.of("%java_start_class%",
         ShellEscaper.escapeString(javaStartClass)));
-    arguments.add(Substitution.ofSpaceSeparatedList("%jvm_flags%", jvmFlags));
+    arguments.add(Substitution.ofSpaceSeparatedList("%jvm_flags%", ImmutableList.copyOf(jvmFlags)));
 
     ruleContext.registerAction(new TemplateExpansionAction(
         ruleContext.getActionOwner(), executable, STUB_SCRIPT, arguments, true));
@@ -190,22 +196,35 @@ public class BazelJavaSemantics implements JavaSemantics {
   /**
    * Builds a class path by concatenating the root relative paths of the artifacts separated by the
    * delimiter. Each relative path entry is prepended with "${RUNPATH}" which will be expanded by
-   * the stub script at runtime, to either "${JAVA_RUNFILES}/" or if we are lucky, the empty
-   * string.
+   * the stub script at runtime, to either "${JAVA_RUNFILES}/" or if we are lucky, the empty string.
    *
    * @param buffer the buffer to use for concatenating the entries
    * @param artifacts the entries to concatenate in the buffer
    * @param delimiter the delimiter character to separate the entries
    */
-  private static void appendRunfilesRelativeEntries(StringBuilder buffer,
-      Iterable<Artifact> artifacts, char delimiter) {
+  private static void appendRunfilesRelativeEntries(
+      StringBuilder buffer,
+      Iterable<Artifact> artifacts,
+      String workspacePrefix,
+      char delimiter,
+      boolean isRunfilesEnabled) {
+    buffer.append("\"");
     for (Artifact artifact : artifacts) {
-      if (buffer.length() > 0) {
+      if (buffer.length() > 1) {
         buffer.append(delimiter);
       }
-      buffer.append("${RUNPATH}");
-      buffer.append(artifact.getRootRelativePath().getPathString());
+      if (!isRunfilesEnabled) {
+        buffer.append("$(rlocation ");
+        PathFragment runfilePath =
+            new PathFragment(new PathFragment(workspacePrefix), artifact.getRunfilesPath());
+        buffer.append(runfilePath.normalize().getPathString());
+        buffer.append(")");
+      } else {
+        buffer.append("${RUNPATH}");
+        buffer.append(artifact.getRunfilesPath().getPathString());
+      }
     }
+    buffer.append("\"");
   }
 
   private TransitiveInfoCollection getTestSupport(RuleContext ruleContext) {
@@ -317,7 +336,7 @@ public class BazelJavaSemantics implements JavaSemantics {
         ? getPrimaryClassLegacy(ruleContext, sources)
         : getPrimaryClassNew(ruleContext, sources);
   }
-  
+
   @Override
   public Iterable<String> getJvmFlags(
       RuleContext ruleContext, ImmutableList<Artifact> sources, List<String> userJvmFlags) {
@@ -382,11 +401,6 @@ public class BazelJavaSemantics implements JavaSemantics {
   }
 
   @Override
-  public boolean forceUseJavaLauncherTarget(RuleContext ruleContext) {
-    return false;
-  }
-
-  @Override
   public void addArtifactToJavaTargetAttribute(JavaTargetAttributes.Builder builder,
       Artifact srcArtifact) {
   }
@@ -438,5 +452,10 @@ public class BazelJavaSemantics implements JavaSemantics {
   @Override
   public String getJavaBuilderMainClass() {
     return JAVABUILDER_CLASS_NAME;
+  }
+
+  @Override
+  public Artifact getProtoMapping(RuleContext ruleContext) throws InterruptedException {
+    return null;
   }
 }

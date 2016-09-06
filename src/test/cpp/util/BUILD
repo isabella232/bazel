@@ -2,6 +2,12 @@
 #   C++ utility tests for Bazel
 package(default_visibility = ["//visibility:public"])
 
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+    visibility = ["//src/test/cpp:__pkg__"],
+)
+
 cc_test(
     name = "md5_test",
     srcs = ["md5_test.cc"],
@@ -15,6 +21,15 @@ cc_test(
 cc_test(
     name = "file_test",
     srcs = ["file_test.cc"],
+    deps = [
+        "//src/main/cpp/util",
+        "//third_party:gtest",
+    ],
+)
+
+cc_test(
+    name = "numbers_test",
+    srcs = ["numbers_test.cc"],
     deps = [
         "//src/main/cpp/util",
         "//third_party:gtest",

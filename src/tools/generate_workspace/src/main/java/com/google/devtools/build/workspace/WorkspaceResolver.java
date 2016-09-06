@@ -25,6 +25,7 @@ import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.AttributeMap;
+import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory.EnvironmentExtension;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
@@ -40,12 +41,10 @@ import com.google.devtools.build.workspace.maven.DefaultModelResolver;
 import com.google.devtools.build.workspace.maven.Resolver;
 import com.google.devtools.build.workspace.maven.Resolver.InvalidArtifactCoordinateException;
 import com.google.devtools.build.workspace.maven.Rule;
-
-import org.apache.maven.model.building.ModelSource;
-import org.apache.maven.model.resolution.UnresolvableModelException;
-
 import java.io.IOException;
 import java.util.List;
+import org.apache.maven.model.building.ModelSource;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 
 /**
  * Finds the transitive dependencies of a WORKSPACE file.
@@ -72,17 +71,16 @@ public class WorkspaceResolver {
     this.environmentExtensions = environmentExtensions.build();
   }
 
-  /**
-   * Converts the WORKSPACE file content into an ExternalPackage.
-   */
-  public Package parse(Path workspacePath) {
-    resolver.addHeader(workspacePath.getPathString());
-    Package.LegacyBuilder builder =
-        Package.newExternalPackageBuilder(workspacePath, ruleClassProvider.getRunfilesPrefix());
+  /** Converts the WORKSPACE file content into an ExternalPackage. */
+  public Package parse(Path workspacePath) throws InterruptedException {
+    Package.Builder builder = Package.newExternalPackageBuilder(
+        Package.Builder.DefaultHelper.INSTANCE,
+        workspacePath,
+        ruleClassProvider.getRunfilesPrefix());
     try (Mutability mutability = Mutability.create("External Package %s", workspacePath)) {
       new WorkspaceFactory(builder, ruleClassProvider, environmentExtensions, mutability)
           .parse(ParserInputSource.create(workspacePath));
-    } catch (IOException | InterruptedException e) {
+    } catch (IOException | BuildFileContainsErrorsException | InterruptedException e) {
       handler.handle(Event.error(Location.fromFile(workspacePath), e.getMessage()));
     }
 
@@ -136,7 +134,7 @@ public class WorkspaceResolver {
               "Could not resolve model for " + target + ": " + e.getMessage()));
           continue;
         }
-        resolver.addRootDependency(rule);
+        resolver.addArtifact(rule, modelSource.getLocation());
         resolver.resolveEffectiveModel(modelSource, Sets.<String>newHashSet(), rule);
       } else if (!target.getTargetKind().startsWith("bind")
           && !target.getTargetKind().startsWith("source ")) {

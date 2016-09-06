@@ -17,7 +17,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.FileProvider;
@@ -25,14 +25,16 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.rules.apple.Platform;
+import com.google.devtools.build.lib.rules.cpp.CcLibraryHelper.SourceCategory;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.DynamicMode;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.HeadersCheckingMode;
-import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector.LocalMetadataCollector;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
@@ -43,7 +45,6 @@ import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -68,7 +69,7 @@ public final class CcCommon {
     public void collectMetadataArtifacts(Iterable<Artifact> objectFiles,
         AnalysisEnvironment analysisEnvironment, NestedSetBuilder<Artifact> metadataFilesBuilder) {
       for (Artifact artifact : objectFiles) {
-        Action action = analysisEnvironment.getLocalGeneratingAction(artifact);
+        ActionAnalysisMetadata action = analysisEnvironment.getLocalGeneratingAction(artifact);
         if (action instanceof CppCompileAction) {
           addOutputs(metadataFilesBuilder, action, CppFileTypes.COVERAGE_NOTES);
         }
@@ -80,10 +81,16 @@ public final class CcCommon {
    * Features we request to enable unless a rule explicitly doesn't support them.
    */
   private static final ImmutableSet<String> DEFAULT_FEATURES = ImmutableSet.of(
+      CppRuleClasses.DEPENDENCY_FILE,
+      CppRuleClasses.COMPILE_ACTION_FLAGS_IN_FLAG_SET,
+      CppRuleClasses.RANDOM_SEED,
       CppRuleClasses.MODULE_MAPS,
       CppRuleClasses.MODULE_MAP_HOME_CWD,
       CppRuleClasses.HEADER_MODULE_INCLUDES_DEPENDENCIES,
-      CppRuleClasses.INCLUDE_PATHS);
+      CppRuleClasses.INCLUDE_PATHS,
+      CppRuleClasses.PIC,
+      CppRuleClasses.PER_OBJECT_DEBUG_INFO,
+      CppRuleClasses.PREPROCESSOR_DEFINES);
 
   /** C++ configuration */
   private final CppConfiguration cppConfiguration;
@@ -178,7 +185,7 @@ public final class CcCommon {
   }
 
   public TransitiveLipoInfoProvider collectTransitiveLipoLabels(CcCompilationOutputs outputs) {
-    if (cppConfiguration.getFdoSupport().getFdoRoot() == null
+    if (CppHelper.getFdoSupport(ruleContext).getFdoRoot() == null
         || !cppConfiguration.isLipoContextCollector()) {
       return TransitiveLipoInfoProvider.EMPTY;
     }
@@ -195,10 +202,10 @@ public final class CcCommon {
    */
   List<Pair<Artifact, Label>> getSources() {
     Map<Artifact, Label> map = Maps.newLinkedHashMap();
-    Iterable<FileProvider> providers =
-        ruleContext.getPrerequisites("srcs", Mode.TARGET, FileProvider.class);
-    for (FileProvider provider : providers) {
-      for (Artifact artifact : provider.getFilesToBuild()) {
+    Iterable<? extends TransitiveInfoCollection> providers =
+        ruleContext.getPrerequisitesIf("srcs", Mode.TARGET, FileProvider.class);
+    for (TransitiveInfoCollection provider : providers) {
+      for (Artifact artifact : provider.getProvider(FileProvider.class).getFilesToBuild()) {
         // TODO(bazel-team): We currently do not produce an error for duplicate headers and other
         // non-source artifacts with different labels, as that would require cleaning up the code
         // base without significant benefit; we should eventually make this consistent one way or
@@ -206,7 +213,7 @@ public final class CcCommon {
         Label oldLabel = map.put(artifact, provider.getLabel());
         boolean isHeader = CppFileTypes.CPP_HEADER.matches(artifact.getExecPath());
         if (!isHeader
-            && CcLibraryHelper.SOURCE_TYPES.matches(artifact.getExecPathString())
+            && SourceCategory.CC_AND_OBJC.getSourceTypes().matches(artifact.getExecPathString())
             && oldLabel != null
             && !oldLabel.equals(provider.getLabel())) {
           ruleContext.attributeError("srcs", String.format(
@@ -239,15 +246,15 @@ public final class CcCommon {
               + "' from target '" + target.getLabel() + "' is not allowed in hdrs");
           continue;
         }
-        Label oldLabel = map.put(artifact, provider.getLabel());
-        if (oldLabel != null && !oldLabel.equals(provider.getLabel())) {
+        Label oldLabel = map.put(artifact, target.getLabel());
+        if (oldLabel != null && !oldLabel.equals(target.getLabel())) {
           ruleContext.attributeWarning(
               "hdrs",
               String.format(
                   "Artifact '%s' is duplicated (through '%s' and '%s')",
                   artifact.getExecPathString(),
                   oldLabel,
-                  provider.getLabel()));
+                  target.getLabel()));
         }
       }
     }
@@ -350,15 +357,15 @@ public final class CcCommon {
     List<PathFragment> result = new ArrayList<>();
     // The package directory of the rule contributes includes. Note that this also covers all
     // non-subpackage sub-directories.
-    PathFragment rulePackage = ruleContext.getLabel().getPackageIdentifier().getPathFragment();
+    PathFragment rulePackage = ruleContext.getLabel().getPackageIdentifier().getSourceRoot();
     result.add(rulePackage);
 
     // Gather up all the dirs from the rule's srcs as well as any of the srcs outputs.
     if (hasAttribute("srcs", BuildType.LABEL_LIST)) {
-      for (FileProvider src :
-          ruleContext.getPrerequisites("srcs", Mode.TARGET, FileProvider.class)) {
-        PathFragment packageDir = src.getLabel().getPackageIdentifier().getPathFragment();
-        for (Artifact a : src.getFilesToBuild()) {
+      for (TransitiveInfoCollection src :
+          ruleContext.getPrerequisitesIf("srcs", Mode.TARGET, FileProvider.class)) {
+        PathFragment packageDir = src.getLabel().getPackageIdentifier().getSourceRoot();
+        for (Artifact a : src.getProvider(FileProvider.class).getFilesToBuild()) {
           result.add(packageDir);
           // Attempt to gather subdirectories that might contain include files.
           result.add(a.getRootRelativePath().getParentDirectory());
@@ -369,7 +376,7 @@ public final class CcCommon {
     // Add in any 'includes' attribute values as relative path fragments
     if (ruleContext.getRule().isAttributeValueExplicitlySpecified("includes")) {
       PathFragment packageFragment = ruleContext.getLabel().getPackageIdentifier()
-          .getPathFragment();
+          .getSourceRoot();
       // For now, anything with an 'includes' needs a blanket declaration
       result.add(packageFragment.getRelative("**"));
     }
@@ -377,25 +384,9 @@ public final class CcCommon {
   }
 
   List<PathFragment> getSystemIncludeDirs() {
-    // Add in any 'includes' attribute values as relative path fragments
-    if (!ruleContext.getRule().isAttributeValueExplicitlySpecified("includes")
-        || !cppConfiguration.useIsystemForIncludes()) {
-      return ImmutableList.of();
-    }
-    return getIncludeDirsFromIncludesAttribute();
-  }
-
-  List<PathFragment> getIncludeDirs() {
-    if (!ruleContext.getRule().isAttributeValueExplicitlySpecified("includes")
-        || cppConfiguration.useIsystemForIncludes()) {
-      return ImmutableList.of();
-    }
-    return getIncludeDirsFromIncludesAttribute();
-  }
-
-  private List<PathFragment> getIncludeDirsFromIncludesAttribute() {
     List<PathFragment> result = new ArrayList<>();
-    PathFragment packageFragment = ruleContext.getLabel().getPackageIdentifier().getPathFragment();
+    PackageIdentifier packageIdentifier = ruleContext.getLabel().getPackageIdentifier();
+    PathFragment packageFragment = packageIdentifier.getSourceRoot();
     for (String includesAttr : ruleContext.attributes().get("includes", Type.STRING_LIST)) {
       includesAttr = ruleContext.expandMakeVariables("includes", includesAttr);
       if (includesAttr.startsWith("/")) {
@@ -408,7 +399,15 @@ public final class CcCommon {
         ruleContext.attributeError("includes",
             "Path references a path above the execution root.");
       }
-      if (!includesPath.startsWith(packageFragment)) {
+      if (includesPath.segmentCount() == 0) {
+        ruleContext.attributeError(
+            "includes",
+            "'"
+                + includesAttr
+                + "' resolves to the workspace root, which would allow this rule and all of its "
+                + "transitive dependents to include any file in your workspace. Please include only"
+                + " what you need");
+      } else if (!includesPath.startsWith(packageFragment)) {
         ruleContext.attributeWarning(
             "includes",
             "'"
@@ -419,6 +418,17 @@ public final class CcCommon {
                 + packageFragment
                 + "'. This will be an error in the future");
         // TODO(janakr): Add a link to a page explaining the problem and fixes?
+      } else if (packageIdentifier.getRepository().isMain()
+          && !includesPath.startsWith(RuleClass.THIRD_PARTY_PREFIX)) {
+        ruleContext.attributeWarning(
+            "includes",
+            "'"
+                + includesAttr
+                + "' resolves to '"
+                + includesPath
+                + "' not in '"
+                + RuleClass.THIRD_PARTY_PREFIX
+                + "'. This will be an error in the future");
       }
       result.add(includesPath);
       result.add(ruleContext.getConfiguration().getGenfilesFragment().getRelative(includesPath));
@@ -440,11 +450,12 @@ public final class CcCommon {
       for (FileProvider provider :
           ruleContext.getPrerequisites("srcs", Mode.TARGET, FileProvider.class)) {
         prerequisites.addAll(
-            FileType.filter(provider.getFilesToBuild(), CcLibraryHelper.SOURCE_TYPES));
+            FileType.filter(
+                provider.getFilesToBuild(), SourceCategory.CC_AND_OBJC.getSourceTypes()));
       }
     }
     prerequisites.addTransitive(context.getDeclaredIncludeSrcs());
-    prerequisites.addTransitive(context.getAdditionalInputs());
+    prerequisites.addTransitive(context.getAdditionalInputs(CppHelper.usePic(ruleContext, false)));
     return prerequisites.build();
   }
 
@@ -462,8 +473,8 @@ public final class CcCommon {
    * @param preserveName true if filename should be preserved, false - mangled.
    * @return mangled symlink artifact.
    */
-  public LibraryToLink getDynamicLibrarySymlink(Artifact library, boolean preserveName) {
-    return SolibSymlinkAction.getDynamicLibrarySymlink(
+  public Artifact getDynamicLibrarySymlink(Artifact library, boolean preserveName) {
+    return  SolibSymlinkAction.getDynamicLibrarySymlink(
         ruleContext, library, preserveName, true, ruleContext.getConfiguration());
   }
 
@@ -484,7 +495,17 @@ public final class CcCommon {
         ? InstrumentedFilesProviderImpl.EMPTY
         : InstrumentedFilesCollector.collect(
             ruleContext, CppRuleClasses.INSTRUMENTATION_SPEC, CC_METADATA_COLLECTOR, files,
+            CppHelper.getGcovFilesIfNeeded(ruleContext),
+            CppHelper.getCoverageEnvironmentIfNeeded(ruleContext),
             withBaselineCoverage);
+  }
+
+  private static String getHostOrNonHostFeature(RuleContext ruleContext) {
+    if (ruleContext.getConfiguration().isHostConfiguration()) {
+      return "host";
+    } else {
+      return "nonhost";
+    }
   }
 
   /**
@@ -494,12 +515,14 @@ public final class CcCommon {
    * @param ruleSpecificRequestedFeatures features that will be requested, and thus be always
    * enabled if the toolchain supports them.
    * @param ruleSpecificUnsupportedFeatures features that are not supported in the current context.
+   * @param sourceCategory the source category for this build.
    * @return the feature configuration for the given {@code ruleContext}.
    */
   public static FeatureConfiguration configureFeatures(
       RuleContext ruleContext,
       Set<String> ruleSpecificRequestedFeatures,
       Set<String> ruleSpecificUnsupportedFeatures,
+      SourceCategory sourceCategory,
       CcToolchainProvider toolchain) {
     ImmutableSet.Builder<String> unsupportedFeaturesBuilder = ImmutableSet.builder();
     unsupportedFeaturesBuilder.addAll(ruleSpecificUnsupportedFeatures);
@@ -514,14 +537,19 @@ public final class CcCommon {
     }
     Set<String> unsupportedFeatures = unsupportedFeaturesBuilder.build();
     ImmutableSet.Builder<String> requestedFeatures = ImmutableSet.builder();
-    for (String feature : Iterables.concat(
-        ImmutableSet.of(toolchain.getCompilationMode().toString()), DEFAULT_FEATURES,
-        ruleContext.getFeatures())) {
+    for (String feature :
+        Iterables.concat(
+            ImmutableSet.of(toolchain.getCompilationMode().toString()),
+            ImmutableSet.of(getHostOrNonHostFeature(ruleContext)),
+            DEFAULT_FEATURES,
+            ruleContext.getFeatures())) {
       if (!unsupportedFeatures.contains(feature)) {
         requestedFeatures.add(feature);
       }
     }
     requestedFeatures.addAll(ruleSpecificRequestedFeatures);
+
+    requestedFeatures.addAll(sourceCategory.getActionConfigSet());
 
     FeatureConfiguration configuration =
         toolchain.getFeatures().getFeatureConfiguration(requestedFeatures.build());
@@ -536,27 +564,44 @@ public final class CcCommon {
     }
     return configuration; 
   }
-  
+ 
   /**
    * Creates a feature configuration for a given rule.
    *
    * @param ruleContext the context of the rule we want the feature configuration for.
    * @param toolchain the toolchain we want the feature configuration for.
+   * @param sourceCategory the category of sources to be used in this build.
    * @return the feature configuration for the given {@code ruleContext}.
    */
   public static FeatureConfiguration configureFeatures(
-      RuleContext ruleContext, CcToolchainProvider toolchain) {
+      RuleContext ruleContext, CcToolchainProvider toolchain, SourceCategory sourceCategory) {
     return configureFeatures(
-        ruleContext, ImmutableSet.<String>of(), ImmutableSet.<String>of(), toolchain);
+        ruleContext,
+        ImmutableSet.<String>of(),
+        ImmutableSet.<String>of(),
+        sourceCategory,
+        toolchain);
   }
 
   /**
    * Creates a feature configuration for a given rule.
    *
+   * @param ruleContext the context of the rule we want the feature configuraiton for.
+   * @param sourceCategory the category of sources to be used in this build.
+   * @return the feature configuration for the given {@code ruleContext}.
+   */
+  public static FeatureConfiguration configureFeatures(
+      RuleContext ruleContext, SourceCategory sourceCategory) {
+    return configureFeatures(ruleContext, CppHelper.getToolchain(ruleContext), sourceCategory);
+  }
+
+  /**
+   * Creates a feature configuration for a given rule.  Assumes strictly cc sources.
+   *
    * @param ruleContext the context of the rule we want the feature configuration for.
    * @return the feature configuration for the given {@code ruleContext}.
    */
   public static FeatureConfiguration configureFeatures(RuleContext ruleContext) {
-    return configureFeatures(ruleContext, CppHelper.getToolchain(ruleContext));
+    return configureFeatures(ruleContext, SourceCategory.CC);
   }
 }

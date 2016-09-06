@@ -17,18 +17,16 @@ package com.google.devtools.build.java.turbine.javac;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.buildjar.javac.JavacOptions;
 import com.google.devtools.build.buildjar.javac.plugins.dependency.DependencyModule;
 import com.google.devtools.build.buildjar.javac.plugins.dependency.DependencyModule.StrictJavaDeps;
 import com.google.devtools.build.buildjar.javac.plugins.dependency.StrictJavaDepsPlugin;
 import com.google.devtools.build.java.turbine.TurbineOptions;
 import com.google.devtools.build.java.turbine.TurbineOptionsParser;
+import com.google.devtools.build.java.turbine.javac.JavacTurbineCompileRequest.Prune;
 import com.google.devtools.build.java.turbine.javac.ZipOutputFileManager.OutputFileObject;
-
 import com.sun.tools.javac.util.Context;
-
-import org.objectweb.asm.ClassReader;
-import org.objectweb.asm.ClassWriter;
-
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -38,20 +36,25 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Enumeration;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
-
 import javax.tools.StandardLocation;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.FieldVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 /**
  * An header compiler implementation based on javac.
@@ -66,13 +69,13 @@ public class JavacTurbine implements AutoCloseable {
   }
 
   public static Result compile(TurbineOptions turbineOptions) throws IOException {
-    try (JavacTurbine turbine = new JavacTurbine(turbineOptions)) {
+    try (JavacTurbine turbine = new JavacTurbine(new PrintWriter(System.err), turbineOptions)) {
       return turbine.compile();
     }
   }
 
   /** A header compilation result. */
-  enum Result {
+  public enum Result {
     /** The compilation succeeded with the reduced classpath optimization. */
     OK_WITH_REDUCED_CLASSPATH(true),
 
@@ -88,11 +91,11 @@ public class JavacTurbine implements AutoCloseable {
       this.ok = ok;
     }
 
-    boolean ok() {
+    public boolean ok() {
       return ok;
     }
 
-    int exitCode() {
+    public int exitCode() {
       return ok ? 0 : 1;
     }
   }
@@ -110,21 +113,20 @@ public class JavacTurbine implements AutoCloseable {
     this.turbineOptions = turbineOptions;
   }
 
-  public JavacTurbine(TurbineOptions turbineOptions) {
-    this(new PrintWriter(System.err, true), turbineOptions);
-  }
-
   Result compile() throws IOException {
     Path tmpdir = Paths.get(turbineOptions.tempDir());
     Files.createDirectories(tmpdir);
 
     ImmutableList.Builder<String> argbuilder = ImmutableList.builder();
 
-    addLanguageLevel(argbuilder, turbineOptions.javacOpts());
+    argbuilder.addAll(JavacOptions.removeBazelSpecificFlags(turbineOptions.javacOpts()));
 
     // Disable compilation of implicit source files.
     // This is insurance: the sourcepath is empty, so we don't expect implicit sources.
     argbuilder.add("-implicit:none");
+
+    // Disable debug info
+    argbuilder.add("-g:none");
 
     ImmutableList<Path> processorpath;
     if (!turbineOptions.processors().isEmpty()) {
@@ -147,49 +149,51 @@ public class JavacTurbine implements AutoCloseable {
             .setBootClassPath(asPaths(turbineOptions.bootClassPath()))
             .setProcessorClassPath(processorpath);
 
-    StrictJavaDeps strictDepsMode = StrictJavaDeps.valueOf(turbineOptions.strictDepsMode());
+    if (!Collections.disjoint(
+        turbineOptions.processors(), turbineOptions.blacklistedProcessors())) {
+      requestBuilder.setPrune(Prune.NO);
+    }
 
-    DependencyModule dependencyModule = buildDependencyModule(turbineOptions, strictDepsMode);
+    // JavaBuilder exempts some annotation processors from Strict Java Deps enforcement.
+    // To avoid having to apply the same exemptions here, we just ignore strict deps errors
+    // and leave enforcement to JavaBuilder.
+    DependencyModule dependencyModule = buildDependencyModule(turbineOptions, StrictJavaDeps.WARN);
+
+    if (sources.isEmpty()) {
+      // accept compilations with an empty source list for compatibility with JavaBuilder
+      emitClassJar(
+          Paths.get(turbineOptions.outputFile()), ImmutableMap.<String, OutputFileObject>of());
+      dependencyModule.emitDependencyInformation(/*classpath=*/ "", /*successful=*/ true);
+      return Result.OK_WITH_REDUCED_CLASSPATH;
+    }
 
     Result result = Result.ERROR;
     JavacTurbineCompileResult compileResult;
     List<String> actualClasspath;
 
-    if (strictDepsMode != StrictJavaDeps.OFF) {
+    List<String> originalClasspath = turbineOptions.classPath();
+    List<String> compressedClasspath =
+        dependencyModule.computeStrictClasspath(turbineOptions.classPath());
 
-      List<String> originalClasspath = turbineOptions.classPath();
-      List<String> compressedClasspath =
-          dependencyModule.computeStrictClasspath(turbineOptions.classPath());
+    requestBuilder.setStrictDepsPlugin(new StrictJavaDepsPlugin(dependencyModule));
 
-      requestBuilder.setStrictDepsPlugin(new StrictJavaDepsPlugin(dependencyModule));
-
-      {
-        // compile with reduced classpath
-        actualClasspath = compressedClasspath;
-        requestBuilder.setClassPath(asPaths(actualClasspath));
-        compileResult = JavacTurbineCompiler.compile(requestBuilder.build());
-        if (compileResult.success()) {
-          result = Result.OK_WITH_REDUCED_CLASSPATH;
-          context = compileResult.context();
-        }
+    {
+      // compile with reduced classpath
+      actualClasspath = compressedClasspath;
+      requestBuilder.setClassPath(asPaths(actualClasspath));
+      compileResult = JavacTurbineCompiler.compile(requestBuilder.build());
+      if (compileResult.success()) {
+        result = Result.OK_WITH_REDUCED_CLASSPATH;
+        context = compileResult.context();
       }
+    }
 
-      if (!compileResult.success() && hasRecognizedError(compileResult.output())) {
-        // fall back to transitive classpath
-        deleteRecursively(tmpdir);
-        extractSourceJars(turbineOptions, tmpdir);
+    if (!compileResult.success() && hasRecognizedError(compileResult.output())) {
+      // fall back to transitive classpath
+      deleteRecursively(tmpdir);
+      extractSourceJars(turbineOptions, tmpdir);
 
-        actualClasspath = originalClasspath;
-        requestBuilder.setClassPath(asPaths(actualClasspath));
-        compileResult = JavacTurbineCompiler.compile(requestBuilder.build());
-        if (compileResult.success()) {
-          result = Result.OK_WITH_FULL_CLASSPATH;
-          context = compileResult.context();
-        }
-      }
-
-    } else {
-      actualClasspath = turbineOptions.classPath();
+      actualClasspath = originalClasspath;
       requestBuilder.setClassPath(asPaths(actualClasspath));
       compileResult = JavacTurbineCompiler.compile(requestBuilder.build());
       if (compileResult.success()) {
@@ -198,16 +202,13 @@ public class JavacTurbine implements AutoCloseable {
       }
     }
 
-    if (!result.ok()) {
-      out.println(compileResult.output());
-      return result;
+    if (result.ok()) {
+      emitClassJar(Paths.get(turbineOptions.outputFile()), compileResult.files());
+      dependencyModule.emitDependencyInformation(
+          CLASSPATH_JOINER.join(actualClasspath), compileResult.success());
     }
 
-    emitClassJar(Paths.get(turbineOptions.outputFile()), compileResult);
-    dependencyModule.emitUsedClasspath(CLASSPATH_JOINER.join(actualClasspath));
-    dependencyModule.emitDependencyInformation(
-        CLASSPATH_JOINER.join(actualClasspath), compileResult.success());
-
+    out.print(compileResult.output());
     return result;
   }
 
@@ -216,7 +217,7 @@ public class JavacTurbine implements AutoCloseable {
     DependencyModule.Builder dependencyModuleBuilder =
         new DependencyModule.Builder()
             .setReduceClasspath()
-            .setTargetLabel(turbineOptions.targetLabel())
+            .setTargetLabel(turbineOptions.targetLabel().orNull())
             .addDepsArtifacts(turbineOptions.depsArtifacts())
             .setStrictJavaDeps(strictDepsMode.toString())
             .addDirectMappings(turbineOptions.directJarsToTargets())
@@ -230,20 +231,23 @@ public class JavacTurbine implements AutoCloseable {
   }
 
   /** Write the class output from a successful compilation to the output jar. */
-  private static void emitClassJar(Path outputJar, JavacTurbineCompileResult result)
+  private static void emitClassJar(Path outputJar, ImmutableMap<String, OutputFileObject> files)
       throws IOException {
     try (OutputStream fos = Files.newOutputStream(outputJar);
         ZipOutputStream zipOut =
             new ZipOutputStream(new BufferedOutputStream(fos, ZIPFILE_BUFFER_SIZE))) {
       boolean hasEntries = false;
-      for (Map.Entry<String, OutputFileObject> entry : result.files().entrySet()) {
+      for (Map.Entry<String, OutputFileObject> entry : files.entrySet()) {
         if (entry.getValue().location != StandardLocation.CLASS_OUTPUT) {
           continue;
         }
         String name = entry.getKey();
         byte[] bytes = entry.getValue().asBytes();
+        if (bytes == null) {
+          continue;
+        }
         if (name.endsWith(".class")) {
-          bytes = removeCode(bytes);
+          bytes = processBytecode(bytes);
         }
         ZipUtil.storeEntry(name, bytes, zipOut);
         hasEntries = true;
@@ -256,18 +260,56 @@ public class JavacTurbine implements AutoCloseable {
   }
 
   /**
-   * Strip any remaining code attributes.
+   * Remove code attributes and private members.
    *
    * <p>Most code will already have been removed after parsing, but the bytecode will still
    * contain e.g. lowered class and instance initializers.
    */
-  // TODO(cushon): add additional stripping to produce ijar-compatible output,
-  // e.g. removing private members.
-  private static byte[] removeCode(byte[] bytes) {
+  private static byte[] processBytecode(byte[] bytes) {
     ClassWriter cw = new ClassWriter(0);
     new ClassReader(bytes)
-        .accept(cw, ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES | ClassReader.SKIP_DEBUG);
+        .accept(
+            new PrivateMemberPruner(cw),
+            ClassReader.SKIP_CODE | ClassReader.SKIP_FRAMES | ClassReader.SKIP_DEBUG);
     return cw.toByteArray();
+  }
+
+  /**
+   * Prune private members.
+   *
+   * <p>Like ijar, turbine prunes private fields and members to improve caching
+   * and reduce output size.
+   *
+   * <p>This is not always a safe optimization: it can prevent javac from emitting
+   * diagnostics e.g. when a public member is hidden by a private member which has
+   * then pruned. The impact of that is believed to be small, and as long as ijar
+   * continues to prune private members turbine should do the same for compatibility.
+   *
+   * <p>Some of this work could be done during tree pruning, but it's not completely
+   * trivial to detect private members at that point (e.g. with implicit modifiers).
+   */
+  static class PrivateMemberPruner extends ClassVisitor {
+    public PrivateMemberPruner(ClassVisitor cv) {
+      super(Opcodes.ASM5, cv);
+    }
+
+    @Override
+    public FieldVisitor visitField(
+        int access, String name, String desc, String signature, Object value) {
+      if ((access & Opcodes.ACC_PRIVATE) == Opcodes.ACC_PRIVATE) {
+        return null;
+      }
+      return super.visitField(access, name, desc, signature, value);
+    }
+
+    @Override
+    public MethodVisitor visitMethod(
+        int access, String name, String desc, String signature, String[] exceptions) {
+      if ((access & Opcodes.ACC_PRIVATE) == Opcodes.ACC_PRIVATE) {
+        return null;
+      }
+      return super.visitMethod(access, name, desc, signature, exceptions);
+    }
   }
 
   /** Convert string elements of a classpath to {@link Path}s. */
@@ -277,27 +319,6 @@ public class JavacTurbine implements AutoCloseable {
       result.add(Paths.get(element));
     }
     return result.build();
-  }
-
-  /** Extract the language level from the javacopts. */
-  @VisibleForTesting
-  static void addLanguageLevel(
-      ImmutableList.Builder<String> javacArgs, Iterable<String> defaultJavacopts) {
-    Iterator<String> it = defaultJavacopts.iterator();
-    while (it.hasNext()) {
-      String curr = it.next();
-      switch (curr) {
-        case "-source":
-        case "-target":
-          if (it.hasNext()) {
-            javacArgs.add(curr);
-            javacArgs.add(it.next());
-          }
-          break;
-        default:
-          break;
-      }
-    }
   }
 
   /** Extra sources in srcjars to disk. */
@@ -318,7 +339,8 @@ public class JavacTurbine implements AutoCloseable {
           }
           Path dest = tmpdir.resolve(ze.getName());
           Files.createDirectories(dest.getParent());
-          Files.copy(zf.getInputStream(ze), dest);
+          // allow overlapping source jars for compatibility with JavaBuilder (see b/26688023)
+          Files.copy(zf.getInputStream(ze), dest, StandardCopyOption.REPLACE_EXISTING);
           extractedSources.add(dest.toAbsolutePath().toString());
         }
       }
@@ -345,6 +367,7 @@ public class JavacTurbine implements AutoCloseable {
 
   @Override
   public void close() throws IOException {
+    out.flush();
     deleteRecursively(Paths.get(turbineOptions.tempDir()));
   }
 

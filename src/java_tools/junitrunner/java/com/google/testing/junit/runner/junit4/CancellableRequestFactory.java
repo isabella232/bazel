@@ -14,8 +14,6 @@
 
 package com.google.testing.junit.runner.junit4;
 
-import com.google.common.base.Preconditions;
-import com.google.inject.Singleton;
 import com.google.testing.junit.junit4.runner.MemoizingRequest;
 import com.google.testing.junit.junit4.runner.RunNotifierWrapper;
 
@@ -24,6 +22,9 @@ import org.junit.runner.Request;
 import org.junit.runner.Runner;
 import org.junit.runner.notification.RunNotifier;
 import org.junit.runner.notification.StoppedByUserException;
+
+import javax.inject.Inject;
+import javax.inject.Singleton;
 
 /**
  * Creates requests that can be cancelled.
@@ -34,13 +35,18 @@ class CancellableRequestFactory {
   private volatile ThreadSafeRunNotifier currentNotifier;
   private volatile boolean cancelRequested = false;
 
+  @Inject
+  CancellableRequestFactory() {}
+
   /**
    * Creates a request that can be cancelled. Can only be called once.
    *
    * @param delegate request to wrap
    */
   public Request createRequest(Request delegate) {
-    Preconditions.checkState(!requestCreated, "a request was already created");
+    if (requestCreated) {
+      throw new IllegalStateException("a request was already created");
+    }
     return new MemoizingRequest(delegate) {
       @Override
       protected Runner createRunner(Request delegate) {

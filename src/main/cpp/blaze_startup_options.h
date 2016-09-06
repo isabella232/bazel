@@ -44,9 +44,6 @@ class BlazeStartupOptions {
   ~BlazeStartupOptions();
   BlazeStartupOptions& operator=(const BlazeStartupOptions &rhs);
 
-  // Returns the capitalized name of this binary.
-  string GetProductName();
-
   // Parses a single argument, either from the command line or from the .blazerc
   // "startup" options.
   //
@@ -93,6 +90,20 @@ class BlazeStartupOptions {
   // the startup options.
   string GetJvm();
 
+  // Returns the executable used to start the Blaze server, typically the given
+  // JVM.
+  string GetExe(const string &jvm, const string &jar_path);
+
+  // Adds JVM prefix flags to be set. These will be added before all other
+  // JVM flags.
+  void AddJVMArgumentPrefix(const string &javabase,
+    std::vector<string> *result) const;
+
+  // Adds JVM suffix flags. These will be added after all other JVM flags, and
+  // just before the Blaze server startup flags.
+  void AddJVMArgumentSuffix(const string &real_install_dir,
+    const string &jar_path, std::vector<string> *result) const;
+
   // Adds JVM tuning flags for Blaze.
   //
   // Returns the exit code after this operation. "error" will be set to a
@@ -100,6 +111,9 @@ class BlazeStartupOptions {
   blaze_exit_code::ExitCode AddJVMArguments(
     const string &host_javabase, std::vector<string> *result,
     const std::vector<string> &user_options, string *error) const;
+
+  // The capitalized name of this binary.
+  string product_name;
 
   // Blaze's output base.  Everything is relative to this.  See
   // the BlazeDirectories Java class for details.
@@ -148,6 +162,8 @@ class BlazeStartupOptions {
 
   bool oom_more_eagerly;
 
+  int oom_more_eagerly_threshold;
+
   // If true, Blaze will listen to OS-level file change notifications.
   bool watchfs;
 
@@ -187,8 +203,10 @@ class BlazeStartupOptions {
   // Returns the basename for the rc file.
   static string RcBasename();
 
-  // Returns the path for the system-wide rc file.
-  static string SystemWideRcPath();
+  // Returns the candidate pathnames for the RC files.
+  static void FindCandidateBlazercPaths(const string& workspace,
+                                        const string& cwd, const string& arg0,
+                                        std::vector<string>* result);
 
   // Returns the candidate pathnames for the RC file in the workspace,
   // the first readable one of which will be chosen.
@@ -208,8 +226,9 @@ class BlazeStartupOptions {
   // the --host_javabase option.
   string GetHostJavabase();
 
-  // Port for web status server, 0 to disable
-  int webstatus_port;
+  // Port for gRPC command server. 0 means let the kernel choose, -1 means no
+  // gRPC command server.
+  int command_port;
 
   // Invocation policy proto. May be NULL.
   const char* invocation_policy;

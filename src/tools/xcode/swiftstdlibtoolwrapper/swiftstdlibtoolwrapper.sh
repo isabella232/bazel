@@ -21,16 +21,17 @@
 
 set -eu
 
-MY_LOCATION=${MY_LOCATION:-"$0.runfiles/external/bazel_tools/tools/objc"}
+MY_LOCATION=${MY_LOCATION:-"$0.runfiles/bazel_tools/tools/objc"}
 REALPATH="${MY_LOCATION}/realpath"
 WRAPPER="${MY_LOCATION}/xcrunwrapper.sh"
 
 OUTZIP=$("${REALPATH}" "$1")
-shift 1
+PATH_INSIDE_ZIP="$2"
+shift 2
 TEMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/swiftstdlibtoolZippingOutput.XXXXXX")
 trap "rm -rf \"$TEMPDIR\"" EXIT
 
-FULLPATH="$TEMPDIR/Frameworks"
+FULLPATH="$TEMPDIR/$PATH_INSIDE_ZIP"
 
 $WRAPPER swift-stdlib-tool --copy --verbose --destination "$FULLPATH" "$@"
 

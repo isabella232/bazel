@@ -17,11 +17,13 @@ package com.google.devtools.build.lib.analysis;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionRegistry;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.MiddlemanFactory;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
@@ -29,6 +31,11 @@ import com.google.devtools.build.skyframe.SkyFunction;
 /**
  * The set of services that are provided to {@link ConfiguredTarget} objects
  * during initialization.
+ *
+ * <p>These objects should not outlast the analysis phase. Do not pass them to {@link Action}
+ * objects or other persistent objects. There are internal tests to ensure that AnalysisEnvironment
+ * objects are not persisted that check the name of this class, so update those tests you change the
+ * names of any implementation of this class.
  */
 public interface AnalysisEnvironment extends ActionRegistry {
   /**
@@ -100,13 +107,13 @@ public interface AnalysisEnvironment extends ActionRegistry {
    * If the artifact was created in another analysis environment (e.g. by a different configured
    * target instance) or the artifact is a source artifact, it returns null.
    */
-  Action getLocalGeneratingAction(Artifact artifact);
+  ActionAnalysisMetadata getLocalGeneratingAction(Artifact artifact);
 
   /**
    * Returns the actions that were registered so far with this analysis environment, that is, all
    * the actions that were created by the current target being analyzed.
    */
-  Iterable<Action> getRegisteredActions();
+  Iterable<ActionAnalysisMetadata> getRegisteredActions();
 
   /**
    * Returns the Skyframe SkyFunction.Environment if available. Otherwise, null.
@@ -120,21 +127,23 @@ public interface AnalysisEnvironment extends ActionRegistry {
    * Returns the Artifact that is used to hold the non-volatile workspace status for the current
    * build request.
    */
-  Artifact getStableWorkspaceStatusArtifact();
+  Artifact getStableWorkspaceStatusArtifact() throws InterruptedException;
 
   /**
-   * Returns the Artifact that is used to hold the volatile workspace status (e.g. build
-   * changelist) for the current build request.
+   * Returns the Artifact that is used to hold the volatile workspace status (e.g. build changelist)
+   * for the current build request.
    */
-  Artifact getVolatileWorkspaceStatusArtifact();
+  Artifact getVolatileWorkspaceStatusArtifact() throws InterruptedException;
 
   /**
    * Returns the Artifacts that contain the workspace status for the current build request.
    *
-   * @param ruleContext the rule to use for error reporting and to determine the
-   *        configuration
+   * @param ruleContext the rule to use for error reporting.
+   * @param config the current build configuration.
    */
-  ImmutableList<Artifact> getBuildInfo(RuleContext ruleContext, BuildInfoKey key);
+  ImmutableList<Artifact> getBuildInfo(
+      RuleContext ruleContext, BuildInfoKey key, BuildConfiguration config)
+      throws InterruptedException;
 
   /**
    * Returns the set of orphan Artifacts (i.e. Artifacts without generating action). Should only be

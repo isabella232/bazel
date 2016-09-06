@@ -86,6 +86,15 @@ public class OptionsParserTest {
     public String baz;
   }
 
+  /** Subclass of an options class. */
+  public static class ExampleBazSubclass extends ExampleBaz {
+
+    @Option(name = "baz_subclass",
+            category = "one",
+            defaultValue = "defaultBazSubclass")
+    public String bazSubclass;
+  }
+
   /**
    * Example with empty to null string converter
    */
@@ -94,22 +103,6 @@ public class OptionsParserTest {
             defaultValue = "defaultBoom",
             converter = EmptyToNullStringConverter.class)
     public String boom;
-  }
-
-  /**
-   * Example with multiple default values
-   */
-  public static class ExampleMultiple extends OptionsBase {
-    @Option(name = "multiple",
-        defaultValue = "",
-        defaultMultipleValue = {"a", "b"},
-        allowMultiple = true)
-    public List<String> multiple;
-
-    @Option(name = "emptyMultiple",
-        defaultValue = "",
-        allowMultiple = true)
-    public List<String> emptyMultiple;
   }
 
   public static class StringConverter implements Converter<String> {
@@ -143,6 +136,19 @@ public class OptionsParserTest {
     assertEquals(17, foo.bar);
     ExampleBaz baz = parser.getOptions(ExampleBaz.class);
     assertEquals("oops", baz.baz);
+  }
+
+  @Test
+  public void parseWithOptionsInheritance() throws OptionsParsingException {
+    OptionsParser parser = newOptionsParser(ExampleBazSubclass.class);
+    parser.parse("--baz_subclass=cat", "--baz=dog");
+    ExampleBazSubclass subclassOptions = parser.getOptions(ExampleBazSubclass.class);
+    assertThat(subclassOptions.bazSubclass).isEqualTo("cat");
+    assertThat(subclassOptions.baz).isEqualTo("dog");
+    ExampleBaz options = parser.getOptions(ExampleBaz.class);
+    // This is a test showcasing the lack of functionality for retrieving parsed options at a
+    // superclass type class type. If there's a need for this functionality, we can add it later.
+    assertThat(options).isNull();
   }
 
   @Test
@@ -215,22 +221,6 @@ public class OptionsParserTest {
     ExampleBoom boom = parser.getOptions(ExampleBoom.class);
     // The converted value is intentionally null since boom uses the EmptyToNullStringConverter
     assertNull(boom.boom);
-  }
-
-  @Test
-  public void parseWithMultipleDefaultValues() throws OptionsParsingException {
-    OptionsParser parser = newOptionsParser(ExampleMultiple.class);
-    parser.parse();
-    ExampleMultiple multiple = parser.getOptions(ExampleMultiple.class);
-    assertThat(multiple.multiple).containsExactly("a", "b");
-  }
-
-  @Test
-  public void parseWithEmptyMultipleDefaultValues() throws OptionsParsingException {
-    OptionsParser parser = newOptionsParser(ExampleMultiple.class);
-    parser.parse();
-    ExampleMultiple multiple = parser.getOptions(ExampleMultiple.class);
-    assertThat(multiple.emptyMultiple).isEmpty();
   }
 
   public static class CategoryTest extends OptionsBase {

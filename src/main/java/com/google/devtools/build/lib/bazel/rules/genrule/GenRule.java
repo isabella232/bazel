@@ -42,7 +42,6 @@ import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.List;
 import java.util.Map;
 
@@ -62,7 +61,8 @@ public class GenRule implements RuleConfiguredTargetFactory {
   }
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext) {
+  public ConfiguredTarget create(RuleContext ruleContext)
+      throws RuleErrorException, InterruptedException {
     final List<Artifact> resolvedSrcs = Lists.newArrayList();
 
     final NestedSet<Artifact> filesToBuild =
@@ -149,7 +149,10 @@ public class GenRule implements RuleConfiguredTargetFactory {
         // No need to visit the dependencies of a genrule. They cross from the target into the host
         // configuration, because the dependencies of a genrule are always built for the host
         // configuration.
-        new Runfiles.Builder(ruleContext.getWorkspaceName()).addTransitiveArtifacts(filesToBuild)
+        new Runfiles.Builder(
+            ruleContext.getWorkspaceName(),
+            ruleContext.getConfiguration().legacyExternalRunfiles())
+            .addTransitiveArtifacts(filesToBuild)
             .build());
 
     return new RuleConfiguredTargetBuilder(ruleContext)
@@ -200,7 +203,7 @@ public class GenRule implements RuleConfiguredTargetFactory {
                   dir = ruleContext.getConfiguration().getGenfilesFragment();
                 }
                 PathFragment relPath =
-                    ruleContext.getRule().getLabel().getPackageIdentifier().getPathFragment();
+                    ruleContext.getRule().getLabel().getPackageIdentifier().getSourceRoot();
                 return dir.getRelative(relPath).getPathString();
               }
             } else {

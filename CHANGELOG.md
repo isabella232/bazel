@@ -1,3 +1,202 @@
+## Release 0.3.1 (2016-07-29)
+
+```
+Baseline: 792a9d6
+
+Cherry picks:
+   + 25e5995: Rollback of commit
+              a2770334ea3f3111026eb3e1368586921468710c.
+   + 2479405: Fix NPE with unset maven_jar sha1
+   + 3cf2126: Rewrite the extra action info files if the data within
+              them changes.
+   + 5a9c6b4: JavaBuilder: Reintroduce the -extra_checks flag.
+```
+
+Incompatible changes:
+
+  - Removed predefined Python variable "generic_cpu".
+  - Skylark rules: if you set "outputs" or an attribute to a
+    function, this function must now list its required attributes as
+    parameters (instead of an attribute map).
+  - The host_platform and target_platform entries are not written to
+    the master log anymore.
+  - Bazel requires Hazelcast 3.6 or higher now for remote execution
+    support, because we upgraded our client library and the protocol
+    it uses is incompatible with older versions.
+
+New features:
+
+  - LIPO context (--lipo_context) can now also be a cc_test (in
+    addition to cc_binary)
+
+Important changes:
+
+  - If --android_crosstool_top is set, native code compiled for
+    android will always use --android_compiler and not --compiler in
+    choosing the crosstool toolchain, and will use --android_cpu if
+    --fat_apk_cpu is not set.
+  - Add --instrument_test_targets option.
+  - apple_binary supports a new platform_type attribute, which, if
+    set to "watchos", will build dependencies for Apple's watchOS2.
+  - objc_binary now supports late-loaded dynamic frameworks.
+  - Native Swift rules no longer pull in module maps unconditionally.
+    Use --experimental_objc_enable_module_maps for that.
+  - Merged manifests are guaranteed to have the application element
+    as the last child of the manifest element as required by Android
+    N.
+  - The Android manifest merger is now available as an option for
+    android_binary rules. The merger will honor tools annotations in
+    AndroidManifest.xml and will perform placeholder substitutions
+    using the values specified in android_binary.manifest_values. The
+    merger may be selected by setting the manifest_merger attribute
+    on android_binary.
+  - The progress message would not clear packages that need to be
+    loaded twice.
+  - Remove warning for high value of --jobs.
+  - Use the correct build configuration for shared native deps during
+    Android split transitions.
+  - When building ObjectiveC++, pass the flag -std=gnu++11.
+  - use xcrun simctl instead of iossim to launch the app for "blaze
+    run".
+  - Glob arguments 'exclude' and 'exclude_directories' must be named
+  - Bazel no longer regards an empty file as changed if its mtime has
+    changed.
+
+## Release 0.3.0 (2016-06-10)
+
+```
+Baseline: a9301fa
+
+Cherry picks:
+   + ff30a73: Turn --legacy_external_runfiles back on by default
+   + aeee3b8: Fix delete[] warning on fsevents.cc
+```
+
+Incompatible changes:
+
+  - The --cwarn command line option is not supported anymore. Use
+    --copt instead.
+
+New features:
+
+  - On OSX, --watchfs now uses FsEvents to be notified of changes
+    from the filesystem (previously, this flag had no effect on OS X).
+  - add support for the '-=', '*=', '/=', and'%=' operators to
+    skylark.  Notably, we do not support '|=' because the semantics
+    of skylark sets are sufficiently different from python sets.
+
+Important changes:
+
+  - Use singular form when appropriate in blaze's test result summary
+    message.
+  - Added supported for Android NDK revision 11
+  - --objc_generate_debug_symbols is now deprecated.
+  - swift_library now generates an Objective-C header for its @objc
+    interfaces.
+  - new_objc_provider can now set the USES_SWIFT flag.
+  - objc_framework now supports dynamic frameworks.
+  - Symlinks in zip files are now unzipped correctly by http_archive,
+    download_and_extract, etc.
+  - swift_library is now able to import framework rules such as
+    objc_framework.
+  - Adds "jre_deps" attribute to j2objc_library.
+  - Release apple_binary rule, for creating multi-architecture
+    ("fat") objc/cc binaries and libraries, targeting ios platforms.
+  - Aspects documentation added.
+  - The --ues_isystem_for_includes command line option is not
+    supported anymore.
+  - global function 'provider' is removed from .bzl files. Providers
+    can only be accessed through fields in a 'target' object.
+
+## Release 0.2.3 (2016-05-10)
+
+```
+Baseline: 5a2dd7a
+```
+
+Incompatible changes:
+
+  - All repositories are now directly under the x.runfiles directory
+    in the runfiles tree (previously, external repositories were at
+    x.runfiles/main-repo/external/other-repo. This simplifies
+    handling remote repository runfiles considerably, but will break
+    existing references to external repository runfiles.
+    Furthermore, if a Bazel project does not provide a workspace name
+    in the WORKSPACE file, Bazel will now default to using __main__
+    as the workspace name (instead of "", as previously). The
+    repository's runfiles will appear under x.runfiles/__main__/.
+  - Bazel does not embed protocol buffer-related rules anymore.
+  - It is now an error for a cc rule's includes attribute to point to
+    the workspace root.
+  - Bazel warns if a cc rule's includes attribute points out of
+    third_party.
+  - Removed cc_* attributes: abi / abi_deps. Use select() instead.
+
+New features:
+
+  - select({"//some:condition": None }) is now possible (this "unsets"
+    the attribute).
+
+Important changes:
+
+  - java_import now allows its 'jars' attribute to be empty.
+  - adds crunch_png attribute to android_binary
+  - Replace --java_langtools, --javabuilder_top, --singlejar_top,
+    --genclass_top, and --ijar_top with
+    java_toolchain.{javac,javabuilder,singlejar,genclass,ijar}
+  - External repository correctness fix: adding a new file/directory
+    as a child of a new_local_repository is now noticed.
+  - iOS apps are signed with get-task-allow=1 unless building with -c
+    opt.
+  - Generate debug symbols (-g) is enabled for all dbg builds of
+    objc_ rules.
+  - Bazel's workspace name is now io_bazel. If you are using Bazel's
+    source as an external repository, then you may want to update the
+    name you're referring to it as or you'll begin seeing warnings
+    about name mismatches in your code.
+  - Fixes integer overflow in J2ObjC sources to be Java-compatible.
+  - A FlagPolicy specified via the --invocation_policy flag will now
+    match the current command if any of its commands matches any of
+    the commands the current command inherits from, as opposed to
+    just the current command.
+  - The key for the map to cc_toolchain_suite.toolchains is now a
+    string of the form "cpu|compiler" (previously, it was just "cpu").
+  - Fix interaction between LIPO builds and C++ header modules.
+  - Ctrl-C will now interrupt a download, instead of waiting for it to
+    finish.
+  - Proxy settings can now be specified in http_proxy and https_proxy
+    environment variables (not just HTTP_PROXY and HTTPS_PROXY).
+  - Skylark targets can now read include directories from
+    ObjcProvider.
+  - Expose parameterized aspects to Skylark.
+  - Support alwayslink cc_library dependencies in objc binaries.
+  - Import cc_library dependencies in generated Xcode project.
+
+## Release 0.2.2b (2016-04-22)
+
+```
+Baseline: 759bbfe
+
+Cherry picks:
+   + 1250fda: Rollback of commit
+              351475627b9e94e5afdf472cbf465f49c433a25e.
+   + ba8700e: Correctly set up build variables for the correct pic
+              mode for fake_binary rules.
+   + 386f242: Automated [] rollback of commit
+              525fa71b0d6f096e9bfb180f688a4418c4974eb4.
+   + 97e5ab0: Fix cc_configure include path for Frameworks on OS X.
+   + a20352e: cc_configure: always add -B/usr/bin to the list of gcc
+              option
+   + 0b26f44: cc_configure: Add piii to the list of supported
+              cpu_value
+   + 3e4e416: cc_configure: uses which on the CC environment variable
+   + aa3dbd3: cc_configure.bzl: strip end of line when looking for
+              the cpu
+   + 810d60a: cc_configure: Add -B to compiler flag too
+```
+
+Patch release, only includes fixes to C++ auto-configuration.
+
 ## Release 0.2.1 (2016-03-21)
 
 ```

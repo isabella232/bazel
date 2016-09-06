@@ -13,10 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.Executor.ActionContext;
-import com.google.devtools.build.lib.vfs.PathFragment;
 
 /**
  * Action context for symlink tree actions (an action that creates a tree of symlinks).
@@ -29,6 +29,7 @@ public interface SymlinkTreeActionContext extends ActionContext {
   void createSymlinks(
       SymlinkTreeAction action,
       ActionExecutionContext actionExecutionContext,
-      PathFragment shExecutable)
+      ImmutableMap<String, String> shellEnvironment,
+      boolean enableRunfiles)
       throws ActionExecutionException, InterruptedException;
 }

@@ -13,28 +13,33 @@
 // limitations under the License.
 package com.google.devtools.build.android;
 
+import com.android.ide.common.res2.MergingException;
+
 import java.io.IOException;
-import java.nio.file.Path;
 
 /**
  * Represents an Android Resource parsed from an xml or binary file.
  */
-public interface DataResource extends Comparable<DataResource> {
+public interface DataResource extends DataValue {
+  /**
+   * Write as a resource using the supplied {@link AndroidDataWritingVisitor}.
+   */
+  void writeResource(FullyQualifiedName key, AndroidDataWritingVisitor mergedDataWriter)
+      throws IOException, MergingException;
 
   /**
-   * Provides the FullyQualifiedName of the DataResource
+   * Combines these resource together and returns a single resource.
+   * 
+   * @param resource Another resource to be combined with this one.
+   * @return A union of the values of these two resources.
+   * @throws IllegalArgumentException if either resource cannot combine with the other.
    */
-  FullyQualifiedName fullyQualifiedName();
+  DataResource combineWith(DataResource resource);
 
   /**
-   * Provides the Path to the file from which the DataResource was derived.
+   * Queue up writing the resource to the given {@link AndroidResourceClassWriter}.
    */
-  Path source();
-
-  /**
-   * Writes the resource to the given resource directory.
-   * @param newResourceDirectory The new directory for this resource.
-   * @throws IOException if there are issues with writing the resource.
-   */
-  void write(Path newResourceDirectory) throws IOException;
+  void writeResourceToClass(
+      FullyQualifiedName key,
+      AndroidResourceClassWriter resourceClassWriter);
 }

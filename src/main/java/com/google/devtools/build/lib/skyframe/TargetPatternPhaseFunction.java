@@ -20,6 +20,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.pkgcache.CompileOneDependencyTransformer;
@@ -37,14 +38,12 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.ValueOrException;
-
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -54,8 +53,24 @@ import javax.annotation.Nullable;
 final class TargetPatternPhaseFunction implements SkyFunction {
 
   @Override
-  public TargetPatternPhaseValue compute(SkyKey key, Environment env) {
+  public TargetPatternPhaseValue compute(SkyKey key, Environment env) throws InterruptedException {
     TargetPatternList options = (TargetPatternList) key.argument();
+    PackageValue packageValue = null;
+    boolean workspaceError = false;
+    try {
+      packageValue = (PackageValue) env.getValueOrThrow(
+          PackageValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER), NoSuchPackageException.class);
+    } catch (NoSuchPackageException e) {
+      env.getListener().handle(Event.error(e.getMessage()));
+      workspaceError = true;
+    }
+    if (env.valuesMissing()) {
+      return null;
+    }
+    String workspaceName = "";
+    if (!workspaceError) {
+      workspaceName = packageValue.getPackage().getWorkspaceName();
+    }
 
     // Determine targets to build:
     ResolvedTargets<Target> targets = getTargetsToBuild(env,
@@ -163,8 +178,8 @@ final class TargetPatternPhaseFunction implements SkyFunction {
     Set<Target> testSuiteTargets =
         Sets.difference(targets.getTargets(), expandedTargets.getTargets());
     return new TargetPatternPhaseValue(expandedTargets.getTargets(), testsToRun, preExpansionError,
-        expandedTargets.hasError(), filteredTargets, testFilteredTargets,
-        targets.getTargets(), ImmutableSet.copyOf(testSuiteTargets));
+        expandedTargets.hasError() || workspaceError, filteredTargets, testFilteredTargets,
+        targets.getTargets(), ImmutableSet.copyOf(testSuiteTargets), workspaceName);
   }
 
   /**
@@ -174,8 +189,9 @@ final class TargetPatternPhaseFunction implements SkyFunction {
    * @param compileOneDependency if true, enables alternative interpretation of targetPatterns; see
    *     {@link LoadingOptions#compileOneDependency}
    */
-  private static ResolvedTargets<Target> getTargetsToBuild(Environment env,
-      List<String> targetPatterns, String offset, boolean compileOneDependency) {
+  private static ResolvedTargets<Target> getTargetsToBuild(
+      Environment env, List<String> targetPatterns, String offset, boolean compileOneDependency)
+      throws InterruptedException {
     List<SkyKey> patternSkyKeys = new ArrayList<>();
     for (TargetPatternSkyKeyOrException keyOrException :
         TargetPatternValue.keys(targetPatterns, FilteringPolicies.FILTER_MANUAL, offset)) {
@@ -238,8 +254,9 @@ final class TargetPatternPhaseFunction implements SkyFunction {
    * @param targetPatterns the list of command-line target patterns specified by the user
    * @param testFilter the test filter
    */
-  private static ResolvedTargets<Target> determineTests(Environment env,
-      List<String> targetPatterns, String offset, TestFilter testFilter) {
+  private static ResolvedTargets<Target> determineTests(
+      Environment env, List<String> targetPatterns, String offset, TestFilter testFilter)
+      throws InterruptedException {
     List<SkyKey> patternSkyKeys = new ArrayList<>();
     for (TargetPatternSkyKeyOrException keyOrException :
         TargetPatternValue.keys(targetPatterns, FilteringPolicies.FILTER_TESTS, offset)) {

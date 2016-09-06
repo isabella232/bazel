@@ -18,7 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.AnalysisUtils;
@@ -47,17 +47,16 @@ import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector.Local
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
+import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -86,7 +85,7 @@ public class JavaCommon {
     public void collectMetadataArtifacts(Iterable<Artifact> objectFiles,
         AnalysisEnvironment analysisEnvironment, NestedSetBuilder<Artifact> metadataFilesBuilder) {
       for (Artifact artifact : objectFiles) {
-        Action action = analysisEnvironment.getLocalGeneratingAction(artifact);
+        ActionAnalysisMetadata action = analysisEnvironment.getLocalGeneratingAction(artifact);
         if (action instanceof JavaCompileAction) {
           addOutputs(metadataFilesBuilder, action, JavaSemantics.COVERAGE_METADATA);
         }
@@ -175,8 +174,13 @@ public class JavaCommon {
    * Creates an action to aggregate all metadata artifacts into a single
    * &lt;target_name&gt;_instrumented.jar file.
    */
-  public static void createInstrumentedJarAction(RuleContext ruleContext, JavaSemantics semantics,
-      List<Artifact> metadataArtifacts, Artifact instrumentedJar, String mainClass) {
+  public static void createInstrumentedJarAction(
+      RuleContext ruleContext,
+      JavaSemantics semantics,
+      List<Artifact> metadataArtifacts,
+      Artifact instrumentedJar,
+      String mainClass)
+      throws InterruptedException {
     // In Jacoco's setup, metadata artifacts are real jars.
     new DeployArchiveBuilder(semantics, ruleContext)
         .setOutputJar(instrumentedJar)
@@ -260,7 +264,6 @@ public class JavaCommon {
    * (deprecated behaviour for android_library only)
    */
   public JavaCompilationArgs collectJavaCompilationArgs(boolean recursive, boolean isNeverLink,
-      Iterable<SourcesJavaCompilationArgsProvider> compilationArgsFromSources,
       boolean srcLessDepsExport) {
     ClasspathType type = isNeverLink ? ClasspathType.COMPILE_ONLY : ClasspathType.BOTH;
     JavaCompilationArgs.Builder builder = JavaCompilationArgs.builder()
@@ -270,8 +273,7 @@ public class JavaCommon {
     if (recursive || srcLessDepsExport) {
       builder
           .addTransitiveTargets(targetsTreatedAsDeps(ClasspathType.COMPILE_ONLY), recursive, type)
-          .addTransitiveTargets(getRuntimeDeps(ruleContext), recursive, ClasspathType.RUNTIME_ONLY)
-          .addSourcesTransitiveCompilationArgs(compilationArgsFromSources, recursive, type);
+          .addTransitiveTargets(getRuntimeDeps(ruleContext), recursive, ClasspathType.RUNTIME_ONLY);
     }
     return builder.build();
   }
@@ -459,12 +461,24 @@ public class JavaCommon {
     if (launcher != null) {
       javaExecutable = launcher.getRootRelativePath();
     } else {
-      javaExecutable = ruleContext.getFragment(Jvm.class).getJavaExecutable();
+      javaExecutable = ruleContext.getFragment(Jvm.class).getRunfilesJavaExecutable();
     }
 
-    String pathPrefix = javaExecutable.isAbsolute() ? "" : "${JAVA_RUNFILES}/"
-        + ruleContext.getRule().getWorkspaceName() + "/";
-    return "JAVABIN=${JAVABIN:-" + pathPrefix + javaExecutable.getPathString() + "}";
+    if (!javaExecutable.isAbsolute()) {
+      javaExecutable =
+          new PathFragment(new PathFragment(ruleContext.getWorkspaceName()), javaExecutable);
+    }
+    javaExecutable = javaExecutable.normalize();
+
+    if (ruleContext.getConfiguration().runfilesEnabled()) {
+      String prefix = "";
+      if (!javaExecutable.isAbsolute()) {
+        prefix = "${JAVA_RUNFILES}/";
+      }
+      return "JAVABIN=${JAVABIN:-" + prefix + javaExecutable.getPathString() + "}";
+    } else {
+      return "JAVABIN=${JAVABIN:-$(rlocation " + javaExecutable.getPathString() + ")}";
+    }
   }
 
   /**
@@ -624,8 +638,13 @@ public class JavaCommon {
   private static InstrumentedFilesProvider getInstrumentationFilesProvider(RuleContext ruleContext,
       NestedSet<Artifact> filesToBuild, InstrumentationSpec instrumentationSpec) {
     return InstrumentedFilesCollector.collect(
-        ruleContext, instrumentationSpec, JAVA_METADATA_COLLECTOR,
-        filesToBuild, /*withBaselineCoverage*/!TargetUtils.isTestRule(ruleContext.getTarget()));
+        ruleContext,
+        instrumentationSpec,
+        JAVA_METADATA_COLLECTOR,
+        filesToBuild,
+        NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
+        NestedSetBuilder.<Pair<String, String>>emptySet(Order.STABLE_ORDER),
+        /*withBaselineCoverage*/!TargetUtils.isTestRule(ruleContext.getTarget()));
   }
 
   public void addGenJarsProvider(RuleConfiguredTargetBuilder builder,
@@ -667,12 +686,6 @@ public class JavaCommon {
     attributes.addInstrumentationMetadataEntries(args.getInstrumentationMetadata());
   }
 
-  public static Iterable<SourcesJavaCompilationArgsProvider> compilationArgsFromSources(
-      RuleContext ruleContext) {
-    return ruleContext.getPrerequisites("srcs", Mode.TARGET,
-        SourcesJavaCompilationArgsProvider.class);
-  }
-
   /**
    * Adds information about the annotation processors that should be run for this java target to
    * the target attributes.
@@ -684,6 +697,12 @@ public class JavaCommon {
       }
       // Now get the plugin-libraries runtime classpath.
       attributes.addProcessorPath(plugin.getProcessorClasspath());
+
+      // Add api-generating plugins
+      for (String name : plugin.getApiGeneratingProcessorClasses()) {
+        attributes.addApiGeneratingProcessorName(name);
+      }
+      attributes.addApiGeneratingProcessorPath(plugin.getApiGeneratingProcessorClasspath());
     }
   }
 
@@ -718,7 +737,8 @@ public class JavaCommon {
     if (neverLink) {
       return Runfiles.EMPTY;
     }
-    Runfiles.Builder runfilesBuilder = new Runfiles.Builder(ruleContext.getWorkspaceName())
+    Runfiles.Builder runfilesBuilder = new Runfiles.Builder(
+        ruleContext.getWorkspaceName(), ruleContext.getConfiguration().legacyExternalRunfiles())
         .addArtifacts(javaArtifacts.getRuntimeJars());
     runfilesBuilder.addRunfiles(ruleContext, RunfilesProvider.DEFAULT_RUNFILES);
     runfilesBuilder.add(ruleContext, JavaRunfilesProvider.TO_RUNFILES);

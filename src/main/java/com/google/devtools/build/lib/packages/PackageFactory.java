@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.packages;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -33,8 +34,8 @@ import com.google.devtools.build.lib.packages.Globber.BadGlobException;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.packages.Preprocessor.AstAfterPreprocessing;
 import com.google.devtools.build.lib.packages.RuleFactory.BuildLangTypedAttributeValuesMap;
+import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.AssignmentStatement;
 import com.google.devtools.build.lib.syntax.BaseFunction;
@@ -43,7 +44,7 @@ import com.google.devtools.build.lib.syntax.BuiltinFunction;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Environment.Extension;
-import com.google.devtools.build.lib.syntax.Environment.NoSuchVariableException;
+import com.google.devtools.build.lib.syntax.Environment.Phase;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Expression;
@@ -62,13 +63,14 @@ import com.google.devtools.build.lib.syntax.Statement;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.syntax.Type.ConversionException;
 import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.UnixGlob;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -78,7 +80,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
-
 import javax.annotation.Nullable;
 
 /**
@@ -106,7 +107,7 @@ public final class PackageFactory {
     }
 
     private void convertAndProcess(
-        Package.LegacyBuilder pkgBuilder, Location location, Object value)
+        Package.Builder pkgBuilder, Location location, Object value)
         throws EvalException {
       T typedValue = type.convert(value, "'package' argument", pkgBuilder.getBuildFileLabel());
       process(pkgBuilder, location, typedValue);
@@ -120,7 +121,7 @@ public final class PackageFactory {
      * @param value the value of the argument. Typically passed to {@link Type#convert}
      */
     protected abstract void process(
-        Package.LegacyBuilder pkgBuilder, Location location, T value)
+        Package.Builder pkgBuilder, Location location, T value)
         throws EvalException;
   }
 
@@ -158,9 +159,13 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
-        List<Label> value) {
-      pkgBuilder.setDefaultVisibility(getVisibility(pkgBuilder.getBuildFileLabel(), value));
+    protected void process(Package.Builder pkgBuilder, Location location,
+        List<Label> value) throws EvalException{
+      try {
+        pkgBuilder.setDefaultVisibility(getVisibility(pkgBuilder.getBuildFileLabel(), value));
+      } catch (EvalException e) {
+        throw new EvalException(location, e.getMessage());
+      }
     }
   }
 
@@ -170,7 +175,7 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         Boolean value) {
       pkgBuilder.setDefaultTestonly(value);
     }
@@ -182,7 +187,7 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         String value) {
       pkgBuilder.setDefaultDeprecation(value);
     }
@@ -194,7 +199,7 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         List<String> value) {
       pkgBuilder.addFeatures(value);
     }
@@ -206,7 +211,7 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         License value) {
       pkgBuilder.setDefaultLicense(value);
     }
@@ -218,7 +223,7 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         Set<DistributionType> value) {
       pkgBuilder.setDefaultDistribs(value);
     }
@@ -234,7 +239,7 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         List<Label> value) {
       pkgBuilder.setDefaultCompatibleWith(value, Package.DEFAULT_COMPATIBLE_WITH_ATTRIBUTE,
           location);
@@ -251,9 +256,27 @@ public final class PackageFactory {
     }
 
     @Override
-    protected void process(Package.LegacyBuilder pkgBuilder, Location location,
+    protected void process(Package.Builder pkgBuilder, Location location,
         List<Label> value) {
       pkgBuilder.setDefaultRestrictedTo(value, Package.DEFAULT_RESTRICTED_TO_ATTRIBUTE, location);
+    }
+  }
+
+  /**
+   * Declares the package() attribute specifying the default value for
+   * java_proto_library.strict_deps.
+   *
+   * <p>This attribute should be considered as undocumented/experimental, and is subject to change
+   * at any time without prior notice.
+   */
+  private static class DefaultStrictDepsJavaProtos extends PackageArgument<Boolean> {
+    private DefaultStrictDepsJavaProtos() {
+      super("default_strict_deps_java_protos", Type.BOOLEAN);
+    }
+
+    @Override
+    protected void process(Package.Builder pkgBuilder, Location location, Boolean value) {
+      pkgBuilder.setDefaultStrictDepsJavaProtos(value ? TriState.YES : TriState.NO);
     }
   }
 
@@ -263,12 +286,14 @@ public final class PackageFactory {
   /** {@link Globber} that uses the legacy GlobCache. */
   public static class LegacyGlobber implements Globber {
     private final GlobCache globCache;
+    private final boolean sort;
 
-    public LegacyGlobber(GlobCache globCache) {
+    private LegacyGlobber(GlobCache globCache, boolean sort) {
       this.globCache = globCache;
+      this.sort = sort;
     }
 
-    private class Token extends Globber.Token {
+    private static class Token extends Globber.Token {
       public final List<String> includes;
       public final List<String> excludes;
       public final boolean excludeDirs;
@@ -284,20 +309,25 @@ public final class PackageFactory {
     public Token runAsync(List<String> includes, List<String> excludes, boolean excludeDirs)
         throws BadGlobException {
       for (String pattern : Iterables.concat(includes, excludes)) {
-        globCache.getGlobAsync(pattern, excludeDirs);
+        globCache.getGlobUnsortedAsync(pattern, excludeDirs);
       }
       return new Token(includes, excludes, excludeDirs);
     }
 
     @Override
     public List<String> fetch(Globber.Token token) throws IOException, InterruptedException {
+      List<String> result;
       Token legacyToken = (Token) token;
       try {
-        return globCache.glob(legacyToken.includes, legacyToken.excludes,
+        result = globCache.globUnsorted(legacyToken.includes, legacyToken.excludes,
             legacyToken.excludeDirs);
       } catch (BadGlobException e) {
         throw new IllegalStateException(e);
       }
+      if (sort) {
+        Collections.sort(result);
+      }
+      return result;
     }
 
     @Override
@@ -325,36 +355,63 @@ public final class PackageFactory {
   private final ImmutableList<EnvironmentExtension> environmentExtensions;
   private final ImmutableMap<String, PackageArgument<?>> packageArguments;
 
-  /**
-   * Constructs a {@code PackageFactory} instance with the given rule factory.
-   */
-  @VisibleForTesting
-  public PackageFactory(RuleClassProvider ruleClassProvider) {
-    this(ruleClassProvider, null, ImmutableList.<EnvironmentExtension>of(), "test");
-  }
+  private final Package.Builder.Helper packageBuilderHelper;
 
+  /** Factory for {@link PackageFactory} instances. Intended to only be used by unit tests. */
   @VisibleForTesting
-  public PackageFactory(RuleClassProvider ruleClassProvider,
-      EnvironmentExtension environmentExtension) {
-    this(ruleClassProvider, null, ImmutableList.of(environmentExtension), "test");
-  }
-
-  @VisibleForTesting
-  public PackageFactory(RuleClassProvider ruleClassProvider,
-      Iterable<EnvironmentExtension> environmentExtensions) {
-    this(ruleClassProvider, null, environmentExtensions, "test");
+  public abstract static class FactoryForTesting {
+    public final PackageFactory create(RuleClassProvider ruleClassProvider, FileSystem fs) {
+      return create(ruleClassProvider, null, ImmutableList.<EnvironmentExtension>of(), fs);
+    }
+    
+    public final PackageFactory create(
+        RuleClassProvider ruleClassProvider,
+        EnvironmentExtension environmentExtension,
+        FileSystem fs) {
+      return create(ruleClassProvider, null, ImmutableList.of(environmentExtension), fs);
+    }
+  
+    public final PackageFactory create(
+        RuleClassProvider ruleClassProvider,
+        Map<String, String> platformSetRegexps,
+        Iterable<EnvironmentExtension> environmentExtensions,
+        FileSystem fs) {
+      return create(
+          ruleClassProvider,
+          platformSetRegexps,
+          AttributeContainer.ATTRIBUTE_CONTAINER_FACTORY,
+          environmentExtensions,
+          "test",
+          fs);
+    }
+      
+    protected abstract PackageFactory create(
+        RuleClassProvider ruleClassProvider,
+        Map<String, String> platformSetRegexps,
+        Function<RuleClass, AttributeContainer> attributeContainerFactory,
+        Iterable<EnvironmentExtension> environmentExtensions,
+        String version,
+        FileSystem fs);
   }
 
   /**
    * Constructs a {@code PackageFactory} instance with a specific glob path translator
    * and rule factory.
+   *
+   * <p>Only intended to be called by BlazeRuntime or {@link FactoryForTesting#create}.
+   *
+   * <p>Do not call this constructor directly in tests; please use
+   * TestConstants#PACKAGE_FACTORY_FACTORY_FOR_TESTING instead.
    */
-  public PackageFactory(RuleClassProvider ruleClassProvider,
+  public PackageFactory(
+      RuleClassProvider ruleClassProvider,
       Map<String, String> platformSetRegexps,
+      Function<RuleClass, AttributeContainer> attributeContainerFactory,
       Iterable<EnvironmentExtension> environmentExtensions,
-      String version) {
+      String version,
+      Package.Builder.Helper packageBuilderHelper) {
     this.platformSetRegexps = platformSetRegexps;
-    this.ruleFactory = new RuleFactory(ruleClassProvider);
+    this.ruleFactory = new RuleFactory(ruleClassProvider, attributeContainerFactory);
     this.ruleClassProvider = ruleClassProvider;
     threadPool = new ThreadPoolExecutor(100, 100, 15L, TimeUnit.SECONDS,
         new LinkedBlockingQueue<Runnable>(),
@@ -365,6 +422,7 @@ public final class PackageFactory {
     this.packageArguments = createPackageArguments();
     this.nativeModule = newNativeModule();
     this.workspaceNativeModule = WorkspaceFactory.newNativeModule(ruleClassProvider, version);
+    this.packageBuilderHelper = packageBuilderHelper;
   }
 
   /**
@@ -422,14 +480,15 @@ public final class PackageFactory {
   private ImmutableMap<String, PackageArgument<?>> createPackageArguments() {
     ImmutableList.Builder<PackageArgument<?>> arguments =
         ImmutableList.<PackageArgument<?>>builder()
-           .add(new DefaultDeprecation())
-           .add(new DefaultDistribs())
-           .add(new DefaultLicenses())
-           .add(new DefaultTestOnly())
-           .add(new DefaultVisibility())
-           .add(new Features())
-           .add(new DefaultCompatibleWith())
-           .add(new DefaultRestrictedTo());
+            .add(new DefaultDeprecation())
+            .add(new DefaultStrictDepsJavaProtos())
+            .add(new DefaultDistribs())
+            .add(new DefaultLicenses())
+            .add(new DefaultTestOnly())
+            .add(new DefaultVisibility())
+            .add(new Features())
+            .add(new DefaultCompatibleWith())
+            .add(new DefaultRestrictedTo());
 
     for (EnvironmentExtension extension : environmentExtensions) {
       arguments.addAll(extension.getPackageArguments());
@@ -442,36 +501,62 @@ public final class PackageFactory {
     return packageArguments.build();
   }
 
-  /****************************************************************************
-   * Environment function factories.
+  /**
+   * ************************************************************************** Environment function
+   * factories.
    */
 
   /**
    * Returns a function-value implementing "glob" in the specified package context.
    *
-   * @param async if true, start globs in the background but don't block on their completion.
-   *        Only use this for heuristic preloading.
+   * @param async if true, start globs in the background but don't block on their completion. Only
+   *     use this for heuristic preloading.
    */
-  @SkylarkSignature(name = "glob", objectType = Object.class, returnType = SkylarkList.class,
-      doc = "Returns a list of files that match glob search pattern",
-      mandatoryPositionals = {
-        @Param(name = "include", type = SkylarkList.class, generic1 = String.class,
-            doc = "a list of strings specifying patterns of files to include.")},
-      optionalPositionals = {
-        @Param(name = "exclude", type = SkylarkList.class, generic1 = String.class,
-            defaultValue = "[]",
-            doc = "a list of strings specifying patterns of files to exclude."),
-        // TODO(bazel-team): migrate all existing code to use boolean instead?
-        @Param(name = "exclude_directories", type = Integer.class, defaultValue = "1",
-            doc = "a integer that if non-zero indicates directories should not be matched.")},
-      documented = false, useAst = true, useEnvironment = true)
+  @SkylarkSignature(
+    name = "glob",
+    objectType = Object.class,
+    returnType = SkylarkList.class,
+    doc = "Returns a list of files that match glob search pattern",
+    parameters = {
+      @Param(
+        name = "include",
+        type = SkylarkList.class,
+        generic1 = String.class,
+        doc = "a list of strings specifying patterns of files to include."
+      ),
+      @Param(
+        name = "exclude",
+        type = SkylarkList.class,
+        generic1 = String.class,
+        defaultValue = "[]",
+        positional = false,
+        named = true,
+        doc = "a list of strings specifying patterns of files to exclude."
+      ),
+      // TODO(bazel-team): migrate all existing code to use boolean instead?
+      @Param(
+        name = "exclude_directories",
+        type = Integer.class,
+        defaultValue = "1",
+        positional = false,
+        named = true,
+        doc = "a integer that if non-zero indicates directories should not be matched."
+      )
+    },
+    documented = false,
+    useAst = true,
+    useEnvironment = true
+  )
   private static final BuiltinFunction.Factory newGlobFunction =
       new BuiltinFunction.Factory("glob") {
         public BuiltinFunction create(final PackageContext originalContext, final boolean async) {
           return new BuiltinFunction("glob", this) {
             public SkylarkList invoke(
-                SkylarkList include, SkylarkList exclude, Integer excludeDirectories,
-                FuncallExpression ast, Environment env)
+                SkylarkList include,
+                SkylarkList exclude,
+                Integer excludeDirectories,
+                FuncallExpression ast,
+                Environment env)
                 throws EvalException, ConversionException, InterruptedException {
               return callGlob(
                   originalContext, async, include, exclude, excludeDirectories != 0, ast, env);
@@ -547,7 +632,7 @@ public final class PackageFactory {
    */
   @SkylarkSignature(name = "mocksubinclude", returnType = Runtime.NoneType.class,
       doc = "implement the mocksubinclude function emitted by the PythonPreprocessor",
-      mandatoryPositionals = {
+      parameters = {
         @Param(name = "label", type = Object.class,
             doc = "a label designator."),
         @Param(name = "path", type = String.class,
@@ -594,15 +679,17 @@ public final class PackageFactory {
    * parameters are mandatory.
    */
   @SkylarkSignature(name = "environment_group", returnType = Runtime.NoneType.class,
-      doc = "Defines a cc_library, by wrapping around the usual library "
-      + "and also defining a headers target.",
-      mandatoryNamedOnly = {
-        @Param(name = "name", type = String.class,
+      doc = "Defines a set of related environments that can be tagged onto rules to prevent"
+      + "incompatible rules from depending on each other.",
+      parameters = {
+        @Param(name = "name", type = String.class, positional = false, named = true,
             doc = "The name of the rule."),
         // Both parameter below are lists of label designators
         @Param(name = "environments", type = SkylarkList.class, generic1 = Object.class,
+            positional = false, named = true,
             doc = "A list of Labels for the environments to be grouped, from the same package."),
         @Param(name = "defaults", type = SkylarkList.class, generic1 = Object.class,
+            positional = false, named = true,
             doc = "A list of Labels.")}, // TODO(bazel-team): document what that is
       documented = false, useLocation = true)
   private static final BuiltinFunction.Factory newEnvironmentGroupFunction =
@@ -638,10 +725,9 @@ public final class PackageFactory {
    */
   @SkylarkSignature(name = "exports_files", returnType = Runtime.NoneType.class,
       doc = "Declare a set of files as exported",
-      mandatoryPositionals = {
+      parameters = {
         @Param(name = "srcs", type = SkylarkList.class, generic1 = String.class,
-            doc = "A list of strings, the names of the files to export.")},
-      optionalPositionals = {
+            doc = "A list of strings, the names of the files to export."),
         // TODO(blaze-team): make it possible to express a list of label designators,
         // i.e. a java List or Skylark list of Label or String.
         @Param(name = "visibility", type = SkylarkList.class, noneable = true,
@@ -668,15 +754,20 @@ public final class PackageFactory {
 
   static Runtime.NoneType callExportsFiles(Object srcs, Object visibilityO, Object licensesO,
       FuncallExpression ast, Environment env) throws EvalException, ConversionException {
-    Package.LegacyBuilder pkgBuilder = getContext(env, ast).pkgBuilder;
+    Package.Builder pkgBuilder = getContext(env, ast).pkgBuilder;
     List<String> files = Type.STRING_LIST.convert(srcs, "'exports_files' operand");
 
-    RuleVisibility visibility = EvalUtils.isNullOrNone(visibilityO)
-        ? ConstantRuleVisibility.PUBLIC
-        : getVisibility(pkgBuilder.getBuildFileLabel(), BuildType.LABEL_LIST.convert(
+    RuleVisibility visibility;
+    try {
+      visibility = EvalUtils.isNullOrNone(visibilityO)
+          ? ConstantRuleVisibility.PUBLIC
+          : getVisibility(pkgBuilder.getBuildFileLabel(), BuildType.LABEL_LIST.convert(
               visibilityO,
               "'exports_files' operand",
               pkgBuilder.getBuildFileLabel()));
+    } catch (EvalException e) {
+      throw new EvalException(ast.getLocation(), e.getMessage());
+    }
     // TODO(bazel-team): is licenses plural or singular?
     License license = BuildType.LICENSE.convertOptional(licensesO, "'exports_files' operand");
 
@@ -720,22 +811,8 @@ public final class PackageFactory {
    * TODO(bazel-team): Remove in favor of package.licenses.
    */
   @SkylarkSignature(name = "licenses", returnType = Runtime.NoneType.class,
-      doc = "Declare the license(s) for the code in the current package. Legal license types "
-          + "include:\n"
-          + "<dl>"
-          + "<dt><code>restricted</code></dt><dd>Requires mandatory source distribution.</dd>"
-          + "<dt><code>reciprocal</code></dt><dd>Allows usage of software freely in "
-          + "<b>unmodified</b> form. Any modifications must be made freely available.</dd>"
-          + "<dt><code>notice</code></dt><dd>Original or modified third-party software may be "
-          + "shipped without danger nor encumbering other sources. All of the licenses in this "
-          + "category do, however, have an \"original Copyright notice\" or "
-          + "\"advertising clause\", wherein any external distributions must include the notice "
-          + "or clause specified in the license.</dd>"
-          + "<dt><code>permissive</code></dt><dd>Code that is under a license but does not "
-          + "require a notice.</dd>"
-          + "<dt><code>unencumbered</code></dt><dd>Public domain, free for any use.</dd>"
-          + "</dl>",
-      mandatoryPositionals = {
+      doc = "Declare the license(s) for the code in the current package.",
+      parameters = {
         @Param(name = "license_strings", type = SkylarkList.class, generic1 = String.class,
             doc = "A list of strings, the names of the licenses used.")},
       documented = false, useLocation = true)
@@ -767,7 +844,7 @@ public final class PackageFactory {
   // and share the functions with the native package... which requires unifying the List types.
   @SkylarkSignature(name = "distribs", returnType = Runtime.NoneType.class,
       doc = "Declare the distribution(s) for the code in the current package.",
-      mandatoryPositionals = {
+      parameters = {
         @Param(name = "distribution_strings", type = Object.class,
             doc = "The distributions.")},
       documented = false, useLocation = true)
@@ -792,16 +869,19 @@ public final class PackageFactory {
 
   @SkylarkSignature(name = "package_group", returnType = Runtime.NoneType.class,
       doc = "Declare a set of files as exported",
-      mandatoryNamedOnly = {
-        @Param(name = "name", type = String.class,
-            doc = "The name of the rule.")},
-      optionalNamedOnly = {
+      parameters = {
+        @Param(name = "name", type = String.class, named = true, positional = false,
+            doc = "The name of the rule."),
         @Param(name = "packages", type = SkylarkList.class, generic1 = String.class,
             defaultValue = "[]",
+            named = true,
+            positional = false,
             doc = "A list of Strings specifying the packages grouped."),
         // java list or list of label designators: Label or String
         @Param(name = "includes", type = SkylarkList.class, generic1 = Object.class,
             defaultValue = "[]",
+            named = true,
+            positional = false,
             doc = "A list of Label specifiers for the files to include.")},
       documented = false, useAst = true, useEnvironment = true)
   private static final BuiltinFunction.Factory newPackageGroupFunction =
@@ -830,7 +910,7 @@ public final class PackageFactory {
   private static SkylarkDict<String, Object> targetDict(
       Target target, Location loc, Environment env)
       throws NotRepresentableException, EvalException {
-    if (target == null && !(target instanceof Rule)) {
+    if (target == null || !(target instanceof Rule)) {
       return null;
     }
     SkylarkDict<String, Object> values = SkylarkDict.<String, Object>of(env);
@@ -900,11 +980,11 @@ public final class PackageFactory {
     if (val instanceof TriState) {
       switch ((TriState) val) {
         case AUTO:
-          return new Integer(-1);
+          return Integer.valueOf(-1);
         case YES:
-          return new Integer(1);
+          return Integer.valueOf(1);
         case NO:
-          return new Integer(0);
+          return Integer.valueOf(0);
       }
     }
 
@@ -1025,7 +1105,8 @@ public final class PackageFactory {
     }
   }
 
-  public static RuleVisibility getVisibility(Label ruleLabel, List<Label> original) {
+  public static RuleVisibility getVisibility(Label ruleLabel, List<Label> original)
+      throws EvalException {
     RuleVisibility result;
 
     result = ConstantRuleVisibility.tryParse(original);
@@ -1061,7 +1142,7 @@ public final class PackageFactory {
       public Object call(Object[] arguments, FuncallExpression ast, Environment env)
           throws EvalException {
 
-        Package.LegacyBuilder pkgBuilder = getContext(env, ast).pkgBuilder;
+        Package.Builder pkgBuilder = getContext(env, ast).pkgBuilder;
 
         // Validate parameter list
         if (pkgBuilder.isPackageFunctionUsed()) {
@@ -1101,7 +1182,8 @@ public final class PackageFactory {
       throws RuleFactory.InvalidRuleException, Package.NameConflictException, InterruptedException {
     RuleClass ruleClass = getBuiltInRuleClass(ruleClassName, ruleFactory);
     BuildLangTypedAttributeValuesMap attributeValues = new BuildLangTypedAttributeValuesMap(kwargs);
-    RuleFactory.createAndAddRule(context, ruleClass, attributeValues, ast, env);
+    AttributeContainer attributeContainer = ruleFactory.getAttributeContainer(ruleClass);
+    RuleFactory.createAndAddRule(context, ruleClass, attributeValues, ast, env, attributeContainer);
   }
 
   private static RuleClass getBuiltInRuleClass(String ruleClassName, RuleFactory ruleFactory) {
@@ -1116,15 +1198,15 @@ public final class PackageFactory {
    */
   public static PackageContext getContext(Environment env, FuncallExpression ast)
       throws EvalException {
-    try {
-      return (PackageContext) env.lookup(PKG_CONTEXT);
-    } catch (NoSuchVariableException e) {
+    PackageContext value = (PackageContext) env.lookup(PKG_CONTEXT);
+    if (value == null) {
       // if PKG_CONTEXT is missing, we're not called from a BUILD file. This happens if someone
       // uses native.some_func() in the wrong place.
       throw new EvalException(ast.getLocation(),
           "The native module cannot be accessed from here. "
           + "Wrap the function in a macro and call it from a BUILD file");
     }
+    return value;
   }
 
   /**
@@ -1138,7 +1220,7 @@ public final class PackageFactory {
       public Runtime.NoneType invoke(Map<String, Object> kwargs,
           FuncallExpression ast, Environment env)
           throws EvalException, InterruptedException {
-        env.checkLoadingPhase(ruleClass, ast.getLocation());
+        env.checkLoadingOrWorkspacePhase(ruleClass, ast.getLocation());
         try {
           addRule(ruleFactory, ruleClass, getContext(env, ast), kwargs, ast, env);
         } catch (RuleFactory.InvalidRuleException | Package.NameConflictException e) {
@@ -1169,7 +1251,7 @@ public final class PackageFactory {
    * {@code globber.onInterrupt()} on an {@link InterruptedException}.
    */
   // Used outside of bazel!
-  public Package.LegacyBuilder createPackageFromPreprocessingResult(
+  public Package.Builder createPackageFromPreprocessingResult(
       Package externalPkg,
       PackageIdentifier packageId,
       Path buildFile,
@@ -1201,13 +1283,12 @@ public final class PackageFactory {
       List<Statement> preludeStatements, EventHandler eventHandler) {
     // Logged messages are used as a testability hook tracing the parsing progress
     LOG.fine("Starting to parse " + packageId);
-    BuildFileAST buildFileAST = BuildFileAST.parseBuildFile(
-        in, preludeStatements, eventHandler, false);
+    BuildFileAST buildFileAST = BuildFileAST.parseBuildFile(in, preludeStatements, eventHandler);
     LOG.fine("Finished parsing of " + packageId);
     return buildFileAST;
   }
 
-  public Package.LegacyBuilder createPackageFromPreprocessingAst(
+  public Package.Builder createPackageFromPreprocessingAst(
       Package externalPkg,
       PackageIdentifier packageId,
       Path buildFile,
@@ -1246,14 +1327,24 @@ public final class PackageFactory {
   }
 
   @VisibleForTesting
+  public Package.Builder newExternalPackageBuilder(Path workspacePath, String runfilesPrefix) {
+    return Package.newExternalPackageBuilder(packageBuilderHelper, workspacePath, runfilesPrefix);
+  }
+
+  @VisibleForTesting
+  public Package.Builder newPackageBuilder(PackageIdentifier packageId, String runfilesPrefix) {
+    return new Package.Builder(packageBuilderHelper, packageId, runfilesPrefix);
+  }
+
+  @VisibleForTesting
   public Package createPackageForTesting(
       PackageIdentifier packageId,
       Path buildFile,
       CachingPackageLocator locator,
       EventHandler eventHandler)
       throws NoSuchPackageException, InterruptedException {
-    Package externalPkg =
-        Package.newExternalPackageBuilder(buildFile.getRelative("WORKSPACE"), "TESTING").build();
+    Package externalPkg = newExternalPackageBuilder(
+        buildFile.getRelative("WORKSPACE"), "TESTING").build();
     return createPackageForTesting(packageId, externalPkg, buildFile, locator, eventHandler);
   }
 
@@ -1345,10 +1436,31 @@ public final class PackageFactory {
     }
   }
 
-  public LegacyGlobber createLegacyGlobber(Path packageDirectory, PackageIdentifier packageId,
+  /** Returns a new {@link LegacyGlobber}. */
+  public LegacyGlobber createLegacyGlobber(
+      Path packageDirectory,
+      PackageIdentifier packageId,
+      CachingPackageLocator locator) {
+    return createLegacyGlobber(new GlobCache(packageDirectory, packageId, locator, syscalls,
+        threadPool));
+  }
+
+  /** Returns a new {@link LegacyGlobber}. */
+  public static LegacyGlobber createLegacyGlobber(GlobCache globCache) {
+    return new LegacyGlobber(globCache, /*sort=*/ true);
+  }
+
+  /**
+   * Returns a new {@link LegacyGlobber}, the same as in {@link #createLegacyGlobber}, except that
+   * the implementation of {@link Globber#fetch} intentionally breaks the contract and doesn't
+   * return sorted results.
+   */
+  public LegacyGlobber createLegacyGlobberThatDoesntSort(
+      Path packageDirectory,
+      PackageIdentifier packageId,
       CachingPackageLocator locator) {
     return new LegacyGlobber(new GlobCache(packageDirectory, packageId, locator, syscalls,
-        threadPool));
+        threadPool), /*sort=*/ false);
   }
 
   @Nullable
@@ -1373,17 +1485,21 @@ public final class PackageFactory {
    * footprint when making changes here!
    */
   public static class PackageContext {
-
-    final Package.LegacyBuilder pkgBuilder;
+    final Package.Builder pkgBuilder;
     final Globber globber;
     final EventHandler eventHandler;
+    private final Function<RuleClass, AttributeContainer> attributeContainerFactory;
 
     @VisibleForTesting
-    public PackageContext(Package.LegacyBuilder pkgBuilder, Globber globber,
-        EventHandler eventHandler) {
+    public PackageContext(
+        Package.Builder pkgBuilder,
+        Globber globber,
+        EventHandler eventHandler,
+        Function<RuleClass, AttributeContainer> attributeContainerFactory) {
       this.pkgBuilder = pkgBuilder;
       this.eventHandler = eventHandler;
       this.globber = globber;
+      this.attributeContainerFactory = attributeContainerFactory;
     }
 
     /**
@@ -1405,6 +1521,10 @@ public final class PackageFactory {
      */
     public Package.Builder getBuilder() {
       return pkgBuilder;
+    }
+
+    public Function<RuleClass, AttributeContainer> getAttributeContainerFactory() {
+      return attributeContainerFactory;
     }
   }
 
@@ -1434,7 +1554,8 @@ public final class PackageFactory {
         builder.put(function.getName(), function);
       }
     }
-    return new ClassObject.SkylarkClassObject(builder.build(), "no native function or rule '%s'");
+    return SkylarkClassObjectConstructor.STRUCT.create(
+        builder.build(), "no native function or rule '%s'");
   }
 
   private void buildPkgEnv(Environment pkgEnv, PackageContext context, RuleFactory ruleFactory) {
@@ -1464,6 +1585,14 @@ public final class PackageFactory {
   }
 
   /**
+   * Called by a caller of {@link #createPackageFromPreprocessingAst} after this caller has fully
+   * loaded the package.
+   */
+  public void afterDoneLoadingPackage(Package pkg) {
+    packageBuilderHelper.onLoadingComplete(pkg);
+  }
+
+  /**
    * Constructs a Package instance, evaluates the BUILD-file AST inside the
    * build environment, and populates the package with Rule instances as it
    * goes.  As with most programming languages, evaluation stops when an
@@ -1482,7 +1611,7 @@ public final class PackageFactory {
    * @see PackageFactory#PackageFactory
    */
   @VisibleForTesting // used by PackageFactoryApparatus
-  public Package.LegacyBuilder evaluateBuildFile(
+  public Package.Builder evaluateBuildFile(
       Package externalPkg,
       PackageIdentifier packageId,
       BuildFileAST buildFileAST,
@@ -1495,8 +1624,8 @@ public final class PackageFactory {
       Map<String, Extension> imports,
       ImmutableList<Label> skylarkFileDependencies)
       throws InterruptedException {
-    Package.LegacyBuilder pkgBuilder = new Package.LegacyBuilder(
-        packageId, ruleClassProvider.getRunfilesPrefix());
+    Package.Builder pkgBuilder = new Package.Builder(packageBuilderHelper.createFreshPackage(
+        packageId, ruleClassProvider.getRunfilesPrefix()));
     StoredEventHandler eventHandler = new StoredEventHandler();
 
     try (Mutability mutability = Mutability.create("package %s", packageId)) {
@@ -1504,7 +1633,8 @@ public final class PackageFactory {
           .setGlobals(Environment.BUILD)
           .setEventHandler(eventHandler)
           .setImportedExtensions(imports)
-          .setLoadingPhase()
+          .setToolsRepository(ruleClassProvider.getToolsRepository())
+          .setPhase(Phase.LOADING)
           .build();
 
       pkgBuilder.setFilename(buildFilePath)
@@ -1519,7 +1649,9 @@ public final class PackageFactory {
       Event.replayEventsOn(eventHandler, pastEvents);
 
       // Stuff that closes over the package context:
-      PackageContext context = new PackageContext(pkgBuilder, globber, eventHandler);
+      PackageContext context =
+          new PackageContext(
+              pkgBuilder, globber, eventHandler, ruleFactory.getAttributeContainerFactory());
       buildPkgEnv(pkgEnv, context, ruleFactory);
       pkgEnv.setupDynamic(PKG_CONTEXT, context);
       pkgEnv.setupDynamic(Runtime.PKG_NAME, packageId.getPackageFragment().getPathString());
@@ -1576,11 +1708,12 @@ public final class PackageFactory {
       Environment pkgEnv = Environment.builder(mutability)
           .setGlobals(Environment.BUILD)
           .setEventHandler(NullEventHandler.INSTANCE)
-          .setLoadingPhase()
+          .setToolsRepository(ruleClassProvider.getToolsRepository())
+          .setPhase(Phase.LOADING)
           .build();
 
-      Package.LegacyBuilder pkgBuilder = new Package.LegacyBuilder(packageId,
-          ruleClassProvider.getRunfilesPrefix());
+      Package.Builder pkgBuilder = new Package.Builder(packageBuilderHelper.createFreshPackage(
+          packageId, ruleClassProvider.getRunfilesPrefix()));
 
       pkgBuilder.setFilename(buildFilePath)
           .setMakeEnv(pkgMakeEnv)
@@ -1590,7 +1723,12 @@ public final class PackageFactory {
           .setDefaultVisibilitySet(false);
 
       // Stuff that closes over the package context:
-      PackageContext context = new PackageContext(pkgBuilder, globber, NullEventHandler.INSTANCE);
+      PackageContext context =
+          new PackageContext(
+              pkgBuilder,
+              globber,
+              NullEventHandler.INSTANCE,
+              ruleFactory.getAttributeContainerFactory());
       buildPkgEnv(pkgEnv, context, ruleFactory);
       try {
         pkgEnv.update("glob", newGlobFunction.apply(context, /*async=*/true));

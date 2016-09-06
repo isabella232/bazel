@@ -17,6 +17,7 @@ package com.google.devtools.build.java.turbine;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.fail;
 
+import com.google.devtools.build.buildjar.JarOwner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -100,8 +101,8 @@ public class TurbineOptionsTest {
     assertThat(options.javacOpts()).containsExactly("-source", "8", "-target", "8").inOrder();
     assertThat(options.sources()).containsExactly("Source1.java", "Source2.java");
     assertThat(options.outputDeps()).hasValue("out.jdeps");
-    assertThat(options.targetLabel()).isEqualTo("//java/com/google/test");
-    assertThat(options.ruleKind()).isEqualTo("java_library");
+    assertThat(options.targetLabel()).hasValue("//java/com/google/test");
+    assertThat(options.ruleKind()).hasValue("java_library");
   }
 
   @Test
@@ -127,15 +128,15 @@ public class TurbineOptionsTest {
     TurbineOptions options =
         TurbineOptionsParser.parse(Iterables.concat(BASE_ARGS, Arrays.asList(lines)));
 
-    assertThat(options.strictDepsMode()).isEqualTo("OFF");
-    assertThat(options.targetLabel()).isEqualTo("//java/com/google/test");
+    assertThat(options.targetLabel()).hasValue("//java/com/google/test");
     assertThat(options.directJarsToTargets())
-        .containsExactlyEntriesIn(ImmutableMap.of("blaze-out/foo/libbar.jar", "//foo/bar"));
+        .containsExactlyEntriesIn(
+            ImmutableMap.of("blaze-out/foo/libbar.jar", JarOwner.create("//foo/bar")));
     assertThat(options.indirectJarsToTargets())
         .containsExactlyEntriesIn(
             ImmutableMap.of(
-                "blaze-out/foo/libbaz1.jar", "//foo/baz1",
-                "blaze-out/foo/libbaz2.jar", "//foo/baz2"));
+                "blaze-out/foo/libbaz1.jar", JarOwner.create("//foo/baz1"),
+                "blaze-out/foo/libbaz2.jar", JarOwner.create("//foo/baz2")));
     assertThat(options.depsArtifacts()).containsExactly("foo.jdeps", "bar.jdeps");
   }
 
@@ -158,6 +159,47 @@ public class TurbineOptionsTest {
   }
 
   @Test
+  public void repeatedClasspath() throws Exception {
+    String[] lines = {
+      "--classpath",
+      "liba.jar",
+      "libb.jar:libc.jar",
+      "--processorpath",
+      "libpa.jar",
+      "libpb.jar",
+      "libpc.jar",
+    };
+
+    TurbineOptions options =
+        TurbineOptionsParser.parse(Iterables.concat(BASE_ARGS, Arrays.asList(lines)));
+
+    assertThat(options.classPath()).containsExactly("liba.jar", "libb.jar", "libc.jar").inOrder();
+    assertThat(options.processorPath())
+        .containsExactly("libpa.jar", "libpb.jar", "libpc.jar")
+        .inOrder();
+  }
+
+  @Test
+  public void optionalTargetLabelAndRuleKind() throws Exception {
+    String[] lines = {
+      "--output",
+      "out.jar",
+      "--temp_dir",
+      "_tmp",
+      "--classpath",
+      "liba.jar:libb.jar:libc.jar",
+      "--processorpath",
+      "libpa.jar:libpb.jar:libpc.jar",
+    };
+
+    TurbineOptions options = TurbineOptionsParser.parse(Arrays.asList(lines));
+
+    assertThat(options.ruleKind()).isAbsent();
+    assertThat(options.targetLabel()).isAbsent();
+  }
+
+
+  @Test
   public void paramsFile() throws Exception {
     Iterable<String> paramsArgs =
         Iterables.concat(BASE_ARGS, Arrays.asList("--javacopts", "-source", "8", "-target", "8"));
@@ -175,7 +217,7 @@ public class TurbineOptionsTest {
     // assert that options were read from params file
     assertThat(options.javacOpts()).containsExactly("-source", "8", "-target", "8").inOrder();
     // ... and directly from the command line
-    assertThat(options.targetLabel()).isEqualTo("//custom/label");
+    assertThat(options.targetLabel()).hasValue("//custom/label");
   }
 
   @Test
@@ -189,7 +231,7 @@ public class TurbineOptionsTest {
     TurbineOptions options =
         TurbineOptionsParser.parse(Iterables.concat(BASE_ARGS, Arrays.asList(lines)));
 
-    assertThat(options.targetLabel()).isEqualTo("@@other-repo//foo:local-jam");
+    assertThat(options.targetLabel()).hasValue("@@other-repo//foo:local-jam");
   }
 
   @Test

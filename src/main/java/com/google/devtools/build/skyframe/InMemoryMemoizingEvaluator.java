@@ -29,7 +29,7 @@ import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DirtyingInvali
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.InvalidationState;
 import com.google.devtools.build.skyframe.ParallelEvaluator.EventFilter;
 import com.google.devtools.build.skyframe.ParallelEvaluator.Receiver;
-
+import com.google.devtools.build.skyframe.QueryableGraph.Reason;
 import java.io.PrintStream;
 import java.util.Collection;
 import java.util.HashMap;
@@ -39,7 +39,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import javax.annotation.Nullable;
 
 /**
@@ -100,7 +99,7 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
     this.skyFunctions = ImmutableMap.copyOf(skyFunctions);
     this.differencer = Preconditions.checkNotNull(differencer);
     this.progressReceiver = invalidationReceiver;
-    this.graph = new InMemoryGraph(keepEdges);
+    this.graph = new InMemoryGraphImpl(keepEdges);
     this.emittedEventState = emittedEventState;
     this.keepEdges = keepEdges;
   }
@@ -112,13 +111,16 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
   @Override
   public void delete(final Predicate<SkyKey> deletePredicate) {
     valuesToDelete.addAll(
-        Maps.filterEntries(graph.getAllValues(), new Predicate<Entry<SkyKey, NodeEntry>>() {
-          @Override
-          public boolean apply(Entry<SkyKey, NodeEntry> input) {
-            Preconditions.checkNotNull(input.getKey(), "Null SkyKey in entry: %s", input);
-            return input.getValue().isDirty() || deletePredicate.apply(input.getKey());
-          }
-        }).keySet());
+        Maps.filterEntries(
+                graph.getAllValues(),
+                new Predicate<Entry<SkyKey, ? extends NodeEntry>>() {
+                  @Override
+                  public boolean apply(Entry<SkyKey, ? extends NodeEntry> input) {
+                    Preconditions.checkNotNull(input.getKey(), "Null SkyKey in entry: %s", input);
+                    return input.getValue().isDirty() || deletePredicate.apply(input.getKey());
+                  }
+                })
+            .keySet());
   }
 
   @Override
@@ -129,7 +131,7 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
         Sets.filter(dirtyKeyTracker.getDirtyKeys(), new Predicate<SkyKey>() {
           @Override
           public boolean apply(SkyKey skyKey) {
-            NodeEntry entry = graph.get(skyKey);
+            NodeEntry entry = graph.get(null, Reason.OTHER, skyKey);
             Preconditions.checkNotNull(entry, skyKey);
             Preconditions.checkState(entry.isDirty(), skyKey);
             return entry.getVersion().atMost(threshold);
@@ -207,14 +209,20 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
       Entry<SkyKey, SkyValue> entry = it.next();
       SkyKey key = entry.getKey();
       SkyValue newValue = entry.getValue();
-      NodeEntry prevEntry = graph.get(key);
+      NodeEntry prevEntry = graph.get(null, Reason.OTHER, key);
       if (prevEntry != null && prevEntry.isDone()) {
-        Iterable<SkyKey> directDeps = prevEntry.getDirectDeps();
-        Preconditions.checkState(Iterables.isEmpty(directDeps),
-            "existing entry for %s has deps: %s", key, directDeps);
-        if (newValue.equals(prevEntry.getValue())
-            && !valuesToDirty.contains(key) && !valuesToDelete.contains(key)) {
-          it.remove();
+        try {
+          Iterable<SkyKey> directDeps = prevEntry.getDirectDeps();
+          Preconditions.checkState(
+              Iterables.isEmpty(directDeps), "existing entry for %s has deps: %s", key, directDeps);
+          if (newValue.equals(prevEntry.getValue())
+              && !valuesToDirty.contains(key)
+              && !valuesToDelete.contains(key)) {
+            it.remove();
+          }
+        } catch (InterruptedException e) {
+          throw new IllegalStateException(
+              "InMemoryGraph does not throw: " + entry + ", " + prevEntry, e);
         }
       }
     }
@@ -227,7 +235,11 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
     if (valuesToInject.isEmpty()) {
       return;
     }
-    ParallelEvaluator.injectValues(valuesToInject, version, graph, dirtyKeyTracker);
+    try {
+      ParallelEvaluator.injectValues(valuesToInject, version, graph, dirtyKeyTracker);
+    } catch (InterruptedException e) {
+      throw new IllegalStateException("InMemoryGraph doesn't throw interrupts", e);
+    }
     // Start with a new map to avoid bloat since clear() does not downsize the map.
     valuesToInject = new HashMap<>();
   }
@@ -261,22 +273,42 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
     return graph.getDoneValues();
   }
 
+  private static boolean isDone(@Nullable NodeEntry entry) {
+    return entry != null && entry.isDone();
+  }
+
   @Override
   @Nullable public SkyValue getExistingValueForTesting(SkyKey key) {
-    return graph.getValue(key);
+    NodeEntry entry = getExistingEntryForTesting(key);
+    try {
+      return isDone(entry) ? entry.getValue() : null;
+    } catch (InterruptedException e) {
+      throw new IllegalStateException("InMemoryGraph does not throw" + key + ", " + entry, e);
+    }
   }
 
   @Override
   @Nullable public ErrorInfo getExistingErrorForTesting(SkyKey key) {
-    NodeEntry entry = graph.get(key);
-    return (entry == null || !entry.isDone()) ? null : entry.getErrorInfo();
+    NodeEntry entry = getExistingEntryForTesting(key);
+    try {
+      return isDone(entry) ? entry.getErrorInfo() : null;
+    } catch (InterruptedException e) {
+      throw new IllegalStateException("InMemoryGraph does not throw" + key + ", " + entry, e);
+    }
   }
 
-  public void setGraphForTesting(InMemoryGraph graph) {
-    this.graph = graph;
+  @Nullable
+  @Override
+  public NodeEntry getExistingEntryForTesting(SkyKey key) {
+    return graph.get(null, Reason.OTHER, key);
   }
 
-  public InMemoryGraph getGraphForTesting() {
+  @Override
+  public void injectGraphTransformerForTesting(GraphTransformerForTesting transformer) {
+    this.graph = transformer.transform(this.graph);
+  }
+
+  public ProcessableGraph getGraphForTesting() {
     return graph;
   }
 
@@ -288,7 +320,11 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
       for (NodeEntry entry : graph.getAllValues().values()) {
         nodes++;
         if (entry.isDone()) {
-          edges += Iterables.size(entry.getDirectDeps());
+          try {
+            edges += Iterables.size(entry.getDirectDeps());
+          } catch (InterruptedException e) {
+            throw new IllegalStateException("InMemoryGraph doesn't throw: " + entry, e);
+          }
         }
       }
       out.println("Node count: " + nodes);
@@ -303,14 +339,18 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
             }
           };
 
-      for (Entry<SkyKey, NodeEntry> mapPair : graph.getAllValues().entrySet()) {
+      for (Entry<SkyKey, ? extends NodeEntry> mapPair : graph.getAllValues().entrySet()) {
         SkyKey key = mapPair.getKey();
         NodeEntry entry = mapPair.getValue();
         if (entry.isDone()) {
           out.print(keyFormatter.apply(key));
           out.print("|");
-          out.println(Joiner.on('|').join(
-              Iterables.transform(entry.getDirectDeps(), keyFormatter)));
+          try {
+            out.println(
+                Joiner.on('|').join(Iterables.transform(entry.getDirectDeps(), keyFormatter)));
+          } catch (InterruptedException e) {
+            throw new IllegalStateException("InMemoryGraph doesn't throw: " + entry, e);
+          }
         }
       }
     }
@@ -347,7 +387,7 @@ public final class InMemoryMemoizingEvaluator implements MemoizingEvaluator {
       new EvaluatorSupplier() {
         @Override
         public MemoizingEvaluator create(
-            Map<SkyFunctionName, ? extends SkyFunction> skyFunctions,
+            ImmutableMap<SkyFunctionName, ? extends SkyFunction> skyFunctions,
             Differencer differencer,
             @Nullable EvaluationProgressReceiver invalidationReceiver,
             EmittedEventState emittedEventState,
