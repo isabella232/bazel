@@ -365,6 +365,10 @@ static void ParseCommandLine(int argc, char *const *argv) {
     }
   }
 
+  // HACK: Creating a new network namespace is super expensive.
+  // Disable creation of a new netns for each action.
+  opt.create_netns = 0;
+
   AddMountSource(NULL);
 
   while (optind < argc && argv[optind][0] == '@') {
