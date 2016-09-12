@@ -152,7 +152,7 @@ public class BaseSpawn implements Spawn {
 
   @Override
   public boolean isRemotable() {
-    return !executionInfo.containsKey("local");
+    return !executionInfo.containsKey("local") && !executionInfo.containsKey("istest");
   }
 
   @Override

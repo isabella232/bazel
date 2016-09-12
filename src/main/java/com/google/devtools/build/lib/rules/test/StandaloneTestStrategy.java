@@ -95,6 +95,8 @@ public class StandaloneTestStrategy extends TestStrategy {
 
     // This key is only understood by StandaloneSpawnStrategy.
     info.put("timeout", "" + getTimeout(action));
+    // HACK: Test actions cannot be cached or executed remotely.
+    info.put("istest", "1");
     info.putAll(action.getTestProperties().getExecutionInfo());
 
     Artifact testSetup = action.getRuntimeArtifact(TEST_SETUP_BASENAME);
