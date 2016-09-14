@@ -102,7 +102,10 @@ else
 fi
 
 exitCode=0
+start=$(date +%s)
 "${EXE}" "$@" || exitCode=$?
+end=$(date +%s)
+duration=$(expr $end - $start)
 
 if [ -n "${XML_OUTPUT_FILE-}" -a ! -f "${XML_OUTPUT_FILE-}" ]; then
   # Create a default XML output file if the test runner hasn't generated it
@@ -116,8 +119,8 @@ if [ -n "${XML_OUTPUT_FILE-}" -a ! -f "${XML_OUTPUT_FILE-}" ]; then
   cat <<EOF >${XML_OUTPUT_FILE}
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
-  <testsuite name="$TEST_NAME" tests="1" failures="0" errors="$errors">
-    <testcase name="$TEST_NAME" status="run">$error_msg</testcase>
+  <testsuite name="$TEST_NAME" tests="1" failures="0" errors="$errors" time="$duration">
+    <testcase name="$TEST_NAME" status="run" time="$duration">$error_msg</testcase>
   </testsuite>
 </testsuites>
 EOF
