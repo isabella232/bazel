@@ -20,6 +20,7 @@
 #include "linux-sandbox-options.h"
 #include "linux-sandbox-utils.h"
 #include "linux-sandbox.h"
+#include <limits.h>
 
 // Note that we define DIE() here and not in a shared header, because we want to
 // use _exit() in the
@@ -259,6 +260,12 @@ static void MakeFilesystemMostlyReadOnly() {
   }
 
   struct mntent *ent;
+
+  // Construct sysfs path in Sandbox.
+  char sysfs_dir[PATH_MAX];
+  strcpy(sysfs_dir, global_sandbox_root);
+  strcat(sysfs_dir, "/sys");
+
   while ((ent = getmntent(mounts)) != NULL) {
     // Skip mounts that do not belong to our sandbox.
     if (strstr(ent->mnt_dir, global_sandbox_root) != ent->mnt_dir) {
@@ -306,6 +313,12 @@ static void MakeFilesystemMostlyReadOnly() {
       // In that case, we're not allowed to remount /proc/sys/fs/binfmt_misc,
       // because it is hidden.
       if (errno != EACCES && errno != EINVAL) {
+        // If the failed mount corresponds is a sysfs mount, ignore the error and proceed.
+        // This is usually required to bypass /sys/devices/virtual/net mount failure.
+        if (strstr(ent->mnt_dir, sysfs_dir) == ent->mnt_dir) {
+          PRINT_DEBUG("skipping failed sysfs mount %s", ent->mnt_dir);
+          continue;
+        }
         DIE("remount(NULL, %s, NULL, %d, NULL)", ent->mnt_dir, mountFlags);
       }
     }
