@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.rules.java;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
@@ -48,28 +49,50 @@ public final class SingleJarActionBuilder {
    * @param resourceJars the resource jars to merge into the jar
    * @param outputJar the Jar to create
    */
-  public static void createSourceJarAction(RuleContext ruleContext,
-      Map<PathFragment, Artifact> resources, Collection<Artifact> resourceJars,
+  public static void createSourceJarAction(
+      RuleContext ruleContext,
+      Map<PathFragment, Artifact> resources,
+      Collection<Artifact> resourceJars,
       Artifact outputJar) {
     PathFragment javaPath =
         ruleContext.getHostConfiguration().getFragment(Jvm.class).getJavaExecutable();
     NestedSet<Artifact> hostJavabaseInputs = JavaHelper.getHostJavabaseInputs(ruleContext);
     Artifact singleJar = getSingleJar(ruleContext);
-    ruleContext.registerAction(
-        new SpawnAction.Builder()
-            .addOutput(outputJar)
-            .addInputs(resources.values())
-            .addInputs(resourceJars)
-            .addTransitiveInputs(hostJavabaseInputs)
-            .setJarExecutable(
-                javaPath,
-                singleJar,
-                JavaToolchainProvider.fromRuleContext(ruleContext).getJvmOptions())
-            .setCommandLine(sourceJarCommandLine(outputJar, resources, resourceJars))
-            .useParameterFile(ParameterFileType.SHELL_QUOTED)
-            .setProgressMessage("Building source jar " + outputJar.prettyPrint())
-            .setMnemonic("JavaSourceJar")
-            .build(ruleContext));
+
+    // If singlejar's name ends with .jar, it is Java application, otherwise it is native.
+    // TODO(asmundak): once b/28640279 is fixed (that is, the native singlejar is released),
+    // eliminate this check, allowing only native singlejar.
+    if (singleJar.getFilename().endsWith(".jar")) {
+      ruleContext.registerAction(
+          new SpawnAction.Builder()
+              .addOutput(outputJar)
+              .addInputs(resources.values())
+              .addInputs(resourceJars)
+              .addTransitiveInputs(hostJavabaseInputs)
+              .setJarExecutable(
+                  javaPath,
+                  singleJar,
+                  JavaToolchainProvider.fromRuleContext(ruleContext).getJvmOptions())
+              .setCommandLine(sourceJarCommandLine(outputJar, resources, resourceJars))
+              .alwaysUseParameterFile(ParameterFileType.SHELL_QUOTED)
+              .setProgressMessage("Building source jar " + outputJar.prettyPrint())
+              .setMnemonic("JavaSourceJar")
+              .setExecutionInfo(ImmutableMap.of("supports-workers", "1"))
+              .build(ruleContext));
+    } else {
+      ruleContext.registerAction(
+          new SpawnAction.Builder()
+              .addOutput(outputJar)
+              .addInputs(resources.values())
+              .addInputs(resourceJars)
+              .addTransitiveInputs(hostJavabaseInputs)
+              .setExecutable(singleJar)
+              .setCommandLine(sourceJarCommandLine(outputJar, resources, resourceJars))
+              .alwaysUseParameterFile(ParameterFileType.SHELL_QUOTED)
+              .setProgressMessage("Building source jar " + outputJar.prettyPrint())
+              .setMnemonic("JavaSourceJar")
+              .build(ruleContext));
+    }
   }
 
   /** Returns the SingleJar deploy jar Artifact. */

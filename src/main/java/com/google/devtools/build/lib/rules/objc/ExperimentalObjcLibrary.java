@@ -16,6 +16,8 @@ package com.google.devtools.build.lib.rules.objc;
 
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.DEFINE;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.IMPORTED_LIBRARY;
+import static com.google.devtools.build.lib.rules.objc.ObjcProvider.INCLUDE;
+import static com.google.devtools.build.lib.rules.objc.ObjcProvider.INCLUDE_SYSTEM;
 import static com.google.devtools.build.lib.rules.objc.XcodeProductType.LIBRARY_STATIC;
 
 import com.google.common.collect.ImmutableList;
@@ -39,6 +41,7 @@ import com.google.devtools.build.lib.rules.cpp.Link.LinkStaticness;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.rules.cpp.PrecompiledFiles;
 import com.google.devtools.build.lib.rules.objc.ObjcCommon.ResourceAttributes;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 
@@ -47,10 +50,22 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
 
   private static final String OBJC_MODULE_FEATURE_NAME = "use_objc_modules";
   private static final Iterable<String> ACTIVATED_ACTIONS =
-      ImmutableList.of("objc-compile", "objc++-compile", "objc-archive", "objc-fully-link");
+      ImmutableList.of("objc-compile", "objc++-compile", "objc-archive", "objc-fully-link",
+          "assemble", "preprocess-assemble", "c-compile", "c++-compile");
 
   @Override
-  public ConfiguredTarget create(RuleContext ruleContext)
+  public ConfiguredTarget create(RuleContext ruleContext) 
+    throws InterruptedException, RuleErrorException {
+    return configureExperimentalObjcLibrary(ruleContext);
+  }
+  
+  /**
+   * Returns a configured target using the given context as an experimental_objc_library.
+   * 
+   * <p>Implemented outside of {@link RuleClass.ConfiguredTargetFactory#create} so as to allow
+   * experimental analysis of objc_library targets as experimental_objc_library.
+   */
+  public static ConfiguredTarget configureExperimentalObjcLibrary(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException {
     validateAttributes(ruleContext);
 
@@ -63,7 +78,7 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
     IntermediateArtifacts intermediateArtifacts =
         ObjcRuleClasses.intermediateArtifacts(ruleContext);
 
-    ObjcCommon common = common(ruleContext, compilationAttributes, compilationArtifacts);
+    ObjcCommon common = common(ruleContext);
     ObjcVariablesExtension variablesExtension =
         new ObjcVariablesExtension(
             ruleContext,
@@ -79,6 +94,10 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
     Collection<Artifact> nonArcSources = Sets.newHashSet(compilationArtifacts.getNonArcSrcs());
     Collection<Artifact> privateHdrs = Sets.newHashSet(compilationArtifacts.getPrivateHdrs());
     Collection<Artifact> publicHdrs = Sets.newHashSet(compilationAttributes.hdrs());
+    Artifact pchHdr = ruleContext.getPrerequisiteArtifact("pch", Mode.TARGET);
+    ImmutableList<Artifact> pchHdrList = (pchHdr != null)
+        ? ImmutableList.<Artifact>of(pchHdr)
+        : ImmutableList.<Artifact>of();
 
     CcLibraryHelper helper =
         new CcLibraryHelper(
@@ -92,9 +111,13 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
             .addDefines(common.getObjcProvider().get(DEFINE))
             .enableCompileProviders()
             .addPublicHeaders(publicHdrs)
+            .addPublicHeaders(pchHdrList)
             .addPrecompiledFiles(precompiledFiles)
             .addDeps(ruleContext.getPrerequisites("deps", Mode.TARGET))
             .addCopts(compilationSupport.getCompileRuleCopts())
+            .addIncludeDirs(common.getObjcProvider().get(INCLUDE))
+            .addCopts(ruleContext.getFragment(ObjcConfiguration.class).getCoptsForCompilationMode())
+            .addSystemIncludeDirs(common.getObjcProvider().get(INCLUDE_SYSTEM))
             .addVariableExtension(variablesExtension);
 
     if (compilationArtifacts.getArchive().isPresent()) {
@@ -114,6 +137,11 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
 
     XcodeProvider.Builder xcodeProviderBuilder = new XcodeProvider.Builder();
     compilationSupport.addXcodeSettings(xcodeProviderBuilder, common);
+    
+    new ResourceSupport(ruleContext)
+        .validateAttributes()
+        .addXcodeSettings(xcodeProviderBuilder);
+    
     new XcodeSupport(ruleContext)
         .addFilesToBuild(filesToBuild)
         .addXcodeSettings(xcodeProviderBuilder, common.getObjcProvider(), LIBRARY_STATIC)
@@ -131,7 +159,7 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
         .build();
   }
 
-  private FeatureConfiguration getFeatureConfiguration(RuleContext ruleContext) {
+  private static FeatureConfiguration getFeatureConfiguration(RuleContext ruleContext) {
     CcToolchainProvider toolchain =
         ruleContext
             .getPrerequisite(":cc_toolchain", Mode.TARGET)
@@ -155,11 +183,12 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
     activatedCrosstoolSelectables.add(CppRuleClasses.MODULE_MAPS);
     activatedCrosstoolSelectables.add(CppRuleClasses.COMPILE_ACTION_FLAGS_IN_FLAG_SET);
     activatedCrosstoolSelectables.add(CppRuleClasses.DEPENDENCY_FILE);
+    activatedCrosstoolSelectables.add(CppRuleClasses.INCLUDE_PATHS);
 
     return toolchain.getFeatures().getFeatureConfiguration(activatedCrosstoolSelectables.build());
   }
 
-  private void registerArchiveAction(
+  private static void registerArchiveAction(
       IntermediateArtifacts intermediateArtifacts,
       CompilationSupport compilationSupport,
       CompilationArtifacts compilationArtifacts,
@@ -173,7 +202,7 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
     helper.setLinkType(LinkTargetType.OBJC_ARCHIVE).addLinkActionInput(objList);
   }
 
-  private void registerFullyLinkAction(
+  private static void registerFullyLinkAction(
       RuleContext ruleContext,
       ObjcCommon common,
       VariablesExtension variablesExtension,
@@ -202,7 +231,7 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
   }
 
   /** Throws errors or warnings for bad attribute state. */
-  private void validateAttributes(RuleContext ruleContext) {
+  private static void validateAttributes(RuleContext ruleContext) {
     for (String copt : ObjcCommon.getNonCrosstoolCopts(ruleContext)) {
       if (copt.contains("-fmodules-cache-path")) {
         ruleContext.ruleWarning(CompilationSupport.MODULES_CACHE_PATH_WARNING);
@@ -213,22 +242,25 @@ public class ExperimentalObjcLibrary implements RuleConfiguredTargetFactory {
   /**
    * Constructs an {@link ObjcCommon} instance based on the attributes of the given rule context.
    */
-  private ObjcCommon common(
-      RuleContext ruleContext,
-      CompilationAttributes compilationAttributes,
-      CompilationArtifacts compilationArtifacts) {
+  private static ObjcCommon common(RuleContext ruleContext) {
     return new ObjcCommon.Builder(ruleContext)
-        .setCompilationAttributes(compilationAttributes)
+        .setCompilationAttributes(
+            CompilationAttributes.Builder.fromRuleContext(ruleContext).build())
         .setResourceAttributes(new ResourceAttributes(ruleContext))
         .addDefines(ruleContext.getTokenizedStringListAttr("defines"))
-        .setCompilationArtifacts(compilationArtifacts)
+        .setCompilationArtifacts(CompilationSupport.compilationArtifacts(ruleContext))
         .addDeps(ruleContext.getPrerequisites("deps", Mode.TARGET))
         .addRuntimeDeps(ruleContext.getPrerequisites("runtime_deps", Mode.TARGET))
+        .addDepObjcProviders(
+            ruleContext.getPrerequisites("bundles", Mode.TARGET, ObjcProvider.class))
+        .addNonPropagatedDepObjcProviders(
+            ruleContext.getPrerequisites("non_propagated_deps", Mode.TARGET, ObjcProvider.class))
         .setIntermediateArtifacts(ObjcRuleClasses.intermediateArtifacts(ruleContext))
+        .setAlwayslink(ruleContext.attributes().get("alwayslink", Type.BOOLEAN))
         .build();
   }
- 
-  private ImmutableList<Artifact> getObjFiles(
+  
+  private static ImmutableList<Artifact> getObjFiles(
       CompilationArtifacts compilationArtifacts, IntermediateArtifacts intermediateArtifacts) {
     ImmutableList.Builder<Artifact> result = new ImmutableList.Builder<>();
     for (Artifact sourceFile : compilationArtifacts.getSrcs()) {

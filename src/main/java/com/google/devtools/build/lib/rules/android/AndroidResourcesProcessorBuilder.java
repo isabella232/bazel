@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.android.AndroidResourcesProvider.ResourceContainer;
 import com.google.devtools.build.lib.rules.android.AndroidResourcesProvider.ResourceType;
+import com.google.devtools.build.lib.rules.android.ResourceContainerConverter.Builder.SeparatorType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -50,6 +51,7 @@ public class AndroidResourcesProcessorBuilder {
       ResourceContainerConverter.builder()
           .includeResourceRoots()
           .includeManifest()
+          .withSeparator(SeparatorType.COLON_COMMA)
           .toArgConverter();
 
   private static final ResourceContainerConverter.ToArg RESOURCE_DEP_TO_ARG =
@@ -58,6 +60,7 @@ public class AndroidResourcesProcessorBuilder {
           .includeManifest()
           .includeRTxt()
           .includeSymbolsBin()
+          .withSeparator(SeparatorType.COLON_COMMA)
           .toArgConverter();
 
   private ResourceContainer primary;
@@ -286,7 +289,7 @@ public class AndroidResourcesProcessorBuilder {
 
     if (!Strings.isNullOrEmpty(customJavaPackage)) {
       // Sets an alternative java package for the generated R.java
-      // this is allows android rules to generate resources outside of the java{,tests} tree.
+      // this allows android rules to generate resources outside of the java{,tests} tree.
       builder.add("--packageForR").add(customJavaPackage);
     }
 
@@ -304,7 +307,7 @@ public class AndroidResourcesProcessorBuilder {
             .build(context));
 
     // Return the full set of processed transitive dependencies.
-    return new ResourceContainer(primary.getLabel(),
+    return ResourceContainer.create(primary.getLabel(),
         primary.getJavaPackage(),
         primary.getRenameManifestPackage(),
         primary.getConstantsInlined(),
@@ -315,6 +318,7 @@ public class AndroidResourcesProcessorBuilder {
         apkOut != null ? apkOut : primary.getApk(),
         manifestOut != null ? manifestOut : primary.getManifest(),
         sourceJarOut,
+        primary.getJavaClassJar(),
         primary.getArtifacts(ResourceType.ASSETS),
         primary.getArtifacts(ResourceType.RESOURCES),
         primary.getRoots(ResourceType.ASSETS),

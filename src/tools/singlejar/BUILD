@@ -38,6 +38,22 @@ cc_test(
 )
 
 cc_test(
+    name = "input_jar_empty_jar_test",
+    srcs = [
+        "input_jar_empty_jar_test.cc",
+    ],
+    data = [
+        "data/empty.zip",
+    ],
+    deps = [
+        ":input_jar",
+        ":test_util",
+        "//src/main/cpp/util",
+        "//third_party:gtest",
+    ],
+)
+
+cc_test(
     name = "input_jar_preambled_test",
     srcs = [
         "input_jar_preambled_test.cc",
@@ -117,6 +133,19 @@ cc_test(
     ],
 )
 
+sh_test(
+    name = "output_jar_bash_test",
+    srcs = ["output_jar_shell_test.sh"],
+    args = [
+        "src/test/shell",
+        "$(location :singlejar)",
+    ],
+    data = [
+        ":singlejar",
+    ],
+    deps = ["//src/test/shell:bashunit"],
+)
+
 cc_test(
     name = "output_jar_simple_test",
     srcs = [
@@ -194,6 +223,22 @@ cc_test(
         "//third_party:gtest",
         "//third_party/zlib",
     ],
+)
+
+sh_test(
+    name = "zip64_test",
+    srcs = ["zip64_test.sh"],
+    args = [
+        "src/test/shell",
+        "$(location :singlejar)",
+        "$(location //external:jar)",
+    ],
+    data = [
+        ":singlejar",
+        "//external:jar",
+        "//tools/defaults:jdk",
+    ],
+    deps = ["//src/test/shell:bashunit"],
 )
 
 cc_library(
@@ -326,7 +371,10 @@ java_library(
 
 genrule(
     name = "stored_jar",
-    srcs = ["output_jar.cc"],
+    srcs = [
+        "output_jar.cc",
+        "//tools/defaults:jdk",
+    ],
     outs = ["stored.jar"],
     cmd = "$(location //external:jar) -0cf \"$@\" $(location :output_jar.cc)",
     tools = ["//external:jar"],

@@ -40,6 +40,10 @@ See :func:`apple_action`."""
 XCRUNWRAPPER_LABEL = "//external:xcrunwrapper"
 """The label for xcrunwrapper tool."""
 
+def label_scoped_path(ctx, path):
+  """Return the path scoped to target's label."""
+  return ctx.label.name + "/" + path.lstrip("/")
+
 def module_cache_path(ctx):
   """Returns the Clang module cache path to use for this rule."""
   return ctx.configuration.genfiles_dir.path + "/_objc_module_cache"
@@ -65,10 +69,18 @@ def xcrun_action(ctx, **kw):
   This method takes the same keyword arguments as ctx.action, however you don't
   need to specify the executable.
   """
-  platform = ctx.fragments.apple.ios_cpu_platform()
+
+  if (hasattr(ctx.fragments.apple, "single_arch_cpu")
+      and hasattr(ctx.fragments.apple, "single_arch_platform")):
+    platform = ctx.fragments.apple.single_arch_platform
+  else:
+    # TODO(dmishe): Remove this branch when single_arch_platform is available
+    # by default.
+    platform = ctx.fragments.apple.ios_cpu_platform()
+
   action_env = ctx.fragments.apple.target_apple_env(platform) \
       + ctx.fragments.apple.apple_host_system_env()
-  env = kw.get('env', {})
+  env = kw.get("env", {})
   kw['env'] = env + action_env
 
   apple_action(ctx, executable=ctx.executable._xcrunwrapper, **kw)

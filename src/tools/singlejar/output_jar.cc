@@ -21,9 +21,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#if defined(__linux)
-#include <sys/sendfile.h>
-#endif
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -45,7 +42,9 @@
 
 OutputJar::OutputJar()
     : options_(nullptr),
-      fd_(-1),
+      file_(nullptr),
+      outpos_(0),
+      buffer_(nullptr),
       entries_(0),
       duplicate_entries_(0),
       cen_(nullptr),
@@ -53,7 +52,7 @@ OutputJar::OutputJar()
       cen_capacity_(0),
       spring_handlers_("META-INF/spring.handlers"),
       spring_schemas_("META-INF/spring.schemas"),
-      protobuf_meta_handler_("protobuf.meta"),
+      protobuf_meta_handler_("protobuf.meta", false),
       manifest_("META-INF/MANIFEST.MF"),
       build_properties_("build-data.properties") {
   known_members_.emplace(spring_handlers_.filename(),
@@ -63,8 +62,6 @@ OutputJar::OutputJar()
   known_members_.emplace(manifest_.filename(), EntryInfo{&manifest_});
   known_members_.emplace(protobuf_meta_handler_.filename(),
                          EntryInfo{&protobuf_meta_handler_});
-  known_members_.emplace(build_properties_.filename(),
-                         EntryInfo{&build_properties_});
   manifest_.Append(
       "Manifest-Version: 1.0\r\n"
       "Created-By: singlejar\r\n");
@@ -75,6 +72,14 @@ int OutputJar::Doit(Options *options) {
     diag_errx(1, "%s:%d: Doit() can be called only once.", __FILE__, __LINE__);
   }
   options_ = options;
+
+  // Register the handler for the build-data.properties file unless
+  // --exclude_build_data is present. Otherwise we do not generate this file,
+  // and it will be copied from the first source archive containing it.
+  if (!options_->exclude_build_data) {
+    known_members_.emplace(build_properties_.filename(),
+                           EntryInfo{&build_properties_});
+  }
 
   build_properties_.AddProperty("build.target", options_->output_jar.c_str());
   if (options_->verbose) {
@@ -99,10 +104,13 @@ int OutputJar::Doit(Options *options) {
     const char *const launcher_path = options_->java_launcher.c_str();
     int in_fd = open(launcher_path, O_RDONLY);
     struct stat statbuf;
-    if (fd_ < 0 || fstat(in_fd, &statbuf)) {
+    if (file_ == nullptr || fstat(in_fd, &statbuf)) {
       diag_err(1, "%s", launcher_path);
     }
-    ssize_t byte_count = AppendFile(in_fd, nullptr, statbuf.st_size);
+    // TODO(asmundak):  Consider going back to sendfile() or reflink
+    // (BTRFS_IOC_CLONE/XFS_IOC_CLONE) here.  The launcher preamble can
+    // be very large for targets with many native deps.
+    ssize_t byte_count = AppendFile(in_fd, 0, statbuf.st_size);
     if (byte_count < 0) {
       diag_err(1, "%s:%d: Cannot copy %s to %s", __FILE__, __LINE__,
                launcher_path, options_->output_jar.c_str());
@@ -161,12 +169,11 @@ int OutputJar::Doit(Options *options) {
   }
 
   for (auto &rpath : options_->classpath_resources) {
-    // TODO(asmundak): On Windows, look for \, too.
     ClasspathResource(blaze_util::Basename(rpath), rpath);
   }
 
   for (auto &rdesc : options_->resources) {
-    // A resource description is either NAME or NAME:PATH
+    // A resource description is either NAME or PATH:NAME
     std::size_t colon = rdesc.find_first_of(':');
     if (0 == colon) {
       diag_errx(1, "%s:%d: Bad resource description %s", __FILE__, __LINE__,
@@ -175,7 +182,7 @@ int OutputJar::Doit(Options *options) {
     if (std::string::npos == colon) {
       ClasspathResource(rdesc, rdesc);
     } else {
-      ClasspathResource(rdesc.substr(0, colon), rdesc.substr(colon + 1));
+      ClasspathResource(rdesc.substr(colon + 1), rdesc.substr(0, colon));
     }
   }
 
@@ -209,24 +216,34 @@ int OutputJar::Doit(Options *options) {
 }
 
 OutputJar::~OutputJar() {
-  if (fd_ >= 0) {
+  if (file_) {
     diag_warnx("%s:%d: Close() should be called first", __FILE__, __LINE__);
   }
 }
 
+// Try to perform I/O in units of this size.
+// (128KB is the default max request size for fuse filesystems.)
+static const size_t kBufferSize = 128<<10;
+
 bool OutputJar::Open() {
-  if (fd_ >= 0) {
+  if (file_) {
     diag_errx(1, "%s:%d: Cannot open output archive twice", __FILE__, __LINE__);
   }
-  // The output file has read/write/execute permissions for the owner,
-  // default for the rest.
-  mode_t old_umask = umask(0);
-  fd_ = creat(path(), (S_IRWXU | S_IRWXG | S_IRWXO) & ~old_umask);
-  umask(old_umask);
-  if (fd_ < 0) {
+  // Set execute bits since we may produce an executable output file.
+  int fd = open(path(), O_CREAT|O_WRONLY|O_TRUNC, 0777);
+  if (fd < 0) {
     diag_warn("%s:%d: %s", __FILE__, __LINE__, path());
     return false;
   }
+  file_ = fdopen(fd, "w");
+  if (file_ == nullptr) {
+    diag_warn("%s:%d: fdopen of %s", __FILE__, __LINE__, path());
+    close(fd);
+    return false;
+  }
+  outpos_ = 0;
+  buffer_.reset(new char[kBufferSize]);
+  setbuffer(file_, buffer_.get(), kBufferSize);
   if (options_->verbose) {
     fprintf(stderr, "Writing to %s\n", path());
   }
@@ -280,13 +297,15 @@ bool OutputJar::AddJar(int jar_path_index) {
       // The contents of the META-INF/services/<SERVICE> on the output is the
       // concatenation of the META-INF/services/<SERVICE> files from all inputs.
       std::string service_path(file_name, file_name_length);
-      if (!known_members_.count(service_path)) {
+      if (NewEntry(service_path)) {
         // Create a concatenator and add it to the known_members_ map.
         // The call to Merge() below will then take care of the rest.
         Concatenator *service_handler = new Concatenator(service_path);
         service_handlers_.emplace_back(service_handler);
         known_members_.emplace(service_path, EntryInfo{service_handler});
       }
+    } else {
+      ExtraHandler(jar_entry);
     }
 
     // Install a new entry unless it is already present. All the plain (non-dir)
@@ -382,22 +401,44 @@ bool OutputJar::AddJar(int jar_path_index) {
                       jar_entry->last_mod_file_time() != normalized_time;
     }
     if (fix_timestamp) {
-      LH lh_new;
-      memcpy(&lh_new, lh, sizeof(lh_new));
-      lh_new.last_mod_file_date(33);
-      lh_new.last_mod_file_time(normalized_time);
+      uint8_t lh_buffer[512];
+      size_t lh_size = lh->size();
+      LH *lh_new = lh_size > sizeof(lh_buffer)
+                       ? reinterpret_cast<LH *>(malloc(lh_size))
+                       : reinterpret_cast<LH *>(lh_buffer);
+      // Remove Unix timestamp field.
+      auto field_to_remove = lh->unix_time_extra_field();
+      if (field_to_remove != nullptr) {
+        auto from_end = byte_ptr(lh) + lh->size();
+        size_t removed_size = field_to_remove->size();
+        size_t chunk1_size = byte_ptr(field_to_remove) - byte_ptr(lh);
+        size_t chunk2_size = lh->size() - (chunk1_size + removed_size);
+        memcpy(lh_new, lh, chunk1_size);
+        if (chunk2_size) {
+          memcpy(reinterpret_cast<uint8_t *>(lh_new) + chunk1_size,
+                 from_end - chunk2_size, chunk2_size);
+        }
+        lh_new->extra_fields(lh_new->extra_fields(),
+                             lh->extra_fields_length() - removed_size);
+      } else {
+        memcpy(lh_new, lh, lh_size);
+      }
+      lh_new->last_mod_file_date(33);
+      lh_new->last_mod_file_time(normalized_time);
       // Now write these few bytes and adjust read/write positions accordingly.
-      if (!WriteBytes(reinterpret_cast<uint8_t *>(&lh_new), sizeof(lh_new))) {
+      if (!WriteBytes(lh_new, lh_new->size())) {
         diag_err(1, "%s:%d: Cannot copy modified local header for %.*s",
                  __FILE__, __LINE__, file_name_length, file_name);
       }
-      copy_from += sizeof(lh_new);
-      num_bytes -= sizeof(lh_new);
+      copy_from += lh_size;
+      num_bytes -= lh_size;
+      if (reinterpret_cast<uint8_t *>(lh_new) != lh_buffer) {
+        free(lh_buffer);
+      }
     }
 
-    // Do the actual copy. Use sendfile, avoiding copying the data to user
-    // space and back.
-    ssize_t n_copied = AppendFile(input_jar.fd(), &copy_from, num_bytes);
+    // Do the actual copy.
+    ssize_t n_copied = AppendFile(input_jar.fd(), copy_from, num_bytes);
     if (n_copied < 0) {
       diag_err(1, "%s:%d: Cannot copy %ld bytes of %.*s from %s", __FILE__,
                __LINE__, num_bytes, file_name_length, file_name,
@@ -410,7 +451,29 @@ bool OutputJar::AddJar(int jar_path_index) {
     // Append central directory header for this file to the output central
     // directory we are building.
     TODO(output_position < 0xFFFFFFFF, "Handle Zip64");
-    CDH *out_cdh = AppendToDirectoryBuffer(jar_entry);
+
+    CDH *out_cdh;
+    auto field_to_remove =
+        fix_timestamp ? jar_entry->unix_time_extra_field() : nullptr;
+    if (field_to_remove != nullptr) {
+      // Remove extra fields.
+      auto from_start = byte_ptr(jar_entry);
+      auto from_end = from_start + jar_entry->size();
+      size_t removed_size = field_to_remove->size();
+      size_t chunk1_size = byte_ptr(field_to_remove) - from_start;
+      size_t chunk2_size = jar_entry->size() - (chunk1_size + removed_size);
+      out_cdh =
+          reinterpret_cast<CDH *>(ReserveCdr(jar_entry->size() - removed_size));
+      memcpy(out_cdh, jar_entry, chunk1_size);
+      if (chunk2_size) {
+        memcpy(reinterpret_cast<uint8_t *>(out_cdh) + chunk1_size,
+               from_end - chunk2_size, chunk2_size);
+      }
+      out_cdh->extra_fields(out_cdh->extra_fields(),
+                            jar_entry->extra_fields_length() - removed_size);
+    } else {
+      out_cdh = AppendToDirectoryBuffer(jar_entry);
+    }
     out_cdh->local_header_offset32(output_position);
     if (fix_timestamp) {
       out_cdh->last_mod_file_time(normalized_time);
@@ -422,12 +485,14 @@ bool OutputJar::AddJar(int jar_path_index) {
 }
 
 off_t OutputJar::Position() {
-  off_t position = lseek(fd_, 0, SEEK_CUR);
-  if (position == (off_t)-1) {
-    diag_err(1, "%s:%d: lseek", __FILE__, __LINE__);
+  if (file_ == nullptr) {
+    diag_err(1, "%s:%d: output file is not open", __FILE__, __LINE__);
   }
-  TODO(position < 0xFFFFFFFF, "Handle Zip64");
-  return position;
+  // You'd think this could be "return ftell(file_);", but that
+  // generates a needless call to lseek.  So instead we cache our
+  // current position in the output.
+  TODO(outpos_ < 0xFFFFFFFF, "Handle Zip64");
+  return outpos_;
 }
 
 // Writes an entry. The argument is the pointer to the contiguos block of
@@ -480,8 +545,10 @@ void OutputJar::WriteEntry(void *buffer) {
   CDH *cdh = reinterpret_cast<CDH *>(
       ReserveCdh(sizeof(CDH) + entry->file_name_length()));
   cdh->signature();
+  // Note: do not set the version to Unix 3.0 spec, otherwise
+  // unzip will think that 'external_attributes' field contains access mode
   cdh->version(20);
-  cdh->version_to_extract(entry->version());
+  cdh->version_to_extract(20);  // 2.0
   cdh->bit_flag(0x0);
   cdh->compression_method(entry->compression_method());
   cdh->last_mod_file_time(entry->last_mod_file_time());
@@ -507,7 +574,7 @@ void OutputJar::AddDirectory(const char *path) {
   size_t lh_size = sizeof(LH) + n_path;
   LH *lh = reinterpret_cast<LH *>(malloc(lh_size));
   lh->signature();
-  lh->version(20);
+  lh->version(20);  // 2.0
   lh->bit_flag(0);  // TODO(asmundak): should I set UTF8 flag?
   lh->compression_method(Z_NO_COMPRESSION);
   lh->crc32(0);
@@ -546,7 +613,7 @@ uint8_t *OutputJar::ReserveCdh(size_t size) {
 
 // Write out combined jar.
 bool OutputJar::Close() {
-  if (fd_ < 0) {
+  if (file_ == nullptr) {
     return true;
   }
 
@@ -560,23 +627,49 @@ bool OutputJar::Close() {
   WriteEntry(spring_schemas_.OutputEntry(options_->force_compression));
   WriteEntry(protobuf_meta_handler_.OutputEntry(options_->force_compression));
   // TODO(asmundak): handle manifest;
-  off_t output_position = lseek(fd_, 0, SEEK_CUR);
-  if (output_position == (off_t)-1) {
-    diag_err(1, "%s:%d: lseek", __FILE__, __LINE__);
-  }
+  off_t output_position = Position();
+  bool write_zip64_ecd = output_position >= 0xFFFFFFFF || entries_ >= 0xFFFF ||
+                         cen_size_ >= 0xFFFFFFFF;
+
   TODO(output_position < 0xFFFFFFFF, "Handle Zip64");
 
-  size_t cen_size =
-      cen_size_;  // Save it before AppendToDirectoryBuffer updates it.
-  ECD *ecd = reinterpret_cast<ECD *>(ReserveCdh(sizeof(ECD)));
-  ecd->signature();
-  ecd->this_disk_entries16((uint16_t)entries_);
-  TODO(entries_ < 0xFFFF, "Handle >=64K entries");
-  ecd->total_entries16((uint16_t)entries_);
-  TODO(cen_size < 0xFFFFFFFF, "Handle Zip64");
-  ecd->cen_size32(cen_size);
-  TODO(output_position < 0xFFFFFFFF, "Handle Zip64");
-  ecd->cen_offset32(output_position);
+  size_t cen_size = cen_size_;  // Save it before ReserveCdh updates it.
+  if (write_zip64_ecd) {
+    ECD64 *ecd64 = reinterpret_cast<ECD64 *>(ReserveCdh(sizeof(ECD64)));
+    ECD64Locator *ecd64_locator =
+        reinterpret_cast<ECD64Locator *>(ReserveCdh(sizeof(ECD64Locator)));
+    ECD *ecd = reinterpret_cast<ECD *>(ReserveCdh(sizeof(ECD)));
+    ecd64->signature();
+    ecd64->remaining_size(sizeof(ECD64) - 12);
+    ecd64->version(0x031E);         // Unix, version 3.0
+    ecd64->version_to_extract(45);  // 4.5 (Zip64 support)
+    ecd64->this_disk_entries(entries_);
+    ecd64->total_entries(entries_);
+    ecd64->cen_size(cen_size);
+    ecd64->cen_offset(output_position);
+    ecd64_locator->signature();
+    ecd64_locator->ecd64_offset(output_position + cen_size);
+    ecd64_locator->total_disks(1);
+    ecd->signature();
+    ecd->this_disk_entries16(0xFFFF);
+    ecd->total_entries16(0xFFFF);
+    // Java Compiler (javac) uses its own "optimized" Zip handler (see
+    // https://bugs.openjdk.java.net/browse/JDK-7018859) which may fail
+    // to handle 0xFFFFFFFF in the CEN size and CEN offset fields. Try
+    // to use 32-bit values here, too. Hopefully by the time we need to
+    // handle really large archives, this is fixes upstream. Note that this
+    // affects javac and javah only, 'jar' experiences no problems.
+    ecd->cen_size32(std::min(cen_size, static_cast<size_t>(0xFFFFFFFFUL)));
+    ecd->cen_offset32(
+        std::min(output_position, static_cast<off_t>(0x0FFFFFFFFL)));
+  } else {
+    ECD *ecd = reinterpret_cast<ECD *>(ReserveCdh(sizeof(ECD)));
+    ecd->signature();
+    ecd->this_disk_entries16((uint16_t)entries_);
+    ecd->total_entries16((uint16_t)entries_);
+    ecd->cen_size32(cen_size);
+    ecd->cen_offset32(output_position);
+  }
 
   // Save Central Directory and wrap up.
   if (!WriteBytes(cen_, cen_size_)) {
@@ -584,13 +677,14 @@ bool OutputJar::Close() {
   }
   free(cen_);
 
-  if (close(fd_)) {
+  if (fclose(file_)) {
     diag_err(1, "%s:%d: %s", __FILE__, __LINE__, path());
-    fd_ = -1;
-    return false;
   }
+  file_ = nullptr;
+  // Free the buffer only after fclose(); stdio may flush data from the
+  // buffer on close.
+  buffer_.reset();
 
-  fd_ = -1;
   if (options_->verbose) {
     fprintf(stderr, "Wrote %s with %d entries", path(), entries_);
     if (duplicate_entries_) {
@@ -626,67 +720,33 @@ void OutputJar::ClasspathResource(const std::string &resource_name,
   known_members_.emplace(resource_name, EntryInfo{classpath_resource});
 }
 
-#if defined(__APPLE__)
-ssize_t OutputJar::AppendFile(int in_fd, off_t *in_offset, size_t count) {
-  if (!count) {
+ssize_t OutputJar::AppendFile(int in_fd, off_t offset, size_t count) {
+  if (count == 0) {
     return 0;
   }
-  uint8_t buffer[8192];
+  std::unique_ptr<void, decltype(free)*> buffer(malloc(kBufferSize), free);
+  if (buffer == nullptr) {
+    diag_err(1, "%s:%d: malloc", __FILE__, __LINE__);
+  }
   ssize_t total_written = 0;
 
-  // If the input file position (the offset in the input file) has been  passed,
-  // that's where we start, and the input file position has to be restored after
-  // we are done copying.
-  const off_t offset_error = static_cast<off_t>(-1);
-  off_t old_input_offset = offset_error;
-  if (in_offset) {
-    if (offset_error == (old_input_offset = lseek(in_fd, 0, SEEK_CUR)) ||
-        offset_error == lseek(in_fd, *in_offset, SEEK_SET)) {
-      return -1;
-    }
-  }
   while (total_written < count) {
-    ssize_t n_read =
-        read(in_fd, buffer, std::min(sizeof(buffer), count - total_written));
+    size_t len = std::min(kBufferSize, count - total_written);
+    ssize_t n_read = pread(in_fd, buffer.get(), len, offset + total_written);
     if (n_read > 0) {
-      if (!WriteBytes(buffer, n_read)) {
+      if (!WriteBytes(buffer.get(), n_read)) {
         return -1;
       }
       total_written += n_read;
     } else if (n_read == 0) {
       break;
-    } else if (EAGAIN != errno) {
+    } else {
       return -1;
     }
   }
 
-  // If the input file position has been passed, update it and restore
-  // the read position in the input file.
-  if (in_offset) {
-    if (offset_error == lseek(in_fd, old_input_offset, SEEK_SET)) {
-      return -1;
-    }
-    *in_offset += total_written;
-  }
   return total_written;
 }
-
-#elif defined(__linux)
-ssize_t OutputJar::AppendFile(int in_fd, off_t *in_offset, size_t count) {
-  // sendfile call is interruptable and has to be handled the same way as write
-  // call.
-  for (size_t to_write = count; to_write > 0;) {
-    ssize_t written = sendfile(fd_, in_fd, in_offset, to_write);
-    if (written < 0) {
-      return written;
-    } else if (written == 0) {
-      return static_cast<ssize_t>(count - to_write);
-    }
-    to_write -= static_cast<size_t>(written);
-  }
-  return static_cast<ssize_t>(count);
-}
-#endif
 
 void OutputJar::ExtraCombiner(const std::string &entry_name,
                               Combiner *combiner) {
@@ -694,14 +754,10 @@ void OutputJar::ExtraCombiner(const std::string &entry_name,
   known_members_.emplace(entry_name, EntryInfo{combiner});
 }
 
-bool OutputJar::WriteBytes(uint8_t *buffer, size_t count) {
-  for (uint8_t *buffer_end = buffer + count; buffer < buffer_end;) {
-    ssize_t n_written = write(fd_, buffer, buffer_end - buffer);
-    if (n_written > 0) {
-      buffer += n_written;
-    } else if (EAGAIN == errno) {
-      return false;
-    }
-  }
-  return true;
+bool OutputJar::WriteBytes(void *buffer, size_t count) {
+  size_t written = fwrite(buffer, 1, count, file_);
+  outpos_ += written;
+  return written == count;
 }
+
+void OutputJar::ExtraHandler(const CDH *) {}

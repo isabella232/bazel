@@ -20,6 +20,7 @@ import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
@@ -33,6 +34,7 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
@@ -40,8 +42,8 @@ import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.io.IOException;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -65,6 +67,8 @@ public class FakeCppCompileAction extends CppCompileAction {
       CcToolchainFeatures.Variables variables,
       Artifact sourceFile,
       boolean shouldScanIncludes,
+      boolean shouldPruneModules,
+      boolean usePic,
       Label sourceLabel,
       NestedSet<Artifact> mandatoryInputs,
       Artifact outputFile,
@@ -76,7 +80,8 @@ public class FakeCppCompileAction extends CppCompileAction {
       Class<? extends CppCompileActionContext> actionContext,
       ImmutableList<String> copts,
       Predicate<String> nocopts,
-      RuleContext ruleContext) {
+      RuleContext ruleContext,
+      CppSemantics cppSemantics) {
     super(
         owner,
         features,
@@ -84,6 +89,8 @@ public class FakeCppCompileAction extends CppCompileAction {
         variables,
         sourceFile,
         shouldScanIncludes,
+        shouldPruneModules,
+        usePic,
         sourceLabel,
         mandatoryInputs,
         outputFile,
@@ -108,8 +115,10 @@ public class FakeCppCompileAction extends CppCompileAction {
         ImmutableList.<IncludeScannable>of(),
         GUID,
         ImmutableSet.<String>of(),
+        ImmutableMap.<String, String>of(),
         CppCompileAction.CPP_COMPILE,
-        ruleContext);
+        ruleContext,
+        cppSemantics);
     this.tempOutputFile = Preconditions.checkNotNull(tempOutputFile);
   }
 
@@ -140,9 +149,30 @@ public class FakeCppCompileAction extends CppCompileAction {
       }
     }
     IncludeScanningContext scanningContext = executor.getContext(IncludeScanningContext.class);
-    NestedSet<Artifact> discoveredInputs =
-        discoverInputsFromDotdFiles(
-            executor.getExecRoot(), scanningContext.getArtifactResolver(), reply);
+    Path execRoot = executor.getExecRoot();
+    
+    NestedSet<Artifact> discoveredInputs;
+    if (getDotdFile() == null) {
+      discoveredInputs = NestedSetBuilder.<Artifact>stableOrder().build();
+    } else {
+      HeaderDiscovery.Builder discoveryBuilder = new HeaderDiscovery.Builder()
+            .setAction(this)
+            .setDotdFile(getDotdFile())
+            .setSourceFile(getSourceFile())
+            .setSpecialInputsHandler(specialInputsHandler)
+            .setDependencySet(processDepset(execRoot, reply))
+            .setPermittedSystemIncludePrefixes(getPermittedSystemIncludePrefixes(execRoot))
+            .setAllowedDerivedinputsMap(getAllowedDerivedInputsMap());
+      
+      if (cppSemantics.needsIncludeValidation()) {
+        discoveryBuilder.shouldValidateInclusions();
+      }
+      
+      discoveredInputs = discoveryBuilder
+            .build()
+            .discoverInputsFromDotdFiles(execRoot, scanningContext.getArtifactResolver());
+    }
+     
     reply = null; // Clear in-memory .d files early.
 
     // Even cc_fake_binary rules need to properly declare their dependencies...

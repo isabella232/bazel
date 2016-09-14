@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.analysis.mock;
 import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.analysis.ConfigurationCollectionFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
@@ -46,8 +45,6 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 
@@ -64,6 +61,7 @@ public final class BazelAnalysisMock extends AnalysisMock {
         new ArrayList<>(
             ImmutableList.of(
                 "local_repository(name = 'bazel_tools', path = '" + bazelToolWorkspace + "')",
+                "local_repository(name = 'local_config_xcode', path = '/local_config_xcode')",
                 "bind(",
                 "  name = 'objc_proto_lib',",
                 "  actual = '//objcproto:ProtocolBuffers_lib',",
@@ -79,6 +77,8 @@ public final class BazelAnalysisMock extends AnalysisMock {
                 "bind(name = 'android/sdk', actual='@bazel_tools//tools/android:sdk')",
                 "bind(name = 'tools/python', actual='//tools/python')"));
 
+    config.create(
+        "/local_config_xcode/BUILD", "xcode_config(name = 'host_xcodes')");
     config.overwrite("WORKSPACE", workspaceContents.toArray(new String[workspaceContents.size()]));
     config.create("/bazel_tools_workspace/WORKSPACE", "workspace(name = 'bazel_tools')");
     config.create(
@@ -165,8 +165,10 @@ public final class BazelAnalysisMock extends AnalysisMock {
         .add("sh_binary(name = 'manifest_merger', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'rclass_generator', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'resources_processor', srcs = ['empty.sh'])")
+        .add("sh_binary(name = 'resource_merger', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'resource_parser', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'resource_shrinker', srcs = ['empty.sh'])")
+        .add("sh_binary(name = 'resource_validator', srcs = ['empty.sh'])")
         .add("android_library(name = 'incremental_stub_application')")
         .add("android_library(name = 'incremental_split_stub_application')")
         .add("sh_binary(name = 'stubify_manifest', srcs = ['empty.sh'])")
@@ -178,6 +180,11 @@ public final class BazelAnalysisMock extends AnalysisMock {
         .add("sh_binary(name = 'strip_resources', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'build_incremental_dexmanifest', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'incremental_install', srcs = ['empty.sh'])")
+        .add("java_binary(name = 'JarFilter',")
+        .add("          runtime_deps = [ ':JarFilter_import'],")
+        .add("          main_class = 'com.google.devtools.build.android.ideinfo.JarFilter')")
+        .add("java_import(name = 'JarFilter_import',")
+        .add("          jars = [ 'jar_filter_deploy.jar' ])")
         .add("java_binary(name = 'PackageParser',")
         .add("          runtime_deps = [ ':PackageParser_import'],")
         .add("          main_class = 'com.google.devtools.build.android.ideinfo.PackageParser')")
@@ -199,21 +206,12 @@ public final class BazelAnalysisMock extends AnalysisMock {
     FileSystemUtils.writeContentAsLatin1(jdkWorkspacePath, "");
   }
 
-  public static String readFromResources(String filename) {
-    try (InputStream in = BazelAnalysisMock.class.getClassLoader().getResourceAsStream(filename)) {
-      return new String(ByteStreams.toByteArray(in), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      // This should never happen.
-      throw new AssertionError(e);
-    }
-  }
-
   @Override
   public ConfigurationFactory createConfigurationFactory() {
     return new ConfigurationFactory(new BazelConfigurationCollection(),
         new BazelConfiguration.Loader(),
         new CppConfigurationLoader(Functions.<String>identity()),
-        new PythonConfigurationLoader(Functions.<String>identity()),
+        new PythonConfigurationLoader(),
         new BazelPythonConfiguration.Loader(),
         new JvmConfigurationLoader(BazelRuleClassProvider.JAVA_CPU_SUPPLIER),
         new JavaConfigurationLoader(),

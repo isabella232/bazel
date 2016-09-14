@@ -26,6 +26,14 @@ java_binary(
 )
 
 java_binary(
+    name = "AndroidResourceMergingAction",
+    main_class = "com.google.devtools.build.android.AndroidResourceMergingAction",
+    runtime_deps = [
+        ":android_builder_lib",
+    ],
+)
+
+java_binary(
     name = "AndroidResourceParsingAction",
     main_class = "com.google.devtools.build.android.AndroidResourceParsingAction",
     runtime_deps = [
@@ -36,6 +44,14 @@ java_binary(
 java_binary(
     name = "AndroidResourceProcessingAction",
     main_class = "com.google.devtools.build.android.AndroidResourceProcessingAction",
+    runtime_deps = [
+        ":android_builder_lib",
+    ],
+)
+
+java_binary(
+    name = "AndroidResourceValidatorAction",
+    main_class = "com.google.devtools.build.android.AndroidResourceValidatorAction",
     runtime_deps = [
         ":android_builder_lib",
     ],
@@ -80,6 +96,7 @@ java_library(
         "//third_party:asm",
         "//third_party:guava",
         "//third_party:jsr305",
+        "//third_party/java/android_databinding:exec",
         "//third_party/protobuf",
     ],
 )

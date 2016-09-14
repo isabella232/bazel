@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
-
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -202,7 +201,11 @@ public class ResourceManager {
    */
   public ResourceHandle acquireResources(ActionExecutionMetadata owner, ResourceSet resources)
       throws InterruptedException {
-    Preconditions.checkNotNull(resources);
+    Preconditions.checkNotNull(
+        resources, "acquireResources called with resources == NULL during %s", owner);
+    Preconditions.checkState(
+        !threadHasResources(), "acquireResources with existing resource lock during %s", owner);
+
     AutoProfiler p = profiled(owner, ProfilerTask.ACTION_LOCK);
     CountDownLatch latch = null;
     try {
@@ -211,25 +214,45 @@ public class ResourceManager {
       if (latch != null) {
         latch.await();
       }
-    } finally {
-      threadLocked.set(resources.getCpuUsage() != 0 || resources.getMemoryMb() != 0
-          || resources.getIoUsage() != 0 || resources.getLocalTestCount() != 0);
-      acquired(owner);
-
-      // Profile acquisition only if it waited for resource to become available.
-      if (latch != null) {
-        p.complete();
+    } catch (InterruptedException e) {
+      // Synchronize on this to avoid any racing with #processWaitingThreads
+      synchronized (this) {
+        if (latch.getCount() == 0) {
+          // Resources already acquired by other side. Release them, but not inside this
+          // synchronized block to avoid deadlock.
+          release(resources);
+        } else {
+          // Inform other side that resources shouldn't be acquired.
+          latch.countDown();
+        }
       }
+      throw e;
     }
+
+    threadLocked.set(resources != ResourceSet.ZERO);
+    acquired(owner);
+
+    // Profile acquisition only if it waited for resource to become available.
+    if (latch != null) {
+      p.complete();
+    }
+
     return new ResourceHandle(this, owner, resources);
   }
 
   /**
    * Acquires the given resources if available immediately. Does not block.
-   * @return true iff the given resources were locked (all or nothing).
+   *
+   * @return a ResourceHandle iff the given resources were locked (all or nothing), null otherwise.
    */
-  public boolean tryAcquire(ActionExecutionMetadata owner, ResourceSet resources) {
+  public ResourceHandle tryAcquire(ActionExecutionMetadata owner, ResourceSet resources) {
+    Preconditions.checkNotNull(
+        resources, "tryAcquire called with resources == NULL during %s", owner);
+    Preconditions.checkState(
+        !threadHasResources(), "tryAcquire with existing resource lock during %s", owner);
+
     boolean acquired = false;
+
     synchronized (this) {
       if (areResourcesAvailable(resources)) {
         incrementResources(resources);
@@ -238,12 +261,12 @@ public class ResourceManager {
     }
 
     if (acquired) {
-      threadLocked.set(resources.getCpuUsage() != 0 || resources.getMemoryMb() != 0
-          || resources.getIoUsage() != 0 || resources.getLocalTestCount() != 0);
+      threadLocked.set(resources != ResourceSet.ZERO);
       acquired(owner);
+      return new ResourceHandle(this, owner, resources);
     }
 
-    return acquired;
+    return null;
   }
 
   private void incrementResources(ResourceSet resources) {
@@ -299,6 +322,11 @@ public class ResourceManager {
    * <p>NB! This method must be thread-safe!
    */
   public void releaseResources(ActionExecutionMetadata owner, ResourceSet resources) {
+    Preconditions.checkNotNull(
+        resources, "releaseResources called with resources == NULL during %s", owner);
+    Preconditions.checkState(
+        threadHasResources(), "releaseResources without resource lock during %s", owner);
+
     boolean isConflict = false;
     AutoProfiler p = profiled(owner, ProfilerTask.ACTION_RELEASE);
     try {
@@ -357,9 +385,14 @@ public class ResourceManager {
     Iterator<Pair<ResourceSet, CountDownLatch>> iterator = requestList.iterator();
     while (iterator.hasNext()) {
       Pair<ResourceSet, CountDownLatch> request = iterator.next();
-      if (areResourcesAvailable(request.first)) {
-        incrementResources(request.first);
-        request.second.countDown();
+      if (request.second.getCount() != 0) {
+        if (areResourcesAvailable(request.first)) {
+          incrementResources(request.first);
+          request.second.countDown();
+          iterator.remove();
+        }
+      } else {
+        // Cancelled by other side.
         iterator.remove();
       }
     }
@@ -402,7 +435,6 @@ public class ResourceManager {
         || usedLocalTestCount + localTestCount <= availableLocalTestCount;
     return cpuIsAvailable && ramIsAvailable && ioIsAvailable && localTestCountIsAvailable;
   }
-
 
   @VisibleForTesting
   synchronized int getWaitCount() {

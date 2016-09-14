@@ -101,6 +101,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
   private Reporter reporter;
   private final AtomicReference<EventBus> eventBus;
   private final ResourceManager resourceManager;
+  private Map<String, String> clientEnv = ImmutableMap.of();
   private Executor executorEngine;
   private ActionLogBufferPathGenerator actionLogBufferPathGenerator;
   private ActionCacheChecker actionCacheChecker;
@@ -326,6 +327,10 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
     this.actionLogBufferPathGenerator = actionLogBufferPathGenerator;
   }
 
+  public void setClientEnv(Map<String, String> clientEnv) {
+    this.clientEnv = clientEnv;
+  }
+
   void executionOver() {
     this.reporter = null;
     // This transitively holds a bunch of heavy objects, so it's important to clear it at the
@@ -444,6 +449,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
         new DelegatingPairFileCache(graphFileCache, perBuildFileCache),
         metadataHandler,
         fileOutErr,
+        clientEnv,
         new ArtifactExpanderImpl(expandedInputs));
   }
 
@@ -453,11 +459,16 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
    * if the action is up to date, and non-null if it needs to be executed, in which case that token
    * should be provided to the ActionCacheChecker after execution.
    */
-  Token checkActionCache(Action action, MetadataHandler metadataHandler,
-      long actionStartTime, Iterable<Artifact> resolvedCacheArtifacts) {
+  Token checkActionCache(
+      Action action,
+      MetadataHandler metadataHandler,
+      long actionStartTime,
+      Iterable<Artifact> resolvedCacheArtifacts,
+      Map<String, String> clientEnv) {
     profiler.startTask(ProfilerTask.ACTION_CHECK, action);
-    Token token = actionCacheChecker.getTokenIfNeedToExecute(
-        action, resolvedCacheArtifacts, explain ? reporter : null, metadataHandler);
+    Token token =
+        actionCacheChecker.getTokenIfNeedToExecute(
+            action, resolvedCacheArtifacts, clientEnv, explain ? reporter : null, metadataHandler);
     profiler.completeTask(ProfilerTask.ACTION_CHECK);
     if (token == null) {
       boolean eventPosted = false;
@@ -481,7 +492,8 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
     return token;
   }
 
-  void afterExecution(Action action, MetadataHandler metadataHandler, Token token) {
+  void afterExecution(
+      Action action, MetadataHandler metadataHandler, Token token, Map<String, String> clientEnv) {
     if (!actionReallyExecuted(action)) {
       // If an action shared with this one executed, then we need not update the action cache, since
       // the other action will do it. Moreover, this action is not aware of metadata acquired
@@ -489,7 +501,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
       return;
     }
     try {
-      actionCacheChecker.afterExecution(action, token, metadataHandler);
+      actionCacheChecker.afterExecution(action, token, metadataHandler, clientEnv);
     } catch (IOException e) {
       // Skyframe has already done all the filesystem access needed for outputs and swallows
       // IOExceptions for inputs. So an IOException is impossible here.
@@ -511,7 +523,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
    * <p>This method is just a wrapper around {@link Action#discoverInputs} that properly processes
    * any ActionExecutionException thrown before rethrowing it to the caller.
    */
-  Collection<Artifact> discoverInputs(Action action, PerActionFileCache graphFileCache,
+  Iterable<Artifact> discoverInputs(Action action, PerActionFileCache graphFileCache,
       MetadataHandler metadataHandler, Environment env)
       throws ActionExecutionException, InterruptedException {
     ActionExecutionContext actionExecutionContext =
@@ -520,6 +532,7 @@ public final class SkyframeActionExecutor implements ActionExecutionContextFacto
             new DelegatingPairFileCache(graphFileCache, perBuildFileCache),
             metadataHandler,
             actionLogBufferPathGenerator.generate(),
+            clientEnv,
             env);
     try {
       return action.discoverInputs(actionExecutionContext);

@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Ordering;
+import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -40,6 +41,7 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Set;
 
 /**
  * Support for generating Objective C proto static libraries that registers actions which generate
@@ -57,8 +59,6 @@ import java.util.HashMap;
  * the proto files change, improving cache hits.
  */
 final class ProtobufSupport {
-
-  private static final PathFragment BAZEL_TOOLS_PREFIX = new PathFragment("external/bazel_tools/");
 
   private static final String BUNDLED_PROTOS_IDENTIFIER = "BundledProtos";
 
@@ -127,24 +127,36 @@ final class ProtobufSupport {
    */
   public ProtobufSupport registerGenerationActions() {
     int actionId = 0;
+
     for (ImmutableSet<Artifact> inputProtos : inputsToOutputsMap.keySet()) {
       Iterable<Artifact> outputProtos = inputsToOutputsMap.get(inputProtos);
-
       registerGenerationAction(outputProtos, inputProtos, getUniqueBundledProtosSuffix(actionId));
-
-      IntermediateArtifacts intermediateArtifacts = getUniqueIntermediateArtifacts(actionId);
-
-      CompilationArtifacts compilationArtifacts =
-          getCompilationArtifacts(intermediateArtifacts, inputProtos, outputProtos);
-
-      ObjcCommon common = getCommon(intermediateArtifacts, compilationArtifacts);
-
-      new CompilationSupport(
-              ruleContext, intermediateArtifacts, new CompilationAttributes.Builder().build())
-          .registerGenerateModuleMapAction(common.getCompilationArtifacts());
       actionId++;
     }
+
+    if (!isLinkingTarget()) {
+      registerModuleMapGenerationAction();
+    }
+
     return this;
+  }
+
+  private void registerModuleMapGenerationAction() {
+    IntermediateArtifacts moduleMapIntermediateArtifacts =
+        ObjcRuleClasses.intermediateArtifacts(ruleContext);
+    CompilationArtifacts.Builder moduleMapCompilationArtifacts =
+        new CompilationArtifacts.Builder()
+            .setIntermediateArtifacts(moduleMapIntermediateArtifacts)
+            .setPchFile(Optional.<Artifact>absent())
+            .addAdditionalHdrs(getProtobufHeaders())
+            .addAdditionalHdrs(
+                getGeneratedProtoOutputs(inputsToOutputsMap.values(), ".pbobjc.h"));
+
+    new CompilationSupport(
+            ruleContext,
+            ObjcRuleClasses.intermediateArtifacts(ruleContext),
+            new CompilationAttributes.Builder().build())
+        .registerGenerateModuleMapAction(Optional.of(moduleMapCompilationArtifacts.build()));
   }
 
   /** Registers the actions that will compile the generated code. */
@@ -208,7 +220,12 @@ final class ProtobufSupport {
 
     Iterable<PathFragment> userHeaderSearchPaths =
         ImmutableList.of(getWorkspaceRelativeOutputDir());
-    ObjcCommon.Builder commonBuilder = new ObjcCommon.Builder(ruleContext);
+    IntermediateArtifacts moduleMapIntermediateArtifacts =
+        ObjcRuleClasses.intermediateArtifacts(ruleContext);
+    ObjcCommon.Builder commonBuilder =
+        new ObjcCommon.Builder(ruleContext)
+            .setIntermediateArtifacts(moduleMapIntermediateArtifacts)
+            .setHasModuleMap();
 
     int actionId = 0;
     for (ImmutableSet<Artifact> inputProtos : inputsToOutputsMap.keySet()) {
@@ -223,7 +240,12 @@ final class ProtobufSupport {
       actionId++;
     }
 
-    commonBuilder.addDirectDependencyHeaderSearchPaths(userHeaderSearchPaths);
+    if (isLinkingTarget()) {
+      commonBuilder.addUserHeaderSearchPaths(userHeaderSearchPaths);
+    } else {
+      commonBuilder.addDirectDependencyHeaderSearchPaths(userHeaderSearchPaths);
+    }
+
     return Optional.of(commonBuilder.build().getObjcProvider());
   }
 
@@ -255,7 +277,12 @@ final class ProtobufSupport {
       XcodeProvider bundleProvider =
           getBundleXcodeProvider(
               common, bundleIntermediateArtifacts, getUniqueBundledProtosSuffix(actionId));
-      xcodeProviderBuilder.addPropagatedDependencies(ImmutableSet.of(bundleProvider));
+      if (isLinkingTarget()) {
+        xcodeProviderBuilder.addPropagatedDependencies(ImmutableSet.of(bundleProvider));
+      } else {
+        xcodeProviderBuilder.addPropagatedDependenciesWithStrictDependencyHeaders(
+            ImmutableSet.of(bundleProvider));
+      }
       actionId++;
     }
 
@@ -310,8 +337,7 @@ final class ProtobufSupport {
       protoSets.add(protoProvider.getTransitiveProtoSources());
     }
 
-    HashMap<Artifact, ImmutableSet<Artifact>> protoToGroupMap =
-        new HashMap<Artifact, ImmutableSet<Artifact>>();
+    HashMap<Artifact, Set<Artifact>> protoToGroupMap = new HashMap<>();
 
     // For each proto in each proto group, store the smallest group in which it is contained. This
     // group will be considered the smallest input group with which the proto can be generated.
@@ -320,12 +346,13 @@ final class ProtobufSupport {
       for (Artifact proto : protoSet) {
         // If the proto is well known, don't store it as we don't need to generate it; it comes
         // generated with the runtime library.
-        if (isProtoWellKnown(proto)) {
+        if (attributes.isProtoWellKnown(proto)) {
           continue;
         }
-        if (!protoToGroupMap.containsKey(proto)
-            || protoToGroupMap.get(proto).size() > protoSet.size()) {
+        if (!protoToGroupMap.containsKey(proto)) {
           protoToGroupMap.put(proto, protoSet);
+        } else {
+          protoToGroupMap.put(proto, Sets.intersection(protoSet, protoToGroupMap.get(proto)));
         }
       }
     }
@@ -341,7 +368,7 @@ final class ProtobufSupport {
         ImmutableSetMultimap.builder();
 
     for (Artifact proto : protoToGroupMap.keySet()) {
-      inputsToOutputsMapBuilder.put(protoToGroupMap.get(proto), proto);
+      inputsToOutputsMapBuilder.put(ImmutableSet.copyOf(protoToGroupMap.get(proto)), proto);
     }
     return inputsToOutputsMapBuilder.build();
   }
@@ -408,7 +435,6 @@ final class ProtobufSupport {
     ObjcCommon.Builder commonBuilder =
         new ObjcCommon.Builder(ruleContext)
             .setIntermediateArtifacts(intermediateArtifacts)
-            .setHasModuleMap()
             .setCompilationArtifacts(compilationArtifacts);
     if (isLinkingTarget()) {
       commonBuilder.addUserHeaderSearchPaths(getProtobufHeaderSearchPaths());
@@ -426,7 +452,7 @@ final class ProtobufSupport {
       Iterable<Artifact> outputProtoFiles) {
     // Filter the well known protos from the set of headers. We don't generate the headers for them
     // as they are part of the runtime library.
-    Iterable<Artifact> filteredInputProtos = filterWellKnownProtos(inputProtoFiles);
+    Iterable<Artifact> filteredInputProtos = attributes.filterWellKnownProtos(inputProtoFiles);
 
     CompilationArtifacts.Builder compilationArtifacts =
         new CompilationArtifacts.Builder()
@@ -479,7 +505,7 @@ final class ProtobufSupport {
     // Sort the file names to make the remote action key independent of the precise deps structure.
     // compile_protos.py will sort the input list anyway.
     Iterable<Artifact> sorted = Ordering.natural().immutableSortedCopy(outputProtos);
-    return Artifact.joinExecPaths("\n", sorted);
+    return Artifact.joinRootRelativePaths("\n", sorted);
   }
 
   private CustomCommandLine getGenerationCommandLine(Artifact protoInputsFile) {
@@ -491,9 +517,18 @@ final class ProtobufSupport {
         .add(getWorkspaceRelativeOutputDir().getSafePathString())
         .add("--force")
         .add("--proto-root-dir")
+        .add(getGenfilesPathString())
+        .add("--proto-root-dir")
         .add(".")
         .addBeforeEachExecPath("--config", getPortableProtoFilters())
         .build();
+  }
+
+  private String getGenfilesPathString() {
+    if (buildConfiguration != null) {
+      return buildConfiguration.getGenfilesDirectory().getExecPathString();
+    }
+    return ruleContext.getConfiguration().getGenfilesDirectory().getExecPathString();
   }
 
   private PathFragment getWorkspaceRelativeOutputDir() {
@@ -609,39 +644,6 @@ final class ProtobufSupport {
       }
     }
     return casedSegments.toString();
-  }
-
-  private ImmutableSet<Artifact> filterWellKnownProtos(Iterable<Artifact> protoFiles) {
-    // Since well known protos are already linked in the runtime library, we have to filter them
-    // so they don't get generated again.
-    ImmutableSet.Builder<Artifact> filteredProtos = new ImmutableSet.Builder<Artifact>();
-    for (Artifact protoFile : protoFiles) {
-      if (!isProtoWellKnown(protoFile)) {
-        filteredProtos.add(protoFile);
-      }
-    }
-    return filteredProtos.build();
-  }
-
-  private ImmutableSet<PathFragment> getWellKnownProtoPaths(RuleContext ruleContext) {
-    ImmutableSet.Builder<PathFragment> wellKnownProtoPathsBuilder = new ImmutableSet.Builder<>();
-    Iterable<Artifact> wellKnownProtoFiles =
-        ruleContext
-            .getPrerequisiteArtifacts(ObjcRuleClasses.PROTOBUF_WELL_KNOWN_TYPES, Mode.HOST)
-            .list();
-    for (Artifact wellKnownProtoFile : wellKnownProtoFiles) {
-      PathFragment execPath = wellKnownProtoFile.getExecPath();
-      if (execPath.startsWith(BAZEL_TOOLS_PREFIX)) {
-        wellKnownProtoPathsBuilder.add(execPath.relativeTo(BAZEL_TOOLS_PREFIX));
-      } else {
-        wellKnownProtoPathsBuilder.add(execPath);
-      }
-    }
-    return wellKnownProtoPathsBuilder.build();
-  }
-
-  private boolean isProtoWellKnown(Artifact protoFile) {
-    return getWellKnownProtoPaths(ruleContext).contains(protoFile.getExecPath());
   }
 
   private boolean isLinkingTarget() {

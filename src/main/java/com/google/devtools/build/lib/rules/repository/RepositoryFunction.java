@@ -22,7 +22,6 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.Package;
@@ -199,6 +198,11 @@ public abstract class RepositoryFunction {
       Path repositoryDirectory, String contents) throws RepositoryFunctionException {
     Path buildFilePath = repositoryDirectory.getRelative("BUILD");
     try {
+      // Make sure we're not overwriting an existing BUILD file.
+      if (buildFilePath.exists()) {
+        Preconditions.checkState(buildFilePath.isSymbolicLink());
+        buildFilePath.delete();
+      }
       FileSystemUtils.writeContentAsLatin1(buildFilePath, contents);
     } catch (IOException e) {
       throw new RepositoryFunctionException(e, Transience.TRANSIENT);
@@ -208,9 +212,15 @@ public abstract class RepositoryFunction {
   }
 
   @VisibleForTesting
-  protected static PathFragment getTargetPath(Rule rule, Path workspace) {
-    AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
-    String path = mapper.get("path", Type.STRING);
+  protected static PathFragment getTargetPath(Rule rule, Path workspace)
+      throws RepositoryFunctionException {
+    WorkspaceAttributeMapper mapper = WorkspaceAttributeMapper.of(rule);
+    String path;
+    try {
+      path = mapper.get("path", Type.STRING);
+    } catch (EvalException e) {
+      throw new RepositoryFunctionException(e, Transience.PERSISTENT);
+    }
     PathFragment pathFragment = new PathFragment(path);
     return workspace.getRelative(pathFragment).asFragment();
   }
@@ -347,10 +357,8 @@ public abstract class RepositoryFunction {
     return value;
   }
 
-  public static Path getExternalRepositoryDirectory(BlazeDirectories directories) {
-    return directories
-        .getOutputBase()
-        .getRelative(Label.EXTERNAL_PATH_PREFIX);
+  protected static Path getExternalRepositoryDirectory(BlazeDirectories directories) {
+    return directories.getOutputBase().getRelative(Label.EXTERNAL_PACKAGE_NAME);
   }
 
   /**
@@ -399,8 +407,13 @@ public abstract class RepositoryFunction {
     // reflected in the SkyFrame tree, since it's not symlinked to it or anything.
     if (repositoryRule.getRuleClass().equals(NewLocalRepositoryRule.NAME)
         && repositoryPath.segmentCount() == 1) {
-      PathFragment pathDir = RepositoryFunction.getTargetPath(
-          repositoryRule, directories.getWorkspace());
+      PathFragment pathDir;
+      try {
+        pathDir = RepositoryFunction.getTargetPath(
+            repositoryRule, directories.getWorkspace());
+      } catch (RepositoryFunctionException e) {
+        throw new IOException(e.getMessage());
+      }
       FileSystem fs = directories.getWorkspace().getFileSystem();
       SkyKey dirKey = DirectoryListingValue.key(
           RootedPath.toRootedPath(fs.getRootDirectory(), fs.getPath(pathDir)));

@@ -20,16 +20,20 @@ import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.AbstractConfiguredTarget;
 import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.proto.ProtoSourcesProvider;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.vfs.PathFragment;
 
 /** Common rule attributes used by an objc_proto_library. */
 final class ProtoAttributes {
@@ -49,6 +53,20 @@ final class ProtoAttributes {
   @VisibleForTesting
   static final String PORTABLE_PROTO_FILTERS_EMPTY_ERROR =
       "The portable_proto_filters attribute can't be empty";
+
+  @VisibleForTesting
+  static final String OBJC_PROTO_LIB_DEP_IN_PROTOCOL_BUFFERS2_DEPS_ERROR =
+      "Protocol Buffers 2 objc_proto_library targets can't depend on other objc_proto_library "
+          + "targets. Please migrate your Protocol Buffers 2 objc_proto_library targets to use the "
+          + "portable_proto_filters attribute.";
+
+  @VisibleForTesting
+  static final String PROTOCOL_BUFFERS2_IN_PROTOBUF_DEPS_ERROR =
+      "Protobuf objc_proto_library targets can't depend on Protocol Buffers 2 objc_proto_library "
+          + "targets. Please migrate your Protocol Buffers 2 objc_proto_library targets to use the "
+          + "portable_proto_filters attribute.";
+
+  private static final PathFragment BAZEL_TOOLS_PREFIX = new PathFragment("external/bazel_tools/");
 
   private final RuleContext ruleContext;
 
@@ -73,11 +91,6 @@ final class ProtoAttributes {
    * </ul>
    */
   public void validate() throws RuleErrorException {
-
-    if (getProtoFiles().isEmpty()) {
-      ruleContext.throwWithRuleError(NO_PROTOS_ERROR);
-    }
-
     PrerequisiteArtifacts prerequisiteArtifacts =
         ruleContext.getPrerequisiteArtifacts("deps", Mode.TARGET);
     ImmutableList<Artifact> protos = prerequisiteArtifacts.filter(FileType.of(".proto")).list();
@@ -88,6 +101,10 @@ final class ProtoAttributes {
     if (ruleContext
         .attributes()
         .isAttributeValueExplicitlySpecified(ObjcProtoLibraryRule.PORTABLE_PROTO_FILTERS_ATTR)) {
+      if (getProtoFiles().isEmpty() && !hasObjcProtoLibraryDependencies()) {
+        ruleContext.throwWithRuleError(NO_PROTOS_ERROR);
+      }
+
       if (getPortableProtoFilters().isEmpty()) {
         ruleContext.throwWithRuleError(PORTABLE_PROTO_FILTERS_EMPTY_ERROR);
       }
@@ -98,7 +115,15 @@ final class ProtoAttributes {
           || getOptionsFile().isPresent()) {
         ruleContext.throwWithRuleError(PORTABLE_PROTO_FILTERS_NOT_EXCLUSIVE_ERROR);
       }
+      if (hasPB2Dependencies()) {
+        ruleContext.throwWithRuleError(PROTOCOL_BUFFERS2_IN_PROTOBUF_DEPS_ERROR);
+      }
+
     } else {
+      if (getProtoFiles().isEmpty()) {
+        ruleContext.throwWithRuleError(NO_PROTOS_ERROR);
+      }
+
       if (outputsCpp()) {
         ruleContext.ruleWarning(
             "The output_cpp attribute has been deprecated. Please "
@@ -108,6 +133,9 @@ final class ProtoAttributes {
         ruleContext.ruleWarning(
             "As part of the migration process, it is recommended to enable "
                 + "use_objc_header_names. Please refer to b/29368416 for more information.");
+      }
+      if (hasObjcProtoLibraryDependencies()) {
+        ruleContext.throwWithRuleError(OBJC_PROTO_LIB_DEP_IN_PROTOCOL_BUFFERS2_DEPS_ERROR);
       }
     }
   }
@@ -197,6 +225,46 @@ final class ProtoAttributes {
         .list();
   }
 
+  /**
+   * Filters the well known protos from the given list of proto files. This should be used to
+   * prevent the well known protos from being generated as they are already generated in the runtime
+   * library.
+   */
+  ImmutableSet<Artifact> filterWellKnownProtos(Iterable<Artifact> protoFiles) {
+    // Since well known protos are already linked in the runtime library, we have to filter them
+    // so they don't get generated again.
+    ImmutableSet.Builder<Artifact> filteredProtos = new ImmutableSet.Builder<Artifact>();
+    for (Artifact protoFile : protoFiles) {
+      if (!isProtoWellKnown(protoFile)) {
+        filteredProtos.add(protoFile);
+      }
+    }
+    return filteredProtos.build();
+  }
+
+  /** Returns whether the given proto is a well known proto or not. */
+  boolean isProtoWellKnown(Artifact protoFile) {
+    return getWellKnownProtoPaths().contains(protoFile.getExecPath());
+  }
+
+  private ImmutableSet<PathFragment> getWellKnownProtoPaths() {
+    ImmutableSet.Builder<PathFragment> wellKnownProtoPathsBuilder = new ImmutableSet.Builder<>();
+    Iterable<Artifact> wellKnownProtoFiles =
+        ruleContext
+            .getPrerequisiteArtifacts(ObjcRuleClasses.PROTOBUF_WELL_KNOWN_TYPES, Mode.HOST)
+            .list();
+    for (Artifact wellKnownProtoFile : wellKnownProtoFiles) {
+      PathFragment execPath = wellKnownProtoFile.getExecPath();
+      if (execPath.startsWith(BAZEL_TOOLS_PREFIX)) {
+        wellKnownProtoPathsBuilder.add(execPath.relativeTo(BAZEL_TOOLS_PREFIX));
+      } else {
+        wellKnownProtoPathsBuilder.add(execPath);
+      }
+    }
+    return wellKnownProtoPathsBuilder.build();
+  }
+
+
   /** Returns the sets of proto files that were added using proto_library dependencies. */
   private NestedSet<Artifact> getProtoDepsSources() {
     NestedSetBuilder<Artifact> artifacts = NestedSetBuilder.stableOrder();
@@ -216,5 +284,37 @@ final class ProtoAttributes {
     PrerequisiteArtifacts prerequisiteArtifacts =
         ruleContext.getPrerequisiteArtifacts("deps", Mode.TARGET);
     return prerequisiteArtifacts.filter(FileType.of(".proto")).list();
+  }
+
+  private boolean hasPB2Dependencies() {
+    for (TransitiveInfoCollection dep : ruleContext.getPrerequisites("deps", Mode.TARGET)) {
+      if (isObjcProtoLibrary(dep) && !hasProtobufProvider(dep)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean hasObjcProtoLibraryDependencies() {
+    for (TransitiveInfoCollection dep : ruleContext.getPrerequisites("deps", Mode.TARGET)) {
+      if (isObjcProtoLibrary(dep)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean isObjcProtoLibrary(TransitiveInfoCollection dependency) {
+    try {
+      AbstractConfiguredTarget target = (AbstractConfiguredTarget) dependency;
+      String targetName = target.getTarget().getTargetKind();
+      return targetName.equals("objc_proto_library rule");
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  private boolean hasProtobufProvider(TransitiveInfoCollection dependency) {
+    return dependency.getProvider(ObjcProtoProvider.class) != null;
   }
 }

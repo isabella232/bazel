@@ -25,7 +25,6 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationOutputs.Builder;
@@ -349,24 +348,14 @@ public final class CppModel {
    * Select .pcm inputs to pass on the command line depending on whether we are in pic or non-pic
    * mode.
    */
-  private Collection<String> getHeaderModulePaths(CppCompileActionBuilder builder,
-      boolean usePic) {
+  private Collection<String> getHeaderModulePaths(CppCompileActionBuilder builder, boolean usePic) {
     Collection<String> result = new LinkedHashSet<>();
-    NestedSet<Artifact> artifacts =
+    Iterable<Artifact> artifacts =
         featureConfiguration.isEnabled(CppRuleClasses.HEADER_MODULE_INCLUDES_DEPENDENCIES)
-            ? builder.getContext().getTopLevelHeaderModules(usePic)
-            : builder.getContext().getAdditionalInputs(usePic);
+            ? builder.getContext().getTopLevelModules(usePic)
+            : builder.getContext().getTransitiveModules(usePic);
     for (Artifact artifact : artifacts) {
-      String filename = artifact.getFilename();
-      if (!filename.endsWith(".pcm")) {
-        continue;
-      }
-      // Depending on whether this specific compile action is pic or non-pic, select the
-      // corresponding header modules. Note that the compilation context might give us both
-      // from targets that are built in both modes.
-      if (usePic == filename.endsWith(".pic.pcm")) {
-        result.add(artifact.getExecPathString());
-      }
+      result.add(artifact.getExecPathString());
     }
     return result;
   }
@@ -505,6 +494,8 @@ public final class CppModel {
       CppCompileActionBuilder builder =
           initializeCompileAction(moduleMapArtifact, moduleMapLabel, /*forInterface=*/ true);
 
+      builder.setSemantics(semantics);
+      
       // A header module compile action is just like a normal compile action, but:
       // - the compiled source file is the module map
       // - it creates a header module (.pcm file).
@@ -531,6 +522,8 @@ public final class CppModel {
       CppCompileActionBuilder builder =
           initializeCompileAction(sourceArtifact, sourceLabel, /*forInterface=*/ false);
 
+      builder.setSemantics(semantics);
+      
       if (CppFileTypes.CPP_HEADER.matches(source.getSource().getExecPath())) {
         createHeaderAction(outputName, result, env, builder,
             CppFileTypes.mustProduceDotdFile(sourceArtifact.getFilename()));
@@ -865,7 +858,6 @@ public final class CppModel {
     CppLinkAction maybePicAction =
         newLinkActionBuilder(linkedArtifact)
             .addObjectFiles(ccOutputs.getObjectFiles(usePicForBinaries))
-            .addNonCodeInputs(ccOutputs.getHeaderTokenFiles())
             .addNonCodeInputs(nonCodeLinkerInputs)
             .addLTOBitcodeFiles(ccOutputs.getLtoBitcodeFiles())
             .setLinkType(linkType)
@@ -895,7 +887,6 @@ public final class CppModel {
       CppLinkAction picAction =
           newLinkActionBuilder(picArtifact)
               .addObjectFiles(ccOutputs.getObjectFiles(true))
-              .addNonCodeInputs(ccOutputs.getHeaderTokenFiles())
               .addLTOBitcodeFiles(ccOutputs.getLtoBitcodeFiles())
               .setLinkType(picLinkType)
               .setLinkStaticness(LinkStaticness.FULLY_STATIC)
@@ -1026,6 +1017,7 @@ public final class CppModel {
         ruleContext, source, label);
 
     builder.setContext(forInterface ? interfaceContext : context).addCopts(copts);
+    builder.addEnvironment(CppHelper.getToolchain(ruleContext).getEnvironment());
     return builder;
   }
 

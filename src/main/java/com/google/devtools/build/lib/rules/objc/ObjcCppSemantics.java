@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.rules.objc;
 
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.DYNAMIC_FRAMEWORK_FILE;
+import static com.google.devtools.build.lib.rules.objc.ObjcProvider.HEADER;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.STATIC_FRAMEWORK_FILE;
 
 import com.google.devtools.build.lib.actions.Artifact;
@@ -60,6 +61,7 @@ public class ObjcCppSemantics implements CppSemantics {
     actionBuilder.addTransitiveMandatoryInputs(CppHelper.getToolchain(ruleContext).getCrosstool());
     actionBuilder.setShouldScanIncludes(false);
 
+    actionBuilder.addTransitiveMandatoryInputs(objcProvider.get(HEADER));
     actionBuilder.addTransitiveMandatoryInputs(objcProvider.get(STATIC_FRAMEWORK_FILE));
     actionBuilder.addTransitiveMandatoryInputs(objcProvider.get(DYNAMIC_FRAMEWORK_FILE));
   }
@@ -78,6 +80,15 @@ public class ObjcCppSemantics implements CppSemantics {
 
   @Override
   public boolean needsIncludeScanning(RuleContext ruleContext) {
+    return false;
+  }
+
+  @Override
+  public void validateAttributes(RuleContext ruleContext) {
+  }
+
+  @Override
+  public boolean needsIncludeValidation() {
     return false;
   }
 }

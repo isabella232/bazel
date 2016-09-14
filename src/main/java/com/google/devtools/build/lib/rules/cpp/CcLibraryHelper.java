@@ -75,6 +75,13 @@ import javax.annotation.Nullable;
  * methods.
  */
 public final class CcLibraryHelper {
+  /**
+   * Similar to {@code OutputGroupProvider.HIDDEN_TOP_LEVEL}, but specific to header token files.
+   */
+  public static final String HIDDEN_HEADER_TOKENS =
+      OutputGroupProvider.HIDDEN_OUTPUT_GROUP_PREFIX
+          + "hidden_header_tokens"
+          + OutputGroupProvider.INTERNAL_SUFFIX;
 
   /**
    * A group of source file types and action names for builds controlled by CcLibraryHelper.
@@ -256,7 +263,6 @@ public final class CcLibraryHelper {
   private final List<TransitiveInfoCollection> implementationDeps = new ArrayList<>();
   private final List<TransitiveInfoCollection> interfaceDeps = new ArrayList<>();
   private final NestedSetBuilder<Artifact> linkstamps = NestedSetBuilder.stableOrder();
-  private final List<Artifact> prerequisites = new ArrayList<>();
   private final List<PathFragment> looseIncludeDirs = new ArrayList<>();
   private final List<PathFragment> systemIncludeDirs = new ArrayList<>();
   private final List<PathFragment> includeDirs = new ArrayList<>();
@@ -655,17 +661,6 @@ public final class CcLibraryHelper {
   }
 
   /**
-   * Adds the given prerequisites as prerequisites for the generated compile actions. This ensures
-   * that the corresponding files exist - otherwise the action fails. Note that these dependencies
-   * add edges to the action graph, and can therefore increase the length of the critical path,
-   * i.e., make the build slower.
-   */
-  public CcLibraryHelper addCompilationPrerequisites(Iterable<Artifact> prerequisites) {
-    Iterables.addAll(this.prerequisites, prerequisites);
-    return this;
-  }
-
-  /**
    * Adds the given precompiled files to this helper. Shared and static libraries are added as
    * compilation prerequisites, and object files are added as pic or non-pic object files
    * respectively.
@@ -696,8 +691,8 @@ public final class CcLibraryHelper {
   }
 
   /**
-   * Adds the given directories to the quote include directories (they are passed with {@code
-   * "-iquote"} to the compiler); these are also passed to dependent rules.
+   * Adds the given directories to the include directories (they are passed with {@code "-I"} to
+   * the compiler); these are also passed to dependent rules.
    */
   public CcLibraryHelper addIncludeDirs(Iterable<PathFragment> includeDirs) {
     Iterables.addAll(this.includeDirs, includeDirs);
@@ -998,11 +993,10 @@ public final class CcLibraryHelper {
     }
 
     outputGroups.put(OutputGroupProvider.TEMP_FILES, getTemps(ccOutputs));
+    CppConfiguration cppConfiguration = ruleContext.getFragment(CppConfiguration.class);
     if (emitCompileProviders) {
-      boolean isLipoCollector =
-          ruleContext.getFragment(CppConfiguration.class).isLipoContextCollector();
-      boolean processHeadersInDependencies =
-          ruleContext.getFragment(CppConfiguration.class).processHeadersInDependencies();
+      boolean isLipoCollector = cppConfiguration.isLipoContextCollector();
+      boolean processHeadersInDependencies = cppConfiguration.processHeadersInDependencies();
       boolean usePic = CppHelper.usePic(ruleContext, false);
       outputGroups.put(
           OutputGroupProvider.FILES_TO_COMPILE,
@@ -1020,7 +1014,7 @@ public final class CcLibraryHelper {
     providers.put(CcExecutionDynamicLibrariesProvider.class,
         collectExecutionDynamicLibraryArtifacts(ccLinkingOutputs.getExecutionDynamicLibraries()));
 
-    boolean forcePic = ruleContext.getFragment(CppConfiguration.class).forcePic();
+    boolean forcePic = cppConfiguration.forcePic();
     if (emitCcSpecificLinkParamsProvider) {
       providers.put(CcSpecificLinkParamsProvider.class, new CcSpecificLinkParamsProvider(
           createCcLinkParamsStore(ccLinkingOutputs, cppCompilationContext, forcePic)));
@@ -1110,7 +1104,7 @@ public final class CcLibraryHelper {
     // before the genfilesFragment to preferably pick up source files. Otherwise
     // we might pick up stale generated files.
     PathFragment repositoryPath =
-        ruleContext.getLabel().getPackageIdentifier().getRepository().getSourceRoot();
+        ruleContext.getLabel().getPackageIdentifier().getRepository().getPathUnderExecRoot();
     contextBuilder.addQuoteIncludeDir(repositoryPath);
     contextBuilder.addQuoteIncludeDir(
         ruleContext.getConfiguration().getGenfilesFragment().getRelative(repositoryPath));
@@ -1140,7 +1134,6 @@ public final class CcLibraryHelper {
         CppHelper.createExtractInclusions(ruleContext, semantics, publicTextualHeaders));
     contextBuilder.addPregreppedHeaderMap(
         CppHelper.createExtractInclusions(ruleContext, semantics, privateHeaders));
-    contextBuilder.addCompilationPrerequisites(prerequisites);
 
     // Add this package's dir to declaredIncludeDirs, & this rule's headers to declaredIncludeSrcs
     // Note: no include dir for STRICT mode.
@@ -1218,6 +1211,19 @@ public final class CcLibraryHelper {
     }
 
     return Iterables.filter(result, Predicates.<CppModuleMap>notNull());
+  }
+
+  static NestedSet<Artifact> collectHeaderTokens(
+      RuleContext ruleContext, CcCompilationOutputs ccCompilationOutputs) {
+    NestedSetBuilder<Artifact> headerTokens = NestedSetBuilder.stableOrder();
+    for (OutputGroupProvider dep :
+        ruleContext.getPrerequisites("deps", Mode.TARGET, OutputGroupProvider.class)) {
+      headerTokens.addTransitive(dep.getOutputGroup(CcLibraryHelper.HIDDEN_HEADER_TOKENS));
+    }
+    if (ruleContext.getFragment(CppConfiguration.class).processHeadersInDependencies()) {
+      headerTokens.addAll(ccCompilationOutputs.getHeaderTokenFiles());
+    }
+    return headerTokens.build();
   }
 
   private TransitiveLipoInfoProvider collectTransitiveLipoInfo(CcCompilationOutputs outputs) {

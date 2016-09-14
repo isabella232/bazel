@@ -65,7 +65,12 @@ cc_binary(
 
 genrule(
     name = "windows_jni",
-    srcs = ["windows_processes.cc"],
+    # Keep this `glob` in sync with scripts/bootstrap/compile.sh:build_jni
+    # function's msys*|mingw* case.
+    srcs = glob([
+        "windows_*.cc",
+        "windows_*.h",
+    ]),
     outs = ["windows_jni.dll"],
     cmd = "$(location build_windows_jni.sh) $@ $(SRCS)",
     output_to_bindir = 1,

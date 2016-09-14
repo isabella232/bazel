@@ -86,8 +86,6 @@ string GetSelfPath() {
   return string(buffer);
 }
 
-pid_t GetPeerProcessId(int socket) { return -1; }
-
 uint64_t MonotonicClock() {
   struct timespec ts = {};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -157,10 +155,14 @@ string GetDefaultHostJavabase() {
 void WriteSystemSpecificProcessIdentifier(const string& server_dir) {
 }
 
-bool KillServerProcess(
+bool VerifyServerProcess(
     int pid, const string& output_base, const string& install_base) {
   // TODO(lberki): This might accidentally kill an unrelated process if the
   // server died and the PID got reused.
+  return true;
+}
+
+bool KillServerProcess(int pid) {
   killpg(pid, SIGKILL);
   return true;
 }

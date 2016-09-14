@@ -20,7 +20,6 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.StringCanonicalizer;
-
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -797,15 +796,18 @@ public class Path implements Comparable<Path>, Serializable {
   public void createSymbolicLink(PathFragment target) throws IOException {
     fileSystem.createSymbolicLink(this, target);
   }
-  
+
   /**
-   * Returns the target of the current path, which must be a symbolic link. The
-   * link contents are returned exactly, and may contain an absolute or relative
-   * path. Analogous to readlink(2).
+   * Returns the target of the current path, which must be a symbolic link. The link contents are
+   * returned exactly, and may contain an absolute or relative path. Analogous to readlink(2).
+   *
+   * <p>Note: for {@link FileSystem}s where {@link FileSystem#supportsSymbolicLinksNatively()}
+   * returns false, this method will throw an {@link UnsupportedOperationException} if the link
+   * points to a non-existent file.
    *
    * @return the content (i.e. target) of the symbolic link
-   * @throws IOException if the current path is not a symbolic link, or the
-   *         contents of the link could not be read for any reason
+   * @throws IOException if the current path is not a symbolic link, or the contents of the link
+   *     could not be read for any reason
    */
   public PathFragment readSymbolicLink() throws IOException {
     return fileSystem.readSymbolicLink(this);
@@ -821,6 +823,16 @@ public class Path implements Comparable<Path>, Serializable {
    */
   public PathFragment readSymbolicLinkUnchecked() throws IOException {
     return fileSystem.readSymbolicLinkUnchecked(this);
+  }
+
+  /**
+   * Create a hard link for the current path.
+   *
+   * @param link the path of the new link
+   * @throws IOException if there was an error executing {@link FileSystem#createHardLink}
+   */
+  public void createHardLink(Path link) throws IOException {
+    fileSystem.createHardLink(link, this);
   }
 
   /**
@@ -983,6 +995,20 @@ public class Path implements Comparable<Path>, Serializable {
   }
 
   /**
+   * Returns the SHA1 digest of the file denoted by the current path, following
+   * symbolic links.
+   *
+   * <p>This method runs in O(n) time where n is the length of the file, but
+   * certain implementations may be much faster than the worst case.
+   *
+   * @return a new 20-byte array containing the file's SHA1 digest
+   * @throws IOException if the SHA1 digest could not be computed for any reason
+   */
+  public byte[] getSHA1Digest() throws IOException {
+    return fileSystem.getSHA1Digest(this);
+  }
+
+  /**
    * Opens the file denoted by this path, following symbolic links, for reading,
    * and returns an input stream to it.
    *
@@ -1133,7 +1159,8 @@ public class Path implements Comparable<Path>, Serializable {
     // requires us to always go up to the top-level directory and copy all segments into a new
     // string array.
     // This was previously showing up as a hotspot in a profile of globbing a large directory.
-    Path a = this, b = o;
+    Path a = this;
+    Path b = o;
     int maxDepth = Math.min(a.depth, b.depth);
     while (a.depth > maxDepth) {
       a = a.getParentDirectory();
@@ -1146,7 +1173,8 @@ public class Path implements Comparable<Path>, Serializable {
       // If a is the same as this, this.depth must be less than o.depth.
       return equals(a) ? -1 : 1;
     }
-    Path previousa, previousb;
+    Path previousa;
+    Path previousb;
     do {
       previousa = a;
       previousb = b;

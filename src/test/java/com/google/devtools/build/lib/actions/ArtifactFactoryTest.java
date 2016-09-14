@@ -28,6 +28,7 @@ import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -49,6 +50,8 @@ import javax.annotation.Nullable;
  */
 @RunWith(JUnit4.class)
 public class ArtifactFactoryTest {
+
+  private static final RepositoryName MAIN = RepositoryName.MAIN;
 
   private Scratch scratch = new Scratch();
 
@@ -92,7 +95,7 @@ public class ArtifactFactoryTest {
     alienPackage = PackageIdentifier.create("@alien", alienPath);
     alienRelative = alienPath.getRelative("alien.txt");
 
-    artifactFactory = new ArtifactFactory(execRoot);
+    artifactFactory = new ArtifactFactory(execRoot, "bazel-out");
     setupRoots();
   }
 
@@ -102,7 +105,6 @@ public class ArtifactFactoryTest {
     packageRootMap.put(barPackage, clientRoRoot);
     packageRootMap.put(alienPackage, alienRoot);
     artifactFactory.setPackageRoots(packageRootMap);
-    artifactFactory.setDerivedArtifactRoots(ImmutableList.of(outRoot));
   }
 
   @Test
@@ -121,31 +123,31 @@ public class ArtifactFactoryTest {
   @Test
   public void testResolveArtifact_noDerived_simpleSource() throws Exception {
     assertSame(artifactFactory.getSourceArtifact(fooRelative, clientRoot),
-        artifactFactory.resolveSourceArtifact(fooRelative));
+        artifactFactory.resolveSourceArtifact(fooRelative, MAIN));
     assertSame(artifactFactory.getSourceArtifact(barRelative, clientRoRoot),
-        artifactFactory.resolveSourceArtifact(barRelative));
+        artifactFactory.resolveSourceArtifact(barRelative, MAIN));
   }
 
   @Test
   public void testResolveArtifact_inExternalRepo() throws Exception {
     assertSame(
         artifactFactory.getSourceArtifact(alienRelative, alienRoot),
-        artifactFactory.resolveSourceArtifact(alienRelative));
+        artifactFactory.resolveSourceArtifact(alienRelative, MAIN));
   }
 
   @Test
   public void testResolveArtifact_noDerived_derivedRoot() throws Exception {
     assertNull(artifactFactory.resolveSourceArtifact(
-            outRoot.getPath().getRelative(fooRelative).relativeTo(execRoot)));
+            outRoot.getPath().getRelative(fooRelative).relativeTo(execRoot), MAIN));
     assertNull(artifactFactory.resolveSourceArtifact(
-            outRoot.getPath().getRelative(barRelative).relativeTo(execRoot)));
+            outRoot.getPath().getRelative(barRelative).relativeTo(execRoot), MAIN));
   }
 
   @Test
   public void testResolveArtifact_noDerived_simpleSource_other() throws Exception {
-    Artifact actual = artifactFactory.resolveSourceArtifact(fooRelative);
+    Artifact actual = artifactFactory.resolveSourceArtifact(fooRelative, MAIN);
     assertSame(artifactFactory.getSourceArtifact(fooRelative, clientRoot), actual);
-    actual = artifactFactory.resolveSourceArtifact(barRelative);
+    actual = artifactFactory.resolveSourceArtifact(barRelative, MAIN);
     assertSame(artifactFactory.getSourceArtifact(barRelative, clientRoRoot), actual);
   }
 
@@ -159,9 +161,9 @@ public class ArtifactFactoryTest {
     PathFragment outsideWorkspace = new PathFragment("../foo");
     PathFragment insideWorkspace =
         new PathFragment("../" + clientRoot.getPath().getBaseName() + "/foo");
-    assertNull(artifactFactory.resolveSourceArtifact(outsideWorkspace));
+    assertNull(artifactFactory.resolveSourceArtifact(outsideWorkspace, MAIN));
     assertNull("Up-level-containing paths that descend into the right workspace aren't allowed",
-            artifactFactory.resolveSourceArtifact(insideWorkspace));
+            artifactFactory.resolveSourceArtifact(insideWorkspace, MAIN));
     MockPackageRootResolver packageRootResolver = new MockPackageRootResolver();
     packageRootResolver.setPackageRoots(packageRoots);
     Map<PathFragment, Artifact> result = new HashMap<>();
@@ -182,10 +184,9 @@ public class ArtifactFactoryTest {
 
   @Test
   public void testFindDerivedRoot() throws Exception {
-    assertSame(outRoot,
-        artifactFactory.findDerivedRoot(outRoot.getPath().getRelative(fooRelative)));
-    assertSame(outRoot,
-        artifactFactory.findDerivedRoot(outRoot.getPath().getRelative(barRelative)));
+    assertThat(artifactFactory.isDerivedArtifact(fooRelative)).isFalse();
+    assertThat(artifactFactory.isDerivedArtifact(
+        new PathFragment("bazel-out/local-fastbuild/bin/foo"))).isTrue();
   }
 
   @Test
@@ -210,7 +211,7 @@ public class ArtifactFactoryTest {
   @Test
   public void testGetDerivedArtifact() throws Exception {
     PathFragment toolPath = new PathFragment("_bin/tool");
-    Artifact artifact = artifactFactory.getDerivedArtifact(toolPath);
+    Artifact artifact = artifactFactory.getDerivedArtifact(toolPath, execRoot);
     assertEquals(toolPath, artifact.getExecPath());
     assertEquals(Root.asDerivedRoot(execRoot), artifact.getRoot());
     assertEquals(execRoot.getRelative(toolPath), artifact.getPath());
@@ -220,7 +221,7 @@ public class ArtifactFactoryTest {
   @Test
   public void testGetDerivedArtifactFailsForAbsolutePath() throws Exception {
     try {
-      artifactFactory.getDerivedArtifact(new PathFragment("/_bin/b"));
+      artifactFactory.getDerivedArtifact(new PathFragment("/_bin/b"), execRoot);
       fail();
     } catch (IllegalArgumentException e) {
       // Expected exception

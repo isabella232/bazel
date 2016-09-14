@@ -13,8 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.android;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-
 import com.android.builder.core.VariantConfiguration;
 import com.android.builder.core.VariantConfiguration.Type;
 import com.android.ide.common.internal.AaptCruncher;
@@ -38,7 +36,6 @@ import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.TriState;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -56,11 +53,11 @@ import java.util.logging.Logger;
  *      --adb path/to/sdk/adb\
  *      --zipAlign path/to/sdk/zipAlign\
  *      --androidJar path/to/sdk/androidJar\
- *      --manifest path/to/manifest\
- *      --primaryData path/to/resources:path/to/assets:path/to/manifest:path/to/R.txt
- *      --data p/t/res1:p/t/assets1:p/t/1/AndroidManifest.xml:p/t/1/R.txt,\
- *             p/t/res2:p/t/assets2:p/t/2/AndroidManifest.xml:p/t/2/R.txt
- *      --packagePath path/to/write/archive.ap_
+ *      --manifestOutput path/to/manifest\
+ *      --primaryData path/to/resources:path/to/assets:path/to/manifest\
+ *      --data p/t/res1:p/t/assets1:p/t/1/AndroidManifest.xml:p/t/1/R.txt:symbols,\
+ *             p/t/res2:p/t/assets2:p/t/2/AndroidManifest.xml:p/t/2/R.txt:symbols\
+ *      --packagePath path/to/write/archive.ap_\
  *      --srcJarOutput path/to/write/archive.srcjar
  * </pre>
  */
@@ -80,7 +77,7 @@ public class AndroidResourceProcessingAction {
         category = "input",
         help = "The directory containing the primary resource directory. The contents will override"
             + " the contents of any other resource directories during merging. The expected format"
-            + " is resources[|resources]:assets[|assets]:manifest")
+            + " is " + UnvalidatedAndroidData.EXPECTED_FORMAT)
     public UnvalidatedAndroidData primaryData;
 
     @Option(name = "data",
@@ -89,8 +86,8 @@ public class AndroidResourceProcessingAction {
         category = "input",
         help = "Transitive Data dependencies. These values will be used if not defined in the "
             + "primary resources. The expected format is "
-            + "resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin"
-            + "[,resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin]")
+            + DependencyAndroidData.EXPECTED_FORMAT
+            + "[,...]")
     public List<DependencyAndroidData> transitiveData;
 
     @Option(name = "directData",
@@ -99,8 +96,8 @@ public class AndroidResourceProcessingAction {
         category = "input",
         help = "Direct Data dependencies. These values will be used if not defined in the "
             + "primary resources. The expected format is "
-            + "resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin"
-            + "[,resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin]")
+            + DependencyAndroidData.EXPECTED_FORMAT
+            + "[,...]")
     public List<DependencyAndroidData> directData;
 
     @Option(name = "rOutput",
@@ -116,6 +113,13 @@ public class AndroidResourceProcessingAction {
         category = "output",
         help = "Path to where the symbolsTxt should be written.")
     public Path symbolsTxtOut;
+
+    @Option(name = "dataBindingInfoOut",
+        defaultValue = "null",
+        converter = PathConverter.class,
+        category = "output",
+        help = "Path to where data binding's layout info output should be written.")
+    public Path dataBindingInfoOut;
 
     @Option(name = "packagePath",
         defaultValue = "null",
@@ -276,12 +280,7 @@ public class AndroidResourceProcessingAction {
       }
 
       if (options.packageType == Type.LIBRARY) {
-        Files.createDirectories(dummyManifest.getParent());
-        Files.write(dummyManifest, String.format(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-            + "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\""
-            + " package=\"%s\">"
-            + "</manifest>", options.packageForR).getBytes(UTF_8));
+        resourceProcessor.writeDummyManifestForAapt(dummyManifest, options.packageForR);
         processedData = new MergedAndroidData(
             processedData.getResourceDir(),
             processedData.getAssetDir(),
@@ -306,7 +305,8 @@ public class AndroidResourceProcessingAction {
           options.mainDexProguardOutput,
           options.resourcesOutput != null
               ? processedData.getResourceDir().resolve("values").resolve("public.xml")
-              : null);
+              : null,
+          options.dataBindingInfoOut);
       logger.fine(String.format("aapt finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
 
       if (options.srcJarOutput != null) {
@@ -325,7 +325,8 @@ public class AndroidResourceProcessingAction {
         resourceProcessor.createResourcesZip(
             processedData.getResourceDir(),
             processedData.getAssetDir(),
-            options.resourcesOutput);
+            options.resourcesOutput,
+            false /* compress */);
       }
       logger.fine(
           String.format("Packaging finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));

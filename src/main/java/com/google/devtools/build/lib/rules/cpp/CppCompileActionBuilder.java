@@ -38,7 +38,9 @@ import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -76,6 +78,8 @@ public class CppCompileActionBuilder {
   private ImmutableMap<Artifact, IncludeScannable> lipoScannableMap;
   private RuleContext ruleContext = null;
   private Boolean shouldScanIncludes;
+  private Map<String, String> environment = new LinkedHashMap<>();
+  private CppSemantics cppSemantics;
   // New fields need to be added to the copy constructor.
 
   /**
@@ -143,6 +147,8 @@ public class CppCompileActionBuilder {
     this.lipoScannableMap = other.lipoScannableMap;
     this.ruleContext = other.ruleContext;
     this.shouldScanIncludes = other.shouldScanIncludes;
+    this.environment = new LinkedHashMap<>(other.environment);
+    this.cppSemantics = other.cppSemantics;
   }
 
   public PathFragment getTempOutputFile() {
@@ -239,16 +245,34 @@ public class CppCompileActionBuilder {
     // finalizeCompileActionBuilder on this builder.
     Preconditions.checkNotNull(shouldScanIncludes);
 
+    boolean fake = tempOutputFile != null;
+
     // Configuration can be null in tests.
     NestedSetBuilder<Artifact> realMandatoryInputsBuilder = NestedSetBuilder.compileOrder();
     realMandatoryInputsBuilder.addTransitive(mandatoryInputsBuilder.build());
-    if (tempOutputFile == null && !shouldScanIncludes) {
+    if (!fake && !shouldScanIncludes) {
       realMandatoryInputsBuilder.addTransitive(context.getDeclaredIncludeSrcs());
     }
-    realMandatoryInputsBuilder.addTransitive(context.getAdditionalInputs(usePic));
+    // We disable pruning header modules in CPP_MODULE_COMPILEs as that would lead to
+    // module-out-of-date errors. The problem surfaces if a module A depends on a module B, but the
+    // headers of module A don't actually use any of B's headers.  Then we would not need to rebuild
+    // A when B changes although we are storing a dependency in it. If B changes and we then build
+    // something that uses A (a header of it), we mark A and all of its transitive deps as inputs.
+    // We still don't need to rebuild A, as none of its inputs have changed, but we do rebuild B
+    // now and then the two modules are out of sync.
+    // We also have to disable this for fake C++ compile actions as those currently do a build first
+    // before discovering inputs and thus would not declare their inputs properly.
+    boolean shouldPruneModules =
+        shouldScanIncludes
+            && !fake
+            && !getActionName().equals(CppCompileAction.CPP_MODULE_COMPILE)
+            && featureConfiguration.isEnabled(CppRuleClasses.PRUNE_HEADER_MODULES);
+    if (featureConfiguration.isEnabled(CppRuleClasses.USE_HEADER_MODULES) && !shouldPruneModules) {
+      realMandatoryInputsBuilder.addTransitive(context.getTransitiveModules(usePic));
+    }
+    realMandatoryInputsBuilder.addTransitive(context.getAdditionalInputs());
 
     realMandatoryInputsBuilder.add(sourceFile);
-    boolean fake = tempOutputFile != null;
 
     // If the crosstool uses action_configs to configure cc compilation, collect execution info
     // from there, otherwise, use no execution info.
@@ -258,7 +282,7 @@ public class CppCompileActionBuilder {
       executionRequirements =
           featureConfiguration.getToolForAction(getActionName()).getExecutionRequirements();
     }
-    
+
     // Copying the collections is needed to make the builder reusable.
     if (fake) {
       return new FakeCppCompileAction(
@@ -268,6 +292,8 @@ public class CppCompileActionBuilder {
           variables,
           sourceFile,
           shouldScanIncludes,
+          shouldPruneModules,
+          usePic,
           sourceLabel,
           realMandatoryInputsBuilder.build(),
           outputFile,
@@ -279,7 +305,8 @@ public class CppCompileActionBuilder {
           actionContext,
           ImmutableList.copyOf(copts),
           getNocoptPredicate(nocopts),
-          ruleContext);
+          ruleContext,
+          cppSemantics);
     } else {
       NestedSet<Artifact> realMandatoryInputs = realMandatoryInputsBuilder.build();
 
@@ -290,6 +317,8 @@ public class CppCompileActionBuilder {
           variables,
           sourceFile,
           shouldScanIncludes,
+          shouldPruneModules,
+          usePic,
           sourceLabel,
           realMandatoryInputs,
           outputFile,
@@ -307,8 +336,10 @@ public class CppCompileActionBuilder {
           getLipoScannables(realMandatoryInputs),
           actionClassId,
           executionRequirements,
+          ImmutableMap.copyOf(environment),
           getActionName(),
-          ruleContext);
+          ruleContext,
+          cppSemantics);
     }
   }
   
@@ -326,6 +357,11 @@ public class CppCompileActionBuilder {
    */
   public CppCompileActionBuilder setVariables(CcToolchainFeatures.Variables variables) {
     this.variables = variables;
+    return this;
+  }
+
+  public CppCompileActionBuilder addEnvironment(Map<String, String> environment) {
+    this.environment.putAll(environment);
     return this;
   }
 
@@ -464,6 +500,12 @@ public class CppCompileActionBuilder {
     return this;
   }
 
+  /** Sets the CppSemantics for this compile. */
+  public CppCompileActionBuilder setSemantics(CppSemantics semantics) {
+    this.cppSemantics = semantics;
+    return this;
+  }
+  
   public void setShouldScanIncludes(boolean shouldScanIncludes) {
     this.shouldScanIncludes = shouldScanIncludes;
   }

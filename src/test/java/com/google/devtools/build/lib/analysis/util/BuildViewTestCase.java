@@ -227,8 +227,13 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
             analysisMock.getProductName());
     skyframeExecutor.preparePackageLoading(
         new PathPackageLocator(outputBase, ImmutableList.of(rootDirectory)),
-        ConstantRuleVisibility.PUBLIC, true, 7, "",
-        UUID.randomUUID(), tsgm);
+        ConstantRuleVisibility.PUBLIC,
+        true,
+        7,
+        "",
+        UUID.randomUUID(),
+        ImmutableMap.<String, String>of(),
+        tsgm);
     useConfiguration();
     setUpSkyframe();
     // Also initializes ResourceManager.
@@ -237,11 +242,6 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   protected Map<String, String> getPlatformSetRegexps() {
     return null;
-  }
-
-  /** To be overriden by sub classes if they want to disable loading. */
-  protected boolean isLoadingEnabled() {
-    return true;
   }
 
   protected AnalysisMock getAnalysisMock() {
@@ -315,10 +315,15 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   private void setUpSkyframe() {
     PathPackageLocator pkgLocator = PathPackageLocator.create(
         outputBase, packageCacheOptions.packagePath, reporter, rootDirectory, rootDirectory);
-    skyframeExecutor.preparePackageLoading(pkgLocator,
-        packageCacheOptions.defaultVisibility, true,
-        7, ruleClassProvider.getDefaultsPackageContent(optionsParser),
-        UUID.randomUUID(), tsgm);
+    skyframeExecutor.preparePackageLoading(
+        pkgLocator,
+        packageCacheOptions.defaultVisibility,
+        true,
+        7,
+        ruleClassProvider.getDefaultsPackageContent(optionsParser),
+        UUID.randomUUID(),
+        ImmutableMap.<String, String>of(),
+        tsgm);
     skyframeExecutor.setDeletedPackages(ImmutableSet.copyOf(packageCacheOptions.getDeletedPackages()));
   }
 
@@ -424,7 +429,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     view.setConfigurationsForTesting(masterConfig);
 
     view.setArtifactRoots(
-        ImmutableMap.of(PackageIdentifier.createInMainRepo(""), rootDirectory), masterConfig);
+        ImmutableMap.of(PackageIdentifier.createInMainRepo(""), rootDirectory));
     simulateLoadingPhase();
   }
 
@@ -443,6 +448,18 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected Iterable<ConfiguredTarget> getDirectPrerequisites(ConfiguredTarget target)
       throws Exception {
     return view.getDirectPrerequisitesForTesting(reporter, target, masterConfig);
+  }
+
+  protected ConfiguredTarget getDirectPrerequisite(ConfiguredTarget target, String label)
+      throws Exception {
+    Label candidateLabel = Label.parseAbsolute(label);
+    for (ConfiguredTarget candidate : getDirectPrerequisites(target)) {
+      if (candidate.getLabel().equals(candidateLabel)) {
+        return candidate;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -494,6 +511,12 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected RuleContext getRuleContext(ConfiguredTarget target) throws Exception {
     return view.getRuleContextForTesting(
         reporter, target, new StubAnalysisEnvironment(), masterConfig);
+  }
+
+  protected RuleContext getRuleContext(ConfiguredTarget target,
+      AnalysisEnvironment analysisEnvironment) throws Exception {
+    return view.getRuleContextForTesting(
+        reporter, target, analysisEnvironment, masterConfig);
   }
 
   /**
@@ -765,7 +788,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected Rule scratchRule(String packageName, String ruleName, String... lines)
       throws Exception {
     String buildFilePathString = packageName + "/BUILD";
-    if (packageName.equals(Label.EXTERNAL_PATH_PREFIX)) {
+    if (packageName.equals(Label.EXTERNAL_PACKAGE_NAME.getPathString())) {
       buildFilePathString = "WORKSPACE";
       scratch.overwriteFile(buildFilePathString, lines);
     } else {
@@ -840,12 +863,11 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
       getTarget(target);
       fail(
           String.format(
-              "checkLoadingPhaseError(): expected an error with '%s' when loading target '%s'.",
-              expectedErrorMessage,
-              target));
-    } catch (Exception e) {
-      assertContainsEvent(expectedErrorMessage);
+              "checkLoadingPhaseError(): expected an exception with '%s' when loading target '%s'.",
+              expectedErrorMessage, target));
+    } catch (Exception expected) {
     }
+    assertContainsEvent(expectedErrorMessage);
   }
 
   /**
@@ -1494,9 +1516,17 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
     LoadingPhaseRunner runner = new LegacyLoadingPhaseRunner(getPackageManager(),
         Collections.unmodifiableSet(ruleClassProvider.getRuleClassMap().keySet()));
-    LoadingResult loadingResult = runner.execute(reporter, eventBus, targets,
-        PathFragment.EMPTY_FRAGMENT, loadingOptions, getTargetConfiguration().getAllLabels(),
-        viewOptions.keepGoing, isLoadingEnabled(), /*determineTests=*/false, /*callback=*/null);
+    LoadingResult loadingResult =
+        runner.execute(
+            reporter,
+            eventBus,
+            targets,
+            PathFragment.EMPTY_FRAGMENT,
+            loadingOptions,
+            getTargetConfiguration().getAllLabels(),
+            viewOptions.keepGoing,
+            /*determineTests=*/false,
+            /*callback=*/null);
     if (!doAnalysis) {
       // TODO(bazel-team): What's supposed to happen in this case?
       return null;

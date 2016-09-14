@@ -67,6 +67,15 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   }
 
   /**
+   * Converter for {@link ApkSigningMethod}.
+   */
+  public static final class ApkSigningMethodConverter extends EnumConverter<ApkSigningMethod> {
+    public ApkSigningMethodConverter() {
+      super(ApkSigningMethod.class, "apk signing method");
+    }
+  }
+
+  /**
    * Converter for a set of {@link AndroidBinaryType}s.
    */
   public static final class AndroidBinaryTypesConverter
@@ -131,6 +140,49 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   /** Types of android binaries as {@link AndroidBinary#dex} distinguishes them. */
   public enum AndroidBinaryType {
     MONODEX, MULTIDEX_UNSHARDED, MULTIDEX_SHARDED
+  }
+
+  /**
+   * Which APK signing method to use with the debug key for rules that build APKs.
+   *
+   * <ul>
+   * <li>LEGACY_V1 uses the signer inside the deprecated apkbuilder tool.
+   * <li>V1 uses the apksigner attribute from the android_sdk and signs the APK as a JAR.
+   * <li>V2 uses the apksigner attribute from the android_sdk and signs the APK according to the APK
+   * Signing Schema V2 that is only supported on Android N and later.
+   * </ul>
+   */
+  public enum ApkSigningMethod {
+    LEGACY_V1(true, false, false),
+    V1(false, true, false),
+    V2(false, false, true),
+    V1_V2(false, true, true);
+
+    private final boolean signLegacy;
+    private final boolean signV1;
+    private final boolean signV2;
+
+    ApkSigningMethod(boolean signLegacy, boolean signV1, boolean signV2) {
+      // If signLegacy is true, the other two values will be ignored.
+      this.signLegacy = signLegacy;
+      this.signV1 = signV1;
+      this.signV2 = signV2;
+    }
+
+    /** Whether to sign with the signer inside the deprecated apkbuilder tool. */
+    public boolean signLegacy() {
+      return signLegacy;
+    }
+
+    /** Whether to JAR sign the APK with the apksigner tool. */
+    public boolean signV1() {
+      return signV1;
+    }
+
+    /** Wheter to sign the APK with the apksigner tool with APK Signature Schema V2. */
+    public boolean signV2() {
+      return signV2;
+    }
   }
 
   /** When to use incremental dexing (using {@link DexArchiveProvider}). */
@@ -229,13 +281,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
             converter = LabelConverter.class,
             help = "Specifies Android SDK/platform that is used to build Android applications.")
     public Label sdk;
-
-    @Option(name = "legacy_android_native_support",
-        defaultValue = "true",
-        category = "semantics",
-        help = "Switches back to old native support for android_binaries. Disable to link together "
-            + "native deps of android_binaries into a single .so by default.")
-    public boolean legacyNativeSupport;
 
     // TODO(bazel-team): Maybe merge this with --android_cpu above.
     @Option(name = "fat_apk_cpu",
@@ -340,6 +385,23 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
         help = "Use the specialized R class generator to build the final app and lib R classes.")
     public boolean useRClassGenerator;
 
+    // Do not use on the command line.
+    // The idea is that once this option works, we'll flip the default value in a config file, then
+    // once it is proven that it works, remove it from Bazel and said config file.
+    @Option(name = "experimental_use_parallel_android_resource_processing",
+      defaultValue = "false",
+      category = "undocumented",
+      help = "Process android_library resources with higher parallelism. Generates library "
+              + "R classes from a merge action, separately from aapt.")
+    public boolean useParallelResourceProcessing;
+
+    @Option(name = "apk_signing_method",
+        converter = ApkSigningMethodConverter.class,
+        defaultValue = "legacy_v1",
+        category = "undocumented",
+        help = "Implementation to use to sign APKs")
+    public ApkSigningMethod apkSigningMethod;
+
     @Override
     public void addAllLabels(Multimap<String, Label> labelMap) {
       if (androidCrosstoolTop != null) {
@@ -397,7 +459,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   private final Label sdk;
   private final StrictDepsMode strictDeps;
-  private final boolean legacyNativeSupport;
   private final String cpu;
   private final boolean incrementalNativeLibs;
   private final ConfigurationDistinguisher configurationDistinguisher;
@@ -409,13 +470,14 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   private final boolean allowAndroidLibraryDepsWithoutSrcs;
   private final boolean useAndroidResourceShrinking;
   private final boolean useRClassGenerator;
+  private final boolean useParallelResourceProcessing;
   private final AndroidManifestMerger manifestMerger;
+  private final ApkSigningMethod apkSigningMethod;
 
   AndroidConfiguration(Options options, Label androidSdk) {
     this.sdk = androidSdk;
     this.incrementalNativeLibs = options.incrementalNativeLibs;
     this.strictDeps = options.strictDeps;
-    this.legacyNativeSupport = options.legacyNativeSupport;
     this.cpu = options.cpu;
     this.configurationDistinguisher = options.configurationDistinguisher;
     this.useJackForDexing = options.useJackForDexing;
@@ -432,7 +494,9 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     this.allowAndroidLibraryDepsWithoutSrcs = options.allowAndroidLibraryDepsWithoutSrcs;
     this.useAndroidResourceShrinking = options.useAndroidResourceShrinking;
     this.useRClassGenerator = options.useRClassGenerator;
+    this.useParallelResourceProcessing = options.useParallelResourceProcessing;
     this.manifestMerger = options.manifestMerger;
+    this.apkSigningMethod = options.apkSigningMethod;
   }
 
   public String getCpu() {
@@ -441,10 +505,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   public Label getSdk() {
     return sdk;
-  }
-
-  public boolean getLegacyNativeSupport() {
-    return legacyNativeSupport;
   }
 
   public StrictDepsMode getStrictDeps() {
@@ -505,8 +565,16 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     return useRClassGenerator;
   }
 
+  public boolean useParallelResourceProcessing() {
+    return useParallelResourceProcessing;
+  }
+
   public AndroidManifestMerger getManifestMerger() {
     return manifestMerger;
+  }
+
+  public ApkSigningMethod getApkSigningMethod() {
+    return apkSigningMethod;
   }
 
   @Override

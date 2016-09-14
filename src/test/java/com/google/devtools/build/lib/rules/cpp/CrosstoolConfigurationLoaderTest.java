@@ -43,15 +43,13 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests for {@link CppConfigurationLoader}.
@@ -82,8 +80,7 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
   }
 
   private CppConfigurationLoader loader(String crosstoolFileContents) throws IOException {
-    CrosstoolConfigurationHelper.overwriteCrosstoolFile(
-        directories.getWorkspace(), crosstoolFileContents);
+    getAnalysisMock().ccSupport().setupCrosstoolWithRelease(mockToolsConfig, crosstoolFileContents);
     return new CppConfigurationLoader(Functions.<String>identity());
   }
 
@@ -117,7 +114,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
             + "  tool_path { name: \"dwp\" path: \"path-to-dwp\" }"
             + optionalTool
             + "  supports_gold_linker: true"
-            + "  supports_thin_archives: true"
             + "  supports_normalizing_ar: true"
             + "  supports_incremental_linker: true"
             + "  supports_fission: true"
@@ -195,7 +191,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
     assertEquals("abi-libc-version", toolchain.getAbiGlibcVersion());
 
     assertTrue(toolchain.supportsGoldLinker());
-    assertTrue(toolchain.supportsThinArchives());
     assertFalse(toolchain.supportsStartEndLib());
     assertFalse(toolchain.supportsInterfaceSharedObjects());
     assertFalse(toolchain.supportsEmbeddedRuntimes());
@@ -228,8 +223,7 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
 
     assertEquals(Arrays.asList("objcopy"), toolchain.getObjCopyOptionsForEmbedding());
     assertEquals(Arrays.<String>asList(), toolchain.getLdOptionsForEmbedding());
-    assertEquals(Arrays.asList("rcsD"), toolchain.getArFlags(/*thinArchives=*/ false));
-    assertEquals(Arrays.asList("rcsDT"), toolchain.getArFlags(/*thinArchives=*/ true));
+    assertEquals(Arrays.asList("rcsD"), toolchain.getArFlags());
 
     assertThat(toolchain.getAdditionalMakeVariables().entrySet())
         .containsExactlyElementsIn(
@@ -285,7 +279,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
                 + "  tool_path { name: \"strip\" path: \"path/to/strip-A\" }\n"
                 + "  tool_path { name: \"dwp\" path: \"path/to/dwp\" }\n"
                 + "  supports_gold_linker: true\n"
-                + "  supports_thin_archives: true\n"
                 + "  supports_start_end_lib: true\n"
                 + "  supports_normalizing_ar: true\n"
                 + "  supports_embedded_runtimes: true\n"
@@ -305,7 +298,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
                 + "  ld_embed_flag: \"ld-embed-flag-A-1\"\n"
                 + "  ld_embed_flag: \"ld-embed-flag-A-2\"\n"
                 + "  ar_flag : \"ar-flag-A\"\n"
-                + "  ar_thin_archives_flag : \"ar-thin-archives-flag-A\"\n"
                 + "  compilation_mode_flags {\n"
                 + "    mode: FASTBUILD\n"
                 + "    compiler_flag: \"fastbuild-flag-A-1\"\n"
@@ -375,7 +367,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
                 + "  tool_path { name: \"strip\" path: \"path/to/strip-B\" }\n"
                 + "  tool_path { name: \"dwp\" path: \"path/to/dwp\" }\n"
                 + "  supports_gold_linker: true\n"
-                + "  supports_thin_archives: true\n"
                 + "  supports_start_end_lib: true\n"
                 + "  supports_normalizing_ar: true\n"
                 + "  supports_embedded_runtimes: true\n"
@@ -399,7 +390,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
                 + "  ld_embed_flag: \"ld-embed-flag-B-1\"\n"
                 + "  ld_embed_flag: \"ld-embed-flag-B-2\"\n"
                 + "  ar_flag : \"ar-flag-B\"\n"
-                + "  ar_thin_archives_flag : \"ar-thin-archives-flag-B\"\n"
                 + "  compilation_mode_flags {\n"
                 + "    mode: FASTBUILD\n"
                 + "    compiler_flag: \"fastbuild-flag-B-1\"\n"
@@ -505,7 +495,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
     assertEquals(getToolPath("path/to/objdump-A"), toolchainA.getToolPathFragment(Tool.OBJDUMP));
     assertEquals(getToolPath("path/to/strip-A"), toolchainA.getToolPathFragment(Tool.STRIP));
     assertTrue(toolchainA.supportsGoldLinker());
-    assertTrue(toolchainA.supportsThinArchives());
     assertTrue(toolchainA.supportsStartEndLib());
     assertTrue(toolchainA.supportsEmbeddedRuntimes());
     assertTrue(toolchainA.toolchainNeedsPic());
@@ -596,9 +585,7 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
     assertEquals(
         Arrays.asList("ld-embed-flag-A-1", "ld-embed-flag-A-2"),
         toolchainA.getLdOptionsForEmbedding());
-    assertEquals(Arrays.asList("ar-flag-A"), toolchainA.getArFlags(/*thinArchives=*/ false));
-    assertEquals(
-        Arrays.asList("ar-thin-archives-flag-A"), toolchainA.getArFlags(/*thinArchives=*/ true));
+    assertEquals(Arrays.asList("ar-flag-A"), toolchainA.getArFlags());
 
     assertThat(toolchainA.getAdditionalMakeVariables().entrySet())
         .containsExactlyElementsIn(
@@ -635,7 +622,6 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
     assertEquals("abi-libc-version-C", toolchainC.getAbiGlibcVersion());
     // Don't bother with testing the list of tools again.
     assertFalse(toolchainC.supportsGoldLinker());
-    assertFalse(toolchainC.supportsThinArchives());
     assertFalse(toolchainC.supportsStartEndLib());
     assertFalse(toolchainC.supportsInterfaceSharedObjects());
     assertFalse(toolchainC.supportsEmbeddedRuntimes());
@@ -691,7 +677,7 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
             TestConstants.TOOLS_REPOSITORY,
             new PathFragment(
                 new PathFragment(TestConstants.TOOLS_REPOSITORY_PATH), new PathFragment(path)));
-    return packageIdentifier.getSourceRoot();
+    return packageIdentifier.getPathUnderExecRoot();
   }
 
   private void checkToolchainB(CppConfigurationLoader loader, LipoMode lipoMode, String... args)
@@ -809,10 +795,11 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
 
     // Uses the default toolchain for k8.
     assertEquals("toolchain-identifier-BB", create(loader, "--cpu=k8").getToolchainIdentifier());
-    // Defaults to --cpu=k8.
+    // Does not default to --cpu=k8; if no --cpu flag is present, Bazel defaults to the host cpu!
     assertEquals(
         "toolchain-identifier-BA",
-        create(loader, "--compiler=compiler-A", "--glibc=target-libc-B").getToolchainIdentifier());
+        create(loader, "--cpu=k8", "--compiler=compiler-A", "--glibc=target-libc-B")
+            .getToolchainIdentifier());
     // Uses the default toolchain for piii.
     assertEquals(
         "toolchain-identifier-AA-piii", create(loader, "--cpu=piii").getToolchainIdentifier());
@@ -828,10 +815,10 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
     // compiler-C uniquely identifies a toolchain, so we can use it.
     assertEquals(
         "toolchain-identifier-BC",
-        create(loader, "--compiler=compiler-C").getToolchainIdentifier());
+        create(loader, "--cpu=k8", "--compiler=compiler-C").getToolchainIdentifier());
 
     try {
-      create(loader, "--compiler=nonexistent-compiler");
+      create(loader, "--cpu=k8", "--compiler=nonexistent-compiler");
       fail("Expected an error that no toolchain matched.");
     } catch (InvalidConfigurationException e) {
       assertThat(e)
@@ -848,7 +835,7 @@ public class CrosstoolConfigurationLoaderTest extends AnalysisTestCase {
     }
 
     try {
-      create(loader, "--glibc=target-libc-A");
+      create(loader, "--cpu=k8", "--glibc=target-libc-A");
       fail("Expected an error that multiple toolchains matched.");
     } catch (InvalidConfigurationException e) {
       assertThat(e)

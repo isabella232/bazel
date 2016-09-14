@@ -52,8 +52,8 @@ public class WindowsSubprocessFactory implements Subprocess.Factory {
       throw new IOException(error);
     }
 
-    return new WindowsSubprocess(
-        nativeProcess, commandLine, stdoutPath != null, stderrPath != null);
+    return new WindowsSubprocess(nativeProcess, commandLine, stdoutPath != null,
+        stderrPath != null, builder.getTimeoutMillis());
   }
 
   private String getRedirectPath(StreamAction action, File file) {
@@ -109,7 +109,10 @@ public class WindowsSubprocessFactory implements Subprocess.Factory {
     StringBuilder result = new StringBuilder();
     for (Map.Entry<String, String> entry : realEnv.entrySet()) {
       if (entry.getKey().contains("=")) {
-        throw new IOException("Environment variable names must not contain '='");
+        // lpEnvironment requires no '=' in environment variable name, but on Windows,
+        // System.getenv() returns environment variables like '=C:' or '=ExitCode', so it can't
+        // be an error, we have ignore them here.
+        continue;
       }
       result.append(entry.getKey() + "=" + entry.getValue() + "\0");
     }

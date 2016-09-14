@@ -135,6 +135,7 @@ java_library(
         ":os_util",
         ":preconditions",
         ":unix",
+        ":windows",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -556,6 +557,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:crosstool_config_java_proto",
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:joda_time",
         "//third_party:jsr305",
@@ -768,6 +770,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:extra_actions_base_java_proto",
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:joda_time",
         "//third_party:jsr305",
@@ -827,6 +830,7 @@ java_library(
         "rules/java/NativeLibraryNestedSetBuilder.java",
         "rules/java/SingleJarActionBuilder.java",
         "rules/java/WriteBuildInfoPropertiesAction.java",
+        "rules/java/proto/GeneratedExtensionRegistryProvider.java",
     ],
     deps = [
         ":build-base",
@@ -843,7 +847,9 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//src/main/java/com/google/devtools/common/options",
+        "//src/main/protobuf:deps_java_proto",
         "//src/main/protobuf:extra_actions_base_java_proto",
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:joda_time",
         "//third_party:jsr305",
@@ -878,6 +884,7 @@ java_library(
         "//src/main/protobuf:android_deploy_info_java_proto",
         "//src/main/protobuf:apk_manifest_java_proto",
         "//third_party:android_sdklib",
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf",
@@ -1062,7 +1069,11 @@ java_binary(
 
 filegroup(
     name = "docs_embedded_in_sources",
-    srcs = glob(["**/*.java"]),
+    srcs = glob(["**/*.java"]) + [
+        "//src/main/java/com/google/devtools/build/lib/rules/apple:srcs",
+        "//src/main/java/com/google/devtools/build/lib/rules/genquery:srcs",
+        "//src/main/java/com/google/devtools/build/lib/rules/objc:srcs",
+    ],
 )
 
 genrule(

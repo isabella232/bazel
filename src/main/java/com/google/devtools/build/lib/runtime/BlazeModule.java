@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.runtime;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionContextConsumer;
 import com.google.devtools.build.lib.actions.ActionContextProvider;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
@@ -23,17 +22,13 @@ import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.exec.ActionInputPrefetcher;
 import com.google.devtools.build.lib.exec.OutputService;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
-import com.google.devtools.build.lib.query2.AbstractBlazeQueryEnvironment;
-import com.google.devtools.build.lib.query2.QueryEnvironmentFactory;
-import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
-import com.google.devtools.build.lib.query2.output.OutputFormatter;
 import com.google.devtools.build.lib.rules.test.CoverageReportActionFactory;
-import com.google.devtools.build.lib.runtime.commands.InfoItem;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.Clock;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -42,7 +37,6 @@ import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsClassProvider;
 import com.google.devtools.common.options.OptionsProvider;
 import java.io.IOException;
-import java.util.Map;
 import java.util.UUID;
 import javax.annotation.Nullable;
 
@@ -135,15 +129,6 @@ public abstract class BlazeModule {
   }
 
   /**
-   * Returns the list of query output formatters this module provides.
-   *
-   * <p>This method will be called during Blaze startup (after #blazeStartup).
-   */
-  public Iterable<OutputFormatter> getQueryOutputFormatters() {
-    return ImmutableList.of();
-  }
-
-  /**
    * Called when Bazel initializes a new workspace; this is only called after {@link #serverInit},
    * and only if the server initialization was successful. Modules can override this method to
    * affect how the workspace is configured.
@@ -173,13 +158,22 @@ public abstract class BlazeModule {
   }
 
   /**
+   * Returns an implementation of {@link ActionInputPrefetcher}.
+   *
+   * <p>This method will be called at the beginning of each command (after #beforeCommand).
+   */
+  @SuppressWarnings("unused")
+  public ActionInputPrefetcher getPrefetcher() throws AbruptExitException {
+    return null;
+  }
+
+  /**
    * Does any handling of options needed by the command.
    *
    * <p>This method will be called at the beginning of each command (after #beforeCommand).
    */
   @SuppressWarnings("unused")
-  public void handleOptions(OptionsProvider optionsProvider) {
-  }
+  public void handleOptions(OptionsProvider optionsProvider) {}
 
   /**
    * Returns extra options this module contributes to a specific command. Note that option
@@ -189,11 +183,13 @@ public abstract class BlazeModule {
    * <p>This method may be called at any time, and the returned value may be cached. Implementations
    * must be thread-safe and never return different lists for the same command object. Typical
    * implementations look like this:
+   *
    * <pre>
    * return "build".equals(command.name())
    *     ? ImmutableList.<Class<? extends OptionsBase>>of(MyOptions.class)
    *     : ImmutableList.<Class<? extends OptionsBase>>of();
    * </pre>
+   *
    * Note that this example adds options to all commands that inherit from the build command.
    *
    * <p>This method is also used to generate command-line documentation; in order to avoid
@@ -213,34 +209,6 @@ public abstract class BlazeModule {
    * Returns extra options this module contributes to all commands.
    */
   public Iterable<Class<? extends OptionsBase>> getCommonCommandOptions() {
-    return ImmutableList.of();
-  }
-
-  /**
-   * Returns a map of option categories to descriptive strings. This is used by {@code HelpCommand}
-   * to show a more readable list of flags.
-   */
-  public Map<String, String> getOptionCategories() {
-    return ImmutableMap.of();
-  }
-
-  /**
-   * Returns the additional information this module provides to "blaze info".
-   *
-   * <p>This method will be called at the beginning of each "blaze info" command (after
-   * #beforeCommand).
-   */
-  public Iterable<InfoItem> getInfoItems() {
-    return ImmutableList.of();
-  }
-
-  /**
-   * Returns the list of query functions this module provides to "blaze query".
-   *
-   * <p>This method will be called at the beginning of each "blaze query" command (after
-   * #beforeCommand).
-   */
-  public Iterable<QueryFunction> getQueryFunctions() {
     return ImmutableList.of();
   }
 
@@ -305,15 +273,6 @@ public abstract class BlazeModule {
    */
   public Package.Builder.Helper getPackageBuilderHelper(RuleClassProvider ruleClassProvider,
       FileSystem fs) {
-    return null;
-  }
-
-  /**
-   * Returns a factory for creating {@link AbstractBlazeQueryEnvironment} objects.
-   * If the module does not provide any {@link QueryEnvironmentFactory}, it should return null. Note
-   * that only one factory per Bazel/Blaze runtime is allowed.
-   */
-  public QueryEnvironmentFactory getQueryEnvironmentFactory() {
     return null;
   }
 

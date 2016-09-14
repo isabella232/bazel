@@ -15,19 +15,11 @@ package com.google.devtools.build.lib.query2.engine;
 
 import com.google.common.collect.ImmutableList;
 
-/**
- * A class used for deduplication of {@code Iterable}s. If called with repeated elements or multiple
- * times with repeated elements between calls, it guarantees to output only those elements exactly once.
- */
+/** A helper for deduping values. */
 public interface Uniquifier<T> {
+  /** Returns whether {@code newElement} has been seen before. */
+  boolean unique(T newElement);
 
-  /**
-   * Receives an iterable and returns the list of elements that were not already seen. The
-   * uniqueness need to be guaranteed for elements of the same iterable and multiple calls to the
-   * {@code unique} method.
-   *
-   * @param newElements The new elements to process.
-   * @return The subset of elements not already seen by this Uniquifier.
-   */
+  /** Returns the subset of {@code newElements} that haven't been seen before. */
   ImmutableList<T> unique(Iterable<T> newElements);
 }

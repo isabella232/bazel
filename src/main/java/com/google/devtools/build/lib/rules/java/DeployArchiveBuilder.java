@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.rules.java;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
@@ -233,20 +234,41 @@ public class DeployArchiveBuilder {
     ResourceSet resourceSet =
         ResourceSet.createWithRamCpuIo(/*memoryMb = */200.0, /*cpuUsage = */.2, /*ioUsage=*/.2);
 
-    ruleContext.registerAction(new SpawnAction.Builder()
-        .addInputs(inputs.build())
-        .addTransitiveInputs(JavaHelper.getHostJavabaseInputs(ruleContext))
-        .addOutput(outputJar)
-        .setResources(resourceSet)
-        .setJarExecutable(
-            ruleContext.getHostConfiguration().getFragment(Jvm.class).getJavaExecutable(),
-            getSingleJar(ruleContext),
-            jvmArgs)
-        .setCommandLine(commandLine)
-        .useParameterFile(ParameterFileType.SHELL_QUOTED)
-        .setProgressMessage("Building deploy jar " + outputJar.prettyPrint())
-        .setMnemonic("JavaDeployJar")
-        .build(ruleContext));
+    // If singlejar's name ends with .jar, it is Java application, otherwise it is native.
+    // TODO(asmundak): once b/28640279 is fixed (that is, the native singlejar is released),
+    // eliminate this check, allowing only native singlejar.
+    Artifact singlejar = getSingleJar(ruleContext);
+    if (singlejar.getFilename().endsWith(".jar")) {
+      ruleContext.registerAction(
+          new SpawnAction.Builder()
+              .addInputs(inputs.build())
+              .addTransitiveInputs(JavaHelper.getHostJavabaseInputs(ruleContext))
+              .addOutput(outputJar)
+              .setResources(resourceSet)
+              .setJarExecutable(
+                  ruleContext.getHostConfiguration().getFragment(Jvm.class).getJavaExecutable(),
+                  singlejar,
+                  jvmArgs)
+              .setCommandLine(commandLine)
+              .alwaysUseParameterFile(ParameterFileType.SHELL_QUOTED)
+              .setProgressMessage("Building deploy jar " + outputJar.prettyPrint())
+              .setMnemonic("JavaDeployJar")
+              .setExecutionInfo(ImmutableMap.of("supports-workers", "1"))
+              .build(ruleContext));
+    } else {
+      ruleContext.registerAction(
+          new SpawnAction.Builder()
+              .addInputs(inputs.build())
+              .addTransitiveInputs(JavaHelper.getHostJavabaseInputs(ruleContext))
+              .addOutput(outputJar)
+              .setResources(resourceSet)
+              .setExecutable(singlejar)
+              .setCommandLine(commandLine)
+              .alwaysUseParameterFile(ParameterFileType.SHELL_QUOTED)
+              .setProgressMessage("Building deploy jar " + outputJar.prettyPrint())
+              .setMnemonic("JavaDeployJar")
+              .build(ruleContext));
+    }
   }
 
   /** Returns the SingleJar deploy jar Artifact. */

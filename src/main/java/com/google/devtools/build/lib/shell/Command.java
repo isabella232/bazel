@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.shell;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.shell.SubprocessBuilder.StreamAction;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -163,6 +162,16 @@ public final class Command {
   }
 
   /**
+   * Just like {@link Command(String, Map<String, String>, File, long), but without a timeout.
+   */
+  public Command(
+      String[] commandLineElements,
+      Map<String, String> environmentVariables,
+      File workingDirectory) {
+    this(commandLineElements, environmentVariables, workingDirectory, -1);
+  }
+
+  /**
    * Creates a new {@link Command} for the given command line elements. The
    * command line is executed without a shell.
    *
@@ -180,15 +189,17 @@ public final class Command {
    *
    * @param commandLineElements elements of raw command line to execute
    * @param environmentVariables environment variables to replace JVM's
-   *  environment variables; may be null
+   *    environment variables; may be null
    * @param workingDirectory working directory for execution; if null, current
-   * working directory is used
+   *    working directory is used
+   * @param timeoutMillis timeout in milliseconds. Only supported on Windows.
    * @throws IllegalArgumentException if commandLine is null or empty
    */
   public Command(
       String[] commandLineElements,
-      final Map<String, String> environmentVariables,
-      final File workingDirectory) {
+      Map<String, String> environmentVariables,
+      File workingDirectory,
+      long timeoutMillis) {
     if (commandLineElements == null || commandLineElements.length == 0) {
       throw new IllegalArgumentException("command line is null or empty");
     }
@@ -203,6 +214,7 @@ public final class Command {
     subprocessBuilder.setArgv(ImmutableList.copyOf(commandLineElements));
     subprocessBuilder.setEnv(environmentVariables);
     subprocessBuilder.setWorkingDirectory(workingDirectory);
+    subprocessBuilder.setTimeoutMillis(timeoutMillis);
   }
 
   /**
@@ -632,6 +644,7 @@ public final class Command {
    *  E.g., you could pass {@link System#out} as <code>stdOut</code>.
    * @param stdErr the process will write its standard error into this stream.
    *  E.g., you could pass {@link System#err} as <code>stdErr</code>.
+   * @param killSubprocessOnInterrupt whether or not to kill the created process on interrupt
    * @param closeOutput whether to close stdout / stderr when the process closes its output streams.
    * @return An object that can be used to check if the process terminated and
    *  obtain the process results.
@@ -643,6 +656,7 @@ public final class Command {
                                     final KillableObserver observer,
                                     final OutputStream stdOut,
                                     final OutputStream stdErr,
+                                    final boolean killSubprocessOnInterrupt,
                                     final boolean closeOutput)
       throws CommandException {
     // supporting "null" here for backwards compatibility
@@ -652,14 +666,22 @@ public final class Command {
     return doExecute(new InputStreamInputSource(stdinInput),
         theObserver,
         Consumers.createStreamingConsumers(stdOut, stdErr),
-        /*killSubprocess=*/false, closeOutput);
+        killSubprocessOnInterrupt,
+        closeOutput);
   }
+
   public FutureCommandResult executeAsynchronously(final InputStream stdinInput,
       final KillableObserver observer,
       final OutputStream stdOut,
       final OutputStream stdErr)
       throws CommandException {
-    return executeAsynchronously(stdinInput, observer, stdOut, stdErr, /*closeOutput=*/false);
+    return executeAsynchronously(
+        stdinInput,
+        observer,
+        stdOut,
+        stdErr,
+        /*killSubprocess=*/ false,
+        /*closeOutput=*/ false);
   }
 
   // End of public API -------------------------------------------------------
@@ -676,7 +698,7 @@ public final class Command {
       final Consumers.OutErrConsumers outErrConsumers,
       final boolean killSubprocessOnInterrupt,
       final boolean closeOutputStreams)
-    throws CommandException {
+      throws CommandException {
 
     logCommand();
 
@@ -872,7 +894,7 @@ public final class Command {
       while (true) {
         try {
           process.waitFor();
-          return new TerminationStatus(process.exitValue());
+          return new TerminationStatus(process.exitValue(), process.timedout());
         } catch (InterruptedException ie) {
           wasInterrupted = true;
           if (killSubprocessOnInterrupt) {

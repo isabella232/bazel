@@ -4,7 +4,7 @@ java_library(
     name = "internal",
     srcs = glob(["*.java"]),
     deps = [
-        "//third_party:guava",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/util",
         "//third_party:jsr330_inject",
         "//third_party:junit4",
     ],

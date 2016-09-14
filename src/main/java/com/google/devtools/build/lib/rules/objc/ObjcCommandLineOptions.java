@@ -25,7 +25,6 @@ import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.apple.DottedVersionConverter;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Option;
-
 import java.util.List;
 
 /**
@@ -181,15 +180,6 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   )
   public Label extraEntitlements;
 
-  // TODO(b/28451644): Make this option the default behavior.
-  @Option(
-    name = "experimental_auto_top_level_union_objc_protos",
-    defaultValue = "true",
-    category = "flags",
-    help = "This flag is a noop and scheduled for removal."
-  )
-  public boolean experimentalAutoTopLevelUnionObjCProtos;
-
   @Option(
     name = "device_debug_entitlements",
     defaultValue = "true",
@@ -200,6 +190,13 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   )
   public boolean deviceDebugEntitlements;
 
+  @Option(
+    name = "experimental_objc_library",
+    defaultValue = "false",
+    category = "undocumented"
+  )
+  public boolean experimentalObjcLibrary;
+  
   @VisibleForTesting static final String DEFAULT_MINIMUM_IOS = "7.0";
 
   @SuppressWarnings("unchecked")
@@ -208,7 +205,7 @@ public class ObjcCommandLineOptions extends FragmentOptions {
     return ImmutableList.<SplitTransition<BuildOptions>>builder().add(
             IosApplication.SPLIT_ARCH_TRANSITION, IosExtension.MINIMUM_OS_AND_SPLIT_ARCH_TRANSITION,
             AppleWatch1Extension.MINIMUM_OS_AND_SPLIT_ARCH_TRANSITION)
-        .addAll(AppleBinary.SPLIT_TRANSITION_PROVIDER.getPotentialSplitTransitions())
+        .addAll(MultiArchSplitTransitionProvider.getPotentialSplitTransitions())
         .build();
   }
 }

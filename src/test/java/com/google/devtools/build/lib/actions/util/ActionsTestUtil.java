@@ -19,10 +19,10 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.AbstractAction;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
@@ -57,21 +57,19 @@ import com.google.devtools.build.skyframe.AbstractSkyFunctionEnvironment;
 import com.google.devtools.build.skyframe.BuildDriver;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationResult;
-import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.ValueOrExceptionUtils;
 import com.google.devtools.build.skyframe.ValueOrUntypedException;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /**
@@ -95,6 +93,7 @@ public final class ActionsTestUtil {
         new SingleBuildFileCache(execRoot.getPathString(), execRoot.getFileSystem()),
         metadataHandler,
         fileOutErr,
+        ImmutableMap.<String, String>of(),
         actionGraph == null
             ? createDummyArtifactExpander()
             : ActionInputHelper.actionGraphArtifactExpander(actionGraph));
@@ -106,15 +105,18 @@ public final class ActionsTestUtil {
     return ActionExecutionContext.forInputDiscovery(
         executor,
         new SingleBuildFileCache(execRoot.getPathString(), execRoot.getFileSystem()),
-        metadataHandler, fileOutErr,
-        new BlockingSkyFunctionEnvironment(buildDriver,
-            executor == null ? null : executor.getEventHandler()));
+        metadataHandler,
+        fileOutErr,
+        ImmutableMap.<String, String>of(),
+        new BlockingSkyFunctionEnvironment(
+            buildDriver, executor == null ? null : executor.getEventHandler()));
   }
 
   public static ActionExecutionContext createContext(EventHandler eventHandler) {
     DummyExecutor dummyExecutor = new DummyExecutor(eventHandler);
     return new ActionExecutionContext(
-        dummyExecutor, null, null, null, createDummyArtifactExpander());
+        dummyExecutor, null, null, null, ImmutableMap.<String, String>of(),
+        createDummyArtifactExpander());
   }
 
   private static ArtifactExpander createDummyArtifactExpander() {
@@ -142,9 +144,9 @@ public final class ActionsTestUtil {
 
     @Override
     protected Map<SkyKey, ValueOrUntypedException> getValueOrUntypedExceptions(
-        Set<SkyKey> depKeys) {
+        Iterable<SkyKey> depKeys) {
       EvaluationResult<SkyValue> evaluationResult;
-      Map<SkyKey, ValueOrUntypedException> result = Maps.newHashMapWithExpectedSize(depKeys.size());
+      Map<SkyKey, ValueOrUntypedException> result = new HashMap<>();
       try {
         evaluationResult = driver.evaluate(depKeys, /*keepGoing=*/false,
             ResourceUsage.getAvailableProcessors(), eventHandler);

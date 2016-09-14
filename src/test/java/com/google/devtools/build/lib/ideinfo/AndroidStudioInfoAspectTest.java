@@ -118,6 +118,59 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
   }
 
   @Test
+  public void testFilteredGenJarNotCreatedForSourceOnlyRule() throws Exception {
+    scratch.file(
+        "com/google/example/BUILD",
+        "java_library(",
+        "    name = 'simple',",
+        "    srcs = ['Test.java']",
+        ")");
+    Map<String, RuleIdeInfo> ruleIdeInfos = buildRuleIdeInfo("//com/google/example:simple");
+    RuleIdeInfo ruleIdeInfo = getRuleInfoAndVerifyLabel(
+        "//com/google/example:simple", ruleIdeInfos);
+    assertThat(ruleIdeInfo.getJavaRuleIdeInfo().hasFilteredGenJar()).isFalse();
+  }
+
+  @Test
+  public void testFilteredGenJarNotCreatedForOnlyGenRule() throws Exception {
+    scratch.file(
+        "com/google/example/BUILD",
+        "genrule(",
+        "   name = 'gen_sources',",
+        "   outs = ['Gen.java'],",
+        "   cmd = '',",
+        ")",
+        "java_library(",
+        "    name = 'simple',",
+        "    srcs = [':gen_sources']",
+        ")");
+    Map<String, RuleIdeInfo> ruleIdeInfos = buildRuleIdeInfo("//com/google/example:simple");
+    RuleIdeInfo ruleIdeInfo = getRuleInfoAndVerifyLabel(
+        "//com/google/example:simple", ruleIdeInfos);
+    assertThat(ruleIdeInfo.getJavaRuleIdeInfo().hasFilteredGenJar()).isFalse();
+  }
+
+  @Test
+  public void testFilteredGenJarIsCreatedForMixedGenAndSourcesRule() throws Exception {
+    scratch.file(
+        "com/google/example/BUILD",
+        "genrule(",
+        "   name = 'gen_sources',",
+        "   outs = ['Gen.java'],",
+        "   cmd = '',",
+        ")",
+        "java_library(",
+        "    name = 'simple',",
+        "    srcs = [':gen_sources', 'Test.java']",
+        ")");
+    Map<String, RuleIdeInfo> ruleIdeInfos = buildRuleIdeInfo("//com/google/example:simple");
+    RuleIdeInfo ruleIdeInfo = getRuleInfoAndVerifyLabel(
+        "//com/google/example:simple", ruleIdeInfos);
+    assertThat(ruleIdeInfo.getJavaRuleIdeInfo().getFilteredGenJar().getJar().getRelativePath())
+        .isEqualTo("com/google/example/simple-filtered-gen.jar");
+  }
+
+  @Test
   public void testJavaLibraryWithDependencies() throws Exception {
     scratch.file(
         "com/google/example/BUILD",
@@ -616,7 +669,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
             jarString("com/google/example",
                 "libl.jar", "libl-ijar.jar", "libl-src.jar"),
             jarString("com/google/example",
-                "l_resources.jar", "l_resources-ijar.jar", "l_resources-src.jar"));
+                "l_resources.jar", null, "l_resources-src.jar"));
     assertThat(
             transform(
                 ruleInfo.getAndroidRuleIdeInfo().getResourcesList(), ARTIFACT_TO_RELATIVE_PATH))
@@ -626,7 +679,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
     assertThat(ruleInfo.getAndroidRuleIdeInfo().getJavaPackage()).isEqualTo("com.google.example");
     assertThat(LIBRARY_ARTIFACT_TO_STRING.apply(ruleInfo.getAndroidRuleIdeInfo().getResourceJar()))
         .isEqualTo(jarString("com/google/example",
-            "l_resources.jar", "l_resources-ijar.jar", "l_resources-src.jar"
+            "l_resources.jar", null, "l_resources-src.jar"
         ));
 
     assertThat(ruleInfo.getDependenciesList()).contains("//com/google/example:l1");
@@ -635,12 +688,10 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         "com/google/example/libl-ijar.jar",
         "com/google/example/libl-src.jar",
         "com/google/example/l_resources.jar",
-        "com/google/example/l_resources-ijar.jar",
         "com/google/example/l_resources-src.jar",
         "com/google/example/libl1.jar",
         "com/google/example/libl1-src.jar",
         "com/google/example/l1_resources.jar",
-        "com/google/example/l1_resources-ijar.jar",
         "com/google/example/l1_resources-src.jar");
     assertThat(ruleInfo.getJavaRuleIdeInfo().getJdeps().getRelativePath())
         .isEqualTo("com/google/example/libl.jdeps");
@@ -677,7 +728,7 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
             jarString("com/google/example",
                 "libb.jar", "libb-ijar.jar", "libb-src.jar"),
             jarString("com/google/example",
-                "b_resources.jar", "b_resources-ijar.jar", "b_resources-src.jar"));
+                "b_resources.jar", null, "b_resources-src.jar"));
 
     assertThat(
             transform(
@@ -697,12 +748,10 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         "com/google/example/libb-ijar.jar",
         "com/google/example/libb-src.jar",
         "com/google/example/b_resources.jar",
-        "com/google/example/b_resources-ijar.jar",
         "com/google/example/b_resources-src.jar",
         "com/google/example/libl1.jar",
         "com/google/example/libl1-src.jar",
         "com/google/example/l1_resources.jar",
-        "com/google/example/l1_resources-ijar.jar",
         "com/google/example/l1_resources-src.jar");
     assertThat(ruleInfo.getJavaRuleIdeInfo().getJdeps().getRelativePath())
         .isEqualTo("com/google/example/libb.jdeps");
@@ -792,7 +841,6 @@ public class AndroidStudioInfoAspectTest extends AndroidStudioInfoAspectTestBase
         "com/google/example/liblib.jar",
         "com/google/example/liblib-src.jar",
         "com/google/example/lib_resources.jar",
-        "com/google/example/lib_resources-ijar.jar",
         "com/google/example/lib_resources-src.jar",
         "com/google/example/AndroidManifest.xml");
   }

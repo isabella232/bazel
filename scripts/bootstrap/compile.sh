@@ -251,10 +251,56 @@ exit $?
 EOF
 chmod 0755 ${ARCHIVE_DIR}/_embedded_binaries/process-wrapper${EXE_EXT}
 
+function build_jni() {
+  local output_dir=$1
+  local jni_lib_name="windows_jni.dll"
+  local output="${output_dir}/${jni_lib_name}"
+  local tmp_output="${NEW_TMPDIR}/jni/${jni_lib_name}"
+  mkdir -p "$(dirname "$tmp_output")"
+
+  case "${PLATFORM}" in
+  msys*|mingw*)
+    log "Building Windows JNI library..."
+
+    # We have to enable JNI on Windows because some filesystem operations are
+    # not (and cannot be) implemented in Java.
+    ENABLE_JNI=1
+
+    # Let the JVM know where to find the JNI library. This flag overrides the
+    # default value for java.library.path, but since JNI is disabled by default,
+    # that path would be ignored anyway.
+    JNI_PATH="$output_dir"
+
+    # Keep this `find` command in sync with the `srcs` of
+    # //src/main/native:windows_jni
+    local srcs=$(find src/main/native \
+        -name 'windows_*.cc' -o -name 'windows_*.h')
+    [ -n "$srcs" ] || fail "Could not find sources for Windows JNI library"
+
+    # do not quote $srcs because we need to expand it to multiple args
+    src/main/native/build_windows_jni.sh "$tmp_output" ${srcs}
+
+    cp "$tmp_output" "$output"
+    chmod 0755 "$output"
+    ;;
+  esac
+}
+
+ENABLE_JNI=0
+JNI_PATH=""
+build_jni "${ARCHIVE_DIR}/_embedded_binaries"
+
 cp src/main/tools/build_interface_so ${ARCHIVE_DIR}/_embedded_binaries/build_interface_so
 cp src/main/tools/jdk.BUILD ${ARCHIVE_DIR}/_embedded_binaries/jdk.BUILD
 cp $OUTPUT_DIR/libblaze.jar ${ARCHIVE_DIR}
-cp tools/osx/xcode_locator_stub.sh ${ARCHIVE_DIR}/_embedded_binaries/xcode-locator
+
+# TODO(b/28965185): Remove when xcode-locator is no longer required in embedded_binaries.
+log "Compiling xcode-locator..."
+if [[ $PLATFORM == "darwin" ]]; then
+  run /usr/bin/xcrun clang -fobjc-arc -framework CoreServices -framework Foundation -o ${ARCHIVE_DIR}/_embedded_binaries/xcode-locator tools/osx/xcode_locator.m
+else
+  cp tools/osx/xcode_locator_stub.sh ${ARCHIVE_DIR}/_embedded_binaries/xcode-locator
+fi
 
 # bazel build using bootstrap version
 function bootstrap_build() {
@@ -262,7 +308,8 @@ function bootstrap_build() {
       -XX:+HeapDumpOnOutOfMemoryError -Xverify:none -Dfile.encoding=ISO-8859-1 \
       -XX:HeapDumpPath=${OUTPUT_DIR} \
       -Djava.util.logging.config.file=${OUTPUT_DIR}/javalog.properties \
-      -Dio.bazel.EnableJni=0 \
+      -Dio.bazel.EnableJni=${ENABLE_JNI} \
+      -Djava.library.path="$JNI_PATH" \
       -jar ${ARCHIVE_DIR}/libblaze.jar \
       --batch \
       --install_base=${ARCHIVE_DIR} \

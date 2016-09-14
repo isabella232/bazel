@@ -121,6 +121,25 @@ public abstract class SkylarkList<E> extends MutableCollection<E> implements Lis
     throw new UnsupportedOperationException();
   }
 
+  /**
+   * Put an entry into a SkylarkList.
+   * @param key the index
+   * @param value the associated value
+   * @param loc a {@link Location} in case of error
+   * @param env an {@link Environment}, to check Mutability
+   * @throws EvalException if the key is invalid
+   */
+  public void set(Object key, E value, Location loc, Environment env) throws EvalException {
+    checkMutable(loc, env);
+    if (!(key instanceof Integer)) {
+      throw new EvalException(loc, "list indices must be integers, not '" + key + '"');
+    }
+    int index = ((Integer) key).intValue();
+    List list = getContentsUnsafe();
+    index = MethodLibrary.getListIndex(index, list.size(), loc);
+    list.set(index, value);
+  }
+
   // Other methods
   @Override
   public void write(Appendable buffer, char quotationMark) {
@@ -191,6 +210,13 @@ public abstract class SkylarkList<E> extends MutableCollection<E> implements Lis
     return castList(getContentsUnsafe(), type, description);
   }
 
+  /**
+   * Creates immutable SkylarkList with given elements.
+   */
+  public static <E> SkylarkList<E> createImmutable(Iterable<? extends E> contents) {
+    return new MutableList<E>(contents, Mutability.IMMUTABLE);
+  }
+
   /** A class for mutable lists. */
   @SkylarkModule(
     name = "list",
@@ -258,15 +284,6 @@ public abstract class SkylarkList<E> extends MutableCollection<E> implements Lis
      */
     public MutableList(Iterable<? extends E> contents, @Nullable Environment env) {
       this(contents, env == null ? Mutability.IMMUTABLE : env.mutability());
-    }
-
-    /**
-     * Creates a MutableList from contents.
-     * @param contents the contents of the list
-     * @return an actually immutable MutableList containing the elements
-     */
-    public MutableList(Iterable<? extends E> contents) {
-      this(contents, Mutability.IMMUTABLE);
     }
 
     /**
@@ -408,7 +425,7 @@ public abstract class SkylarkList<E> extends MutableCollection<E> implements Lis
     /**
      * An empty IMMUTABLE MutableList.
      */
-    public static final MutableList EMPTY = new MutableList(Tuple.EMPTY);
+    public static final MutableList EMPTY = new MutableList(Tuple.EMPTY, Mutability.IMMUTABLE);
   }
 
   /** An immutable tuple, e.g. in (1, 2, 3) */

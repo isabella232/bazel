@@ -29,10 +29,10 @@ import com.google.devtools.build.lib.analysis.SkyframePackageRootResolver;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
-import com.google.devtools.build.lib.analysis.config.DefaultsPackage;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.exec.ActionInputPrefetcher;
 import com.google.devtools.build.lib.exec.OutputService;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.Target;
@@ -54,14 +54,14 @@ import com.google.devtools.common.options.OptionPriority;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsProvider;
-
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -78,7 +78,8 @@ public final class CommandEnvironment {
   private final Reporter reporter;
   private final EventBus eventBus;
   private final BlazeModule.ModuleEnvironment blazeModuleEnvironment;
-  private final Map<String, String> clientEnv = new HashMap<>();
+  private final Map<String, String> clientEnv = new TreeMap<>();
+  private final Set<String> visibleClientEnv = new TreeSet<>();
   private final TimestampGranularityMonitor timestampGranularityMonitor;
 
   private String[] crashData;
@@ -86,6 +87,7 @@ public final class CommandEnvironment {
   private PathFragment relativeWorkingDirectory = PathFragment.EMPTY_FRAGMENT;
   private long commandStartTime;
   private OutputService outputService;
+  private ImmutableList<ActionInputPrefetcher> actionInputPrefetchers = ImmutableList.of();
   private Path workingDirectory;
 
   private AtomicReference<AbruptExitException> pendingException = new AtomicReference<>();
@@ -161,6 +163,21 @@ public final class CommandEnvironment {
    */
   public Map<String, String> getClientEnv() {
     return Collections.unmodifiableMap(clientEnv);
+  }
+
+  /**
+   * Return an ordered version of the client environment restricted to those variables
+   * whitelisted by the command-line options to be inheritable by actions.
+   */
+  private Map<String, String> getCommandlineWhitelistedClientEnv() {
+    Map<String, String> visibleEnv = new TreeMap<>();
+    for (String var : visibleClientEnv) {
+      String value = clientEnv.get(var);
+      if (value != null) {
+        visibleEnv.put(var, value);
+      }
+    }
+    return Collections.unmodifiableMap(visibleEnv);
   }
 
   @VisibleForTesting
@@ -308,6 +325,10 @@ public final class CommandEnvironment {
     return outputService;
   }
 
+  public ImmutableList<ActionInputPrefetcher> getActionInputPrefetchers() {
+    return actionInputPrefetchers;
+  }
+
   public ActionCache getPersistentActionCache() throws IOException {
     return workspace.getPersistentActionCache(reporter);
   }
@@ -403,8 +424,16 @@ public final class CommandEnvironment {
     if (!skyframeExecutor.hasIncrementalState()) {
       skyframeExecutor.resetEvaluator();
     }
-    skyframeExecutor.sync(reporter, packageCacheOptions, getOutputBase(),
-        getWorkingDirectory(), defaultsPackageContents, getCommandId(),
+    skyframeExecutor.sync(
+        reporter,
+        packageCacheOptions,
+        getOutputBase(),
+        getWorkingDirectory(),
+        defaultsPackageContents,
+        getCommandId(),
+        // TODO(bazel-team): this optimization disallows rule-specified additional dependencies
+        // on the client environment!
+        getCommandlineWhitelistedClientEnv(),
         timestampGranularityMonitor);
   }
 
@@ -441,6 +470,7 @@ public final class CommandEnvironment {
 
     outputService = null;
     BlazeModule outputModule = null;
+    ImmutableList.Builder<ActionInputPrefetcher> prefetchersBuilder = ImmutableList.builder();
     for (BlazeModule module : runtime.getBlazeModules()) {
       OutputService moduleService = module.getOutputService();
       if (moduleService != null) {
@@ -452,7 +482,13 @@ public final class CommandEnvironment {
         outputService = moduleService;
         outputModule = module;
       }
+
+      ActionInputPrefetcher actionInputPrefetcher = module.getPrefetcher();
+      if (actionInputPrefetcher != null) {
+        prefetchersBuilder.add(actionInputPrefetcher);
+      }
     }
+    actionInputPrefetchers = prefetchersBuilder.build();
 
     SkyframeExecutor skyframeExecutor = getSkyframeExecutor();
     skyframeExecutor.setOutputService(outputService);
@@ -488,6 +524,17 @@ public final class CommandEnvironment {
         testEnv.put(entry.getKey(), entry.getValue());
       }
 
+      // Compute the set of environment variables that are whitelisted on the commandline
+      // for inheritence.
+      for (Map.Entry<String, String> entry :
+             optionsParser.getOptions(BuildConfiguration.Options.class).actionEnvironment) {
+        if (entry.getValue() == null) {
+          visibleClientEnv.add(entry.getKey());
+        } else {
+          visibleClientEnv.remove(entry.getKey());
+        }
+      }
+
       try {
         for (Map.Entry<String, String> entry : testEnv.entrySet()) {
           if (entry.getValue() == null) {
@@ -503,9 +550,6 @@ public final class CommandEnvironment {
       } catch (OptionsParsingException e) {
         throw new IllegalStateException(e);
       }
-    }
-    for (BlazeModule module : runtime.getBlazeModules()) {
-      module.handleOptions(optionsParser);
     }
 
     eventBus.post(new CommandStartEvent(

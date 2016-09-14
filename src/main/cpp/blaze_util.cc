@@ -176,7 +176,7 @@ int MakeDirectories(const string& path, mode_t mode) {
 }
 
 // Replaces 'contents' with contents of 'fd' file descriptor.
-// Returns false on error. Can be called from a signal handler.
+// Returns false on error.
 bool ReadFileDescriptor(int fd, string *content) {
   content->clear();
   char buf[4096];
@@ -193,7 +193,7 @@ bool ReadFileDescriptor(int fd, string *content) {
 }
 
 // Replaces 'content' with contents of file 'filename'.
-// Returns false on error. Can be called from a signal handler.
+// Returns false on error.
 bool ReadFile(const string &filename, string *content) {
   int fd = open(filename.c_str(), O_RDONLY);
   if (fd == -1) return false;
@@ -224,15 +224,25 @@ bool UnlinkPath(const string &file_path) {
   return unlink(file_path.c_str()) == 0;
 }
 
+bool IsEmacsTerminal() {
+  string emacs = getenv("EMACS") == nullptr ? "" : getenv("EMACS");
+  string inside_emacs =
+      getenv("INSIDE_EMACS") == nullptr ? "" : getenv("INSIDE_EMACS");
+  // GNU Emacs <25.1 (and ~all non-GNU emacsen) set EMACS=t, but >=25.1 doesn't
+  // do that and instead sets INSIDE_EMACS=<stuff> (where <stuff> can look like
+  // e.g. "25.1.1,comint").  So we check both variables for maximum
+  // compatibility.
+  return emacs == "t" || inside_emacs != "";
+}
+
 // Returns true iff both stdout and stderr are connected to a
 // terminal, and it can support color and cursor movement
 // (this is computed heuristically based on the values of
 // environment variables).
 bool IsStandardTerminal() {
   string term = getenv("TERM") == nullptr ? "" : getenv("TERM");
-  string emacs = getenv("EMACS") == nullptr ? "" : getenv("EMACS");
   if (term == "" || term == "dumb" || term == "emacs" || term == "xterm-mono" ||
-      term == "symbolics" || term == "9term" || emacs == "t") {
+      term == "symbolics" || term == "9term" || IsEmacsTerminal()) {
     return false;
   }
   return isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
@@ -411,16 +421,12 @@ uint64_t AcquireLock(const string& output_base, bool batch_mode, bool block,
   }
 
   // Identify ourselves in the lockfile.
-  if (ftruncate(lockfd, 0)) {
-    // Placate the compiler.
-  }
+  (void) ftruncate(lockfd, 0);
   const char *tty = ttyname(STDIN_FILENO);  // NOLINT (single-threaded)
   string msg = "owner=launcher\npid="
       + ToString(getpid()) + "\ntty=" + (tty ? tty : "") + "\n";
   // The contents are currently meant only for debugging.
-  if (write(lockfd, msg.data(), msg.size()) <= 0) {
-    // Placate the compiler.
-  }
+  (void) write(lockfd, msg.data(), msg.size());
   blaze_lock->lockfd = lockfd;
   return wait_time;
 }

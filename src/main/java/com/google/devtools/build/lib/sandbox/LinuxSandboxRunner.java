@@ -15,19 +15,11 @@
 package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
-import com.google.common.io.Files;
-import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
-import com.google.devtools.build.lib.shell.AbnormalTerminationException;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
-import com.google.devtools.build.lib.shell.TerminationStatus;
-import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.util.OsUtils;
-import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -35,44 +27,38 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Helper class for running the Linux sandbox. This runner prepares environment inside the sandbox,
  * handles sandbox output, performs cleanup and changes invocation if necessary.
  */
-public class LinuxSandboxRunner {
-  private static final String LINUX_SANDBOX = "linux-sandbox" + OsUtils.executableExtension();
-  private static final String SANDBOX_TIP =
-      "\n\nSandboxed execution failed, which may be legitimate (e.g. a compiler error), "
-          + "or due to missing dependencies. To enter the sandbox environment for easier debugging,"
-          + " run the following command in parentheses. On command failure, "
-          + "a bash shell running inside the sandbox will then automatically be spawned:\n\n";
+final class LinuxSandboxRunner extends SandboxRunner {
+  protected static final String LINUX_SANDBOX = "linux-sandbox" + OsUtils.executableExtension();
+
   private final Path execRoot;
-  private final Path sandboxPath;
   private final Path sandboxExecRoot;
   private final Path argumentsFilePath;
-  private final ImmutableMap<Path, Path> mounts;
-  private final ImmutableSet<Path> createDirs;
-  private final boolean verboseFailures;
+  private final Set<Path> writableDirs;
+  private final Set<Path> inaccessiblePaths;
   private final boolean sandboxDebug;
 
-  public LinuxSandboxRunner(
+  LinuxSandboxRunner(
       Path execRoot,
       Path sandboxPath,
-      ImmutableMap<Path, Path> mounts,
-      ImmutableSet<Path> createDirs,
+      Path sandboxExecRoot,
+      Set<Path> writableDirs,
+      Set<Path> inaccessiblePaths,
       boolean verboseFailures,
       boolean sandboxDebug) {
+    super(sandboxPath, sandboxExecRoot, verboseFailures);
     this.execRoot = execRoot;
-    this.sandboxPath = sandboxPath;
-    this.sandboxExecRoot = sandboxPath.getRelative(execRoot.asFragment().relativeTo("/"));
-    this.argumentsFilePath =
-        sandboxPath.getParentDirectory().getRelative(sandboxPath.getBaseName() + ".params");
-    this.mounts = mounts;
-    this.createDirs = createDirs;
-    this.verboseFailures = verboseFailures;
+    this.sandboxExecRoot = sandboxExecRoot;
+    this.argumentsFilePath = sandboxPath.getRelative("linux-sandbox.params");
+    this.writableDirs = writableDirs;
+    this.inaccessiblePaths = inaccessiblePaths;
     this.sandboxDebug = sandboxDebug;
   }
 
@@ -109,43 +95,30 @@ public class LinuxSandboxRunner {
     return true;
   }
 
-  /**
-   * Runs given
-   *
-   * @param spawnArguments - arguments of spawn to run inside the sandbox
-   * @param env - environment to run sandbox in
-   * @param cwd - current working directory
-   * @param outErr - error output to capture sandbox's and command's stderr
-   * @param outputs - files to extract from the sandbox, paths are relative to the exec root
-   * @throws ExecException
-   */
-  public void run(
-      List<String> spawnArguments,
-      ImmutableMap<String, String> env,
-      File cwd,
-      FileOutErr outErr,
-      Collection<PathFragment> outputs,
-      int timeout,
-      boolean blockNetwork)
-      throws IOException, ExecException {
-    createFileSystem(outputs);
+  @Override
+  protected Command getCommand(
+      List<String> spawnArguments, Map<String, String> env, int timeout, boolean allowNetwork)
+      throws IOException {
+    writeConfig(timeout, allowNetwork);
 
-    List<String> fileArgs = new ArrayList<>();
-    List<String> commandLineArgs = new ArrayList<>();
-
+    List<String> commandLineArgs = new ArrayList<>(3 + spawnArguments.size());
     commandLineArgs.add(execRoot.getRelative("_bin/linux-sandbox").getPathString());
+    commandLineArgs.add("@" + argumentsFilePath.getPathString());
+    commandLineArgs.add("--");
+    commandLineArgs.addAll(spawnArguments);
+    return new Command(commandLineArgs.toArray(new String[0]), env, sandboxExecRoot.getPathFile());
+  }
+
+  private void writeConfig(int timeout, boolean allowNetwork) throws IOException {
+    List<String> fileArgs = new ArrayList<>();
 
     if (sandboxDebug) {
       fileArgs.add("-D");
     }
 
-    // Sandbox directory.
-    fileArgs.add("-S");
-    fileArgs.add(sandboxPath.getPathString());
-
     // Working directory of the spawn.
     fileArgs.add("-W");
-    fileArgs.add(cwd.toString());
+    fileArgs.add(sandboxExecRoot.toString());
 
     // Kill the process after a timeout.
     if (timeout != -1) {
@@ -154,87 +127,21 @@ public class LinuxSandboxRunner {
     }
 
     // Create all needed directories.
-    for (Path createDir : createDirs) {
-      fileArgs.add("-d");
-      fileArgs.add(createDir.getPathString());
+    for (Path writablePath : writableDirs) {
+      fileArgs.add("-w");
+      fileArgs.add(writablePath.getPathString());
     }
 
-    if (blockNetwork) {
+    for (Path inaccessiblePath : inaccessiblePaths) {
+      fileArgs.add("-i");
+      fileArgs.add(inaccessiblePath.getPathString());
+    }
+
+    if (!allowNetwork) {
       // Block network access out of the namespace.
-      fileArgs.add("-n");
-    }
-
-    // Mount all the inputs.
-    for (ImmutableMap.Entry<Path, Path> mount : mounts.entrySet()) {
-      fileArgs.add("-M");
-      fileArgs.add(mount.getValue().getPathString());
-
-      // The file is mounted in a custom location inside the sandbox.
-      if (!mount.getValue().equals(mount.getKey())) {
-        fileArgs.add("-m");
-        fileArgs.add(mount.getKey().getPathString());
-      }
+      fileArgs.add("-N");
     }
 
     FileSystemUtils.writeLinesAs(argumentsFilePath, StandardCharsets.ISO_8859_1, fileArgs);
-    commandLineArgs.add("@" + argumentsFilePath.getPathString());
-
-    commandLineArgs.add("--");
-    commandLineArgs.addAll(spawnArguments);
-
-    Command cmd = new Command(commandLineArgs.toArray(new String[0]), env, cwd);
-
-    try {
-      cmd.execute(
-          /* stdin */ new byte[] {},
-          Command.NO_OBSERVER,
-          outErr.getOutputStream(),
-          outErr.getErrorStream(),
-          /* killSubprocessOnInterrupt */ true);
-    } catch (CommandException e) {
-      boolean timedOut = false;
-      if (e instanceof AbnormalTerminationException) {
-        TerminationStatus status =
-            ((AbnormalTerminationException) e).getResult().getTerminationStatus();
-        timedOut = !status.exited() && (status.getTerminatingSignal() == 14 /* SIGALRM */);
-      }
-      String message =
-          CommandFailureUtils.describeCommandFailure(
-              verboseFailures, commandLineArgs, env, cwd.getPath());
-      String finalMsg = (sandboxDebug && verboseFailures) ? SANDBOX_TIP + message : message;
-      throw new UserExecException(finalMsg, e, timedOut);
-    } finally {
-      copyOutputs(outputs);
-    }
-  }
-
-  private void createFileSystem(Collection<PathFragment> outputs) throws IOException {
-    FileSystemUtils.createDirectoryAndParents(sandboxPath);
-
-    // Prepare the output directories in the sandbox.
-    for (PathFragment output : outputs) {
-      FileSystemUtils.createDirectoryAndParents(
-          sandboxExecRoot.getRelative(output.getParentDirectory()));
-    }
-  }
-
-  private void copyOutputs(Collection<PathFragment> outputs) throws IOException {
-    for (PathFragment output : outputs) {
-      Path source = sandboxExecRoot.getRelative(output);
-      Path target = execRoot.getRelative(output);
-      FileSystemUtils.createDirectoryAndParents(target.getParentDirectory());
-      if (source.isFile() || source.isSymbolicLink()) {
-        Files.move(source.getPathFile(), target.getPathFile());
-      }
-    }
-  }
-
-  public void cleanup() throws IOException {
-    if (sandboxPath.exists()) {
-      FileSystemUtils.deleteTree(sandboxPath);
-    }
-    if (!sandboxDebug && argumentsFilePath.exists()) {
-      argumentsFilePath.delete();
-    }
   }
 }

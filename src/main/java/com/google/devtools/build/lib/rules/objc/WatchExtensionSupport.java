@@ -24,7 +24,6 @@ import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.BundlingR
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_BUNDLE_ID_ATTR;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_DEFAULT_PROVISIONING_PROFILE_ATTR;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_ENTITLEMENTS_ATTR;
-import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_FAMILIES_ATTR;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_INFOPLISTS_ATTR;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_PROVISIONING_PROFILE_ATTR;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExtensionBundleRule.WATCH_EXT_RESOURCES_ATTR;
@@ -33,6 +32,7 @@ import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.WatchExte
 
 import com.dd.plist.NSDictionary;
 import com.dd.plist.NSObject;
+import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -44,6 +44,7 @@ import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
+import com.google.devtools.build.lib.rules.apple.Platform.PlatformType;
 import com.google.devtools.build.lib.rules.objc.ObjcProvider.Builder;
 import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.LinkedBinary;
 import com.google.devtools.build.lib.rules.objc.TargetDeviceFamily.InvalidFamilyNameException;
@@ -132,6 +133,8 @@ public class WatchExtensionSupport {
       releaseBundling.setFallbackBundleId(attributes.bundleId());
     }
 
+    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+    
     ReleaseBundlingSupport releaseBundlingSupport =
         new ReleaseBundlingSupport(
             ruleContext,
@@ -139,9 +142,10 @@ public class WatchExtensionSupport {
             LinkedBinary.DEPENDENCIES_ONLY,
             ReleaseBundlingSupport.EXTENSION_BUNDLE_DIR_FORMAT,
             bundleName,
-            WatchUtils.determineMinimumOsVersion(
+            WatchUtils.determineMinimumIosVersion(
                 ObjcRuleClasses.objcConfiguration(ruleContext).getMinimumOs()),
-            releaseBundling.build());
+            releaseBundling.build(),
+            appleConfiguration.getMultiArchPlatform(PlatformType.IOS));
 
     releaseBundlingSupport.registerActions(DsymOutputType.APP);
 
@@ -150,9 +154,10 @@ public class WatchExtensionSupport {
     }
 
     releaseBundlingSupport
-        .addFilesToBuild(filesToBuild, DsymOutputType.APP)
+        .addFilesToBuild(filesToBuild, Optional.of(DsymOutputType.APP))
         .validateResources()
-        .validateAttributes();
+        .validateAttributes()
+        .addExportedDebugArtifacts(objcProviderBuilder, DsymOutputType.APP);
 
     if (WatchUtils.isBuildingForWatchOS1Version(watchOSVersion)) {
       XcodeSupport xcodeSupport =
@@ -247,8 +252,8 @@ public class WatchExtensionSupport {
      * an empty list.
      */
     ImmutableSet<TargetDeviceFamily> families() {
-      List<String> rawFamilies = ruleContext.attributes().get(WATCH_EXT_FAMILIES_ATTR,
-          Type.STRING_LIST);
+      List<String> rawFamilies = ruleContext.attributes().get(
+          AppleWatch1ExtensionRule.WATCH_EXT_FAMILIES_ATTR, Type.STRING_LIST);
       try {
         return ImmutableSet.copyOf(TargetDeviceFamily.fromNamesInRule(rawFamilies));
       } catch (InvalidFamilyNameException | RepeatedFamilyNameException e) {

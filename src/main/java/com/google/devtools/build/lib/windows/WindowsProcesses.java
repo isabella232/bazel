@@ -22,7 +22,6 @@ import java.util.List;
 public class WindowsProcesses {
   public static final long INVALID = -1;
 
-  private static boolean jniLoaded = false;
   private WindowsProcesses() {
     // Prevent construction
   }
@@ -76,11 +75,15 @@ public class WindowsProcesses {
   static native int nativeReadStream(long stream, byte[] bytes, int offset, int length);
 
   /**
-   * Waits until the given process terminates.
+   * Waits until the given process terminates. If timeout is non-negative, it indicates the number
+   * of milliseconds before the call times out.
    *
-   * <p>Returns true if the process terminated or false if something went wrong.
+   * <p>Return values:
+   * <li>0: Process finished</li>
+   * <li>1: Timeout</li>
+   * <li>2: Something went wrong</li>
    */
-  static native boolean nativeWaitFor(long process);
+  static native int nativeWaitFor(long process, long timeout);
 
   /**
    * Returns the exit code of the process. Throws {@code IllegalStateException} if something
@@ -128,17 +131,8 @@ public class WindowsProcesses {
   static native String nativeStreamGetLastError(long process);
 
   public static int getpid() {
-    ensureJni();
+    WindowsJniLoader.loadJni();
     return nativeGetpid();
-  }
-
-  private static synchronized void ensureJni() {
-    if (jniLoaded) {
-      return;
-    }
-
-    System.loadLibrary("windows_jni");
-    jniLoaded = true;
   }
 
   static String quoteCommandLine(List<String> argv) {

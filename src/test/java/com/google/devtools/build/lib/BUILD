@@ -2,6 +2,24 @@ package(
     default_visibility = ["//src/test/java/com/google/devtools/build/lib:__subpackages__"],
 )
 
+# Tests for Windows-specific functionality that can run cross-platform.
+CROSS_PLATFORM_WINDOWS_TESTS = [
+    "util/DependencySetWindowsTest.java",
+    "vfs/PathFragmentWindowsTest.java",
+    "vfs/PathWindowsTest.java",
+]
+
+# Tests for Windows-specific functionality that run on Windows.
+WINDOWS_ON_WINDOWS_TESTS = glob(
+    ["windows/*.java"],
+    exclude = ["windows/MockSubprocess.java"],
+) + [
+    "vfs/WindowsFileSystemTest.java",
+]
+
+# All Windows-specific tests. Use this to exclude Windows tests from globs.
+ALL_WINDOWS_TESTS = CROSS_PLATFORM_WINDOWS_TESTS + WINDOWS_ON_WINDOWS_TESTS
+
 filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
@@ -111,11 +129,8 @@ java_test(
         # java_rules_skylark doesn't support resource loading with
         # qualified paths.
         exclude = [
-            "util/DependencySetWindowsTest.java",
             "util/ResourceFileLoaderTest.java",
-            "vfs/PathFragmentWindowsTest.java",
-            "vfs/PathWindowsTest.java",
-        ],
+        ] + ALL_WINDOWS_TESTS,
     ),
     data = glob(["vfs/*.zip"]),
     tags = [
@@ -152,11 +167,7 @@ java_test(
 # systems
 java_test(
     name = "windows_test",
-    srcs = [
-        "util/DependencySetWindowsTest.java",
-        "vfs/PathFragmentWindowsTest.java",
-        "vfs/PathWindowsTest.java",
-    ],
+    srcs = CROSS_PLATFORM_WINDOWS_TESTS,
     jvm_flags = ["-Dblaze.os=Windows"],
     test_class = "com.google.devtools.build.lib.AllTests",
     deps = [
@@ -182,15 +193,20 @@ java_library(
     srcs = [
         "windows/util/WindowsTestUtil.java",
     ],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib:vfs",
+        "//src/main/java/com/google/devtools/build/lib:windows",
+        "//third_party:guava",
+        "//third_party:guava-testlib",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
 )
 
 # Tests that need to run on Windows
 java_test(
     name = "windows-tests",
-    srcs = glob(
-        ["windows/*.java"],
-        exclude = ["windows/MockSubprocess.java"],
-    ),
+    srcs = WINDOWS_ON_WINDOWS_TESTS,
     data = [
         ":MockSubprocess_deploy.jar",
     ] + select({
@@ -206,7 +222,9 @@ java_test(
         ":testutil",
         ":windows_testutil",
         "//src/main/java/com/google/devtools/build/lib:os_util",
+        "//src/main/java/com/google/devtools/build/lib:vfs",
         "//src/main/java/com/google/devtools/build/lib:windows",
+        "//third_party:guava",
         "//third_party:truth",
     ],
 )
@@ -699,12 +717,15 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:unix",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib:vfs",
+        "//src/main/protobuf:command_server_java_proto",
         "//third_party:guava",
         "//third_party:guava-testlib",
         "//third_party:jsr305",
         "//third_party:junit4",
         "//third_party:mockito",
         "//third_party:truth",
+        "//third_party/grpc:grpc-jar",
+        "//third_party/protobuf",
     ],
 )
 
@@ -777,7 +798,7 @@ java_test(
     size = "medium",
     srcs = ["packages/BazelDocumentationTest.java"],
     data = [
-        "//site:docs/bazel-user-manual.html",
+        "//site:versions/master/docs/bazel-user-manual.html",
     ],
     test_class = "com.google.devtools.build.lib.packages.BazelDocumentationTest",
     deps = [
@@ -922,6 +943,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:vfs",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/rules/objc",
+        "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",
     ],

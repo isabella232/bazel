@@ -19,7 +19,6 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
-import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
@@ -75,6 +74,7 @@ import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.AliasProvider;
 import com.google.devtools.build.lib.rules.fileset.FilesetProvider;
 import com.google.devtools.build.lib.shell.ShellUtils;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
@@ -519,9 +519,25 @@ public final class RuleContext extends TargetContext
    * which this target (which must be an OutputFile or a Rule) is associated.
    */
   public Root getBinOrGenfilesDirectory() {
-    return rule.hasBinaryOutput()
-        ? getConfiguration().getBinDirectory(rule.getRepository())
-        : getConfiguration().getGenfilesDirectory(rule.getRepository());
+    return rule.hasBinaryOutput() ? getBinDirectory() : getGenfilesDirectory();
+  }
+
+  /**
+   * Returns the bin directory for this build configuration.
+   */
+  @SkylarkCallable(name = "bin_dir", structField = true,
+      doc = "The root corresponding to bin directory.")
+  public Root getBinDirectory() {
+    return getConfiguration().getBinDirectory(rule.getRepository());
+  }
+
+  /**
+   * Returns the genfiles directory for this build configuration.
+   */
+  @SkylarkCallable(name = "genfiles_dir", structField = true,
+      doc = "The root corresponding to genfiles directory.")
+  public Root getGenfilesDirectory() {
+    return getConfiguration().getGenfilesDirectory(rule.getRepository());
   }
 
   /**
@@ -729,7 +745,7 @@ public final class RuleContext extends TargetContext
     for (BuildOptions options : splitOptions) {
       // This method should only be called when the split config is enabled on the command line, in
       // which case this cpu can't be null.
-      cpus.add(Verify.verifyNotNull(options.get(BuildConfiguration.Options.class).getCpu()));
+      cpus.add(options.get(BuildConfiguration.Options.class).cpu);
     }
 
     // Use an ImmutableListMultimap.Builder here to preserve ordering.
@@ -1540,7 +1556,7 @@ public final class RuleContext extends TargetContext
         String attributeName = attr.getName();
         Map<Label, ConfiguredTarget> ctMap = new HashMap<>();
         for (ConfiguredTarget prerequisite : prerequisiteMap.get(attr)) {
-          ctMap.put(prerequisite.getLabel(), prerequisite);
+          ctMap.put(AliasProvider.getDependencyLabel(prerequisite), prerequisite);
         }
         List<FilesetEntry> entries = ConfiguredAttributeMapper.of(rule, configConditions)
             .get(attributeName, BuildType.FILESET_ENTRY_LIST);
@@ -1799,28 +1815,37 @@ public final class RuleContext extends TargetContext
 
     private String getMissingMandatoryNativeProviders(
         ConfiguredTarget prerequisite, Attribute attribute) {
-      List<Class<? extends TransitiveInfoProvider>> mandatoryProvidersList =
-          attribute.getMandatoryNativeProviders();
+      List<ImmutableList<Class<? extends TransitiveInfoProvider>>> mandatoryProvidersList =
+          attribute.getMandatoryNativeProvidersList();
       if (mandatoryProvidersList.isEmpty()) {
         return null;
       }
-      List<Class<? extends TransitiveInfoProvider>> missing = new ArrayList<>();
-      for (Class<? extends TransitiveInfoProvider> provider : mandatoryProvidersList) {
-        if (prerequisite.getProvider(provider) == null) {
-          missing.add(provider);
+      List<List<String>> missingProvidersList = new ArrayList<>();
+      for (ImmutableList<Class<? extends TransitiveInfoProvider>> providers
+          : mandatoryProvidersList) {
+        List<String> missing = new ArrayList<>();
+        for (Class<? extends TransitiveInfoProvider> provider : providers) {
+          if (prerequisite.getProvider(provider) == null) {
+            missing.add(provider.getSimpleName());
+          }
+        }
+        if (missing.isEmpty()) {
+          return null;
+        } else {
+          missingProvidersList.add(missing);
         }
       }
-      if (missing.isEmpty()) {
-        return null;
-      }
-      StringBuilder sb = new StringBuilder();
-      for (Class<? extends TransitiveInfoProvider> provider : missing) {
-        if (sb.length() > 0) {
-          sb.append(", ");
+      StringBuilder missingProviders = new StringBuilder();
+      Joiner joinProvider = Joiner.on(", ");
+      for (List<String> providers : missingProvidersList) {
+        if (missingProviders.length() > 0) {
+          missingProviders.append(" or ");
         }
-        sb.append(provider.getSimpleName());
+        missingProviders.append((providers.size() > 1) ? "[" : "");
+        joinProvider.appendTo(missingProviders, providers);
+        missingProviders.append((providers.size() > 1) ? "]" : "");
       }
-      return sb.toString();
+      return missingProviders.toString();
     }
 
     /**
@@ -1846,7 +1871,7 @@ public final class RuleContext extends TargetContext
         Predicate<RuleClass> warningPredicate = attribute.getAllowedRuleClassesWarningPredicate();
         if (warningPredicate.apply(ruleClass)) {
           reportBadPrerequisite(attribute, prerequisiteTarget.getTargetKind(), prerequisite,
-              "expected " + warningPredicate, true);
+              "expected " + attribute.getAllowedRuleClassesPredicate(), true);
           return;
         }
       }
@@ -1855,7 +1880,7 @@ public final class RuleContext extends TargetContext
       // if no providers were mandatory (thus, none are missing), which would cause an early return
       // below without emitting the error message about the not-allowed rule class if that
       // requirement was unfulfilled.
-      if (!attribute.getMandatoryNativeProviders().isEmpty()
+      if (!attribute.getMandatoryNativeProvidersList().isEmpty()
           || !attribute.getMandatoryProvidersList().isEmpty()) {
         boolean hadAllMandatoryProviders = true;
 

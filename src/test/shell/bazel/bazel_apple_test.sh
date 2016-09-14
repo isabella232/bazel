@@ -117,9 +117,9 @@ EOF
 
 function test_swift_library() {
   local swift_lib_pkg=examples/swift
-  assert_build_output ./bazel-genfiles/${swift_lib_pkg}/examples_swift_swift_lib.a \
+  assert_build_output ./bazel-genfiles/${swift_lib_pkg}/swift_lib/_objs/examples_swift_swift_lib.a \
       ${swift_lib_pkg}:swift_lib --ios_sdk_version=$IOS_SDK_VERSION --xcode_version=$XCODE_VERSION
-  assert_build_output ./bazel-genfiles/${swift_lib_pkg}/examples_swift_swift_lib.swiftmodule \
+  assert_build_output ./bazel-genfiles/${swift_lib_pkg}/swift_lib/_objs/examples_swift_swift_lib.swiftmodule \
       ${swift_lib_pkg}:swift_lib --ios_sdk_version=$IOS_SDK_VERSION --xcode_version=$XCODE_VERSION
 }
 
@@ -515,6 +515,116 @@ EOF
   bazel build --verbose_failures --ios_sdk_version=$IOS_SDK_VERSION \
       --xcode_version=$XCODE_VERSION \
       //ios:swift_lib >$TEST_log 2>&1 || fail "should build"
+}
+
+function test_apple_watch_with_swift() {
+  make_app
+
+  cat >ios/watchapp.swift <<EOF
+  import WatchKit
+  class ExtensionDelegate: NSObject, WKExtensionDelegate {
+    func applicationDidFinishLaunching() {}
+  }
+EOF
+
+  cat >ios/BUILD <<EOF
+load("//tools/build_defs/apple:swift.bzl", "swift_library")
+
+swift_library(name = "WatchModule",
+              srcs = ["watchapp.swift"])
+
+apple_binary(name = "bin",
+             deps = [":WatchModule"],
+             platform_type = "watchos")
+
+apple_watch2_extension(
+    name = "WatchExtension",
+    app_bundle_id = "com.google.app.watchkit",
+    app_name = "WatchApp",
+    binary = ":bin",
+    ext_bundle_id = "com.google.app.extension",
+)
+EOF
+
+  bazel build --verbose_failures --ios_sdk_version=$IOS_SDK_VERSION \
+      --xcode_version=$XCODE_VERSION \
+      //ios:WatchExtension >$TEST_log 2>&1 || fail "should build"
+}
+
+function test_host_xcodes() {
+  XCODE_VERSION=$(xcodebuild -version | grep "Xcode" \
+      | sed -E "s/Xcode (([0-9]|.)+).*/\1/")
+  IOS_SDK=$(xcodebuild -version -sdk | grep iphoneos \
+      | sed -E "s/.*\(iphoneos(([0-9]|.)+)\).*/\1/")
+  MACOSX_SDK=$(xcodebuild -version -sdk | grep macosx \
+      | sed -E "s/.*\(macosx(([0-9]|.)+)\).*/\1/" | head -n 1)
+
+  # Unfortunately xcodebuild -version doesn't always pad with trailing .0, so,
+  # for example, may produce "6.4", which is bad for this test.
+  if [[ ! $XCODE_VERSION =~ [0-9].[0-9].[0-9] ]]
+  then
+    XCODE_VERSION="${XCODE_VERSION}.0"
+  fi
+
+  bazel build @local_config_xcode//:host_xcodes >"${TEST_log}" 2>&1 \
+     || fail "Expected host_xcodes to build"
+
+  bazel query "attr(version, $XCODE_VERSION, \
+      attr(default_ios_sdk_version, $IOS_SDK, \
+      attr(default_macosx_sdk_version, $MACOSX_SDK, \
+      labels('versions', '@local_config_xcode//:host_xcodes'))))" \
+      > xcode_version_target
+
+  assert_contains "local_config_xcode" xcode_version_target
+
+  DEFAULT_LABEL=$(bazel query \
+      "labels('default', '@local_config_xcode//:host_xcodes')")
+
+  assert_equals $DEFAULT_LABEL $(cat xcode_version_target)
+}
+
+function test_no_object_file_collisions() {
+  rm -rf ios
+  mkdir -p ios
+
+  touch ios/foo.swift
+
+  cat >ios/BUILD <<EOF
+load("//tools/build_defs/apple:swift.bzl", "swift_library")
+
+swift_library(name = "Foo",
+              srcs = ["foo.swift"])
+swift_library(name = "Bar",
+              srcs = ["foo.swift"])
+EOF
+
+  bazel build --verbose_failures --ios_sdk_version=$IOS_SDK_VERSION \
+    --xcode_version=$XCODE_VERSION \
+    //ios:{Foo,Bar} >$TEST_log 2>&1 || fail "should build"
+}
+
+function test_minimum_os() {
+  rm -rf ios
+  mkdir -p ios
+
+  touch ios/foo.swift
+
+  cat >ios/BUILD <<EOF
+load("//tools/build_defs/apple:swift.bzl", "swift_library")
+
+swift_library(name = "foo",
+              srcs = ["foo.swift"])
+EOF
+
+  bazel build --verbose_failures --ios_sdk_version=$IOS_SDK_VERSION \
+      --xcode_version=$XCODE_VERSION --ios_minimum_os=9.0\
+      //ios:foo >$TEST_log 2>&1 || fail "should build"
+
+  # Get the min OS version encoded as "version" argument of
+  # LC_VERSION_MIN_IPHONEOS load command in Mach-O
+  MIN_OS=$(otool -l bazel-genfiles/ios/foo/_objs/ios_foo.a | \
+      grep -A 3 LC_VERSION_MIN_IPHONEOS | grep version | cut -d " " -f4)
+  assert_equals $MIN_OS "9.0"
 }
 
 run_suite "apple_tests"

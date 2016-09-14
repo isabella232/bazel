@@ -78,6 +78,7 @@
 #include "src/main/cpp/util/numbers.h"
 #include "src/main/cpp/util/port.h"
 #include "src/main/cpp/util/strings.h"
+#include "src/main/cpp/workspace_layout.h"
 #include "third_party/ijar/zip.h"
 
 #include "src/main/protobuf/command_server.grpc.pb.h"
@@ -596,7 +597,7 @@ static string GetArgumentString(const vector<string>& argument_array) {
 
 // Do a chdir into the workspace, and die if it fails.
 static void GoToWorkspace() {
-  if (BlazeStartupOptions::InWorkspace(globals->workspace) &&
+  if (WorkspaceLayout::InWorkspace(globals->workspace) &&
       chdir(globals->workspace.c_str()) != 0) {
     pdie(blaze_exit_code::INTERNAL_ERROR,
          "chdir() into %s failed", globals->workspace.c_str());
@@ -829,9 +830,7 @@ static int ForwardServerOutput(int socket, int output) {
     }
 
     remaining -= bytes;
-    if (write(output, server_output_buffer, bytes) != bytes) {
-      // Not much we can do if this doesn't work, just placate the compiler.
-    }
+    (void) write(output, server_output_buffer, bytes);
   }
 
   return 0;
@@ -1022,8 +1021,9 @@ static void StartServerAndConnect(BlazeServer *server) {
   // disaster.
   int server_pid = GetServerPid(server_dir);
   if (server_pid > 0) {
-    if (KillServerProcess(server_pid, globals->options.output_base,
-                          globals->options.install_base)) {
+    if (VerifyServerProcess(server_pid, globals->options.output_base,
+                            globals->options.install_base) &&
+        KillServerProcess(server_pid)) {
       fprintf(stderr, "Killed non-responsive server process (pid=%d)\n",
               server_pid);
     }
@@ -1462,14 +1462,15 @@ static void sigprintf(const char *format, ...) {
 
 // Signal handler.
 static void handler(int signum) {
+  int saved_errno = errno;
+
   switch (signum) {
     case SIGINT:
       if (++globals->sigint_count >= 3)  {
         sigprintf("\n%s caught third interrupt signal; killed.\n\n",
                   globals->options.product_name.c_str());
         if (globals->server_pid != -1) {
-          KillServerProcess(globals->server_pid, globals->options.output_base,
-                            globals->options.install_base);
+          KillServerProcess(globals->server_pid);
         }
         _exit(1);
       }
@@ -1495,6 +1496,8 @@ static void handler(int signum) {
       kill(globals->server_pid, SIGQUIT);
       break;
   }
+
+  errno = saved_errno;
 }
 
 // Constructs the command line for a server request.
@@ -1525,14 +1528,10 @@ static ATTRIBUTE_NORETURN void SendServerRequest(BlazeServer* server) {
       StartServerAndConnect(server);
     }
 
-    // Check for deleted server cwd:
+    // Check for the case when the workspace directory deleted and then gets
+    // recreated while the server is running
+
     string server_cwd = GetProcessCWD(globals->server_pid);
-    // TODO(bazel-team): Is this check even necessary? If someone deletes or
-    // moves the server directory, the client cannot connect to the server
-    // anymore. IOW, the client finds the server based on the output base,
-    // so if a server is found, it should be by definition at the correct output
-    // base.
-    //
     // If server_cwd is empty, GetProcessCWD failed. This notably occurs when
     // running under Docker because then readlink(/proc/[pid]/cwd) returns
     // EPERM.
@@ -1621,7 +1620,7 @@ static void ComputeWorkspace() {
     pdie(blaze_exit_code::INTERNAL_ERROR, "getcwd() failed");
   }
   globals->cwd = MakeCanonical(cwdbuf);
-  globals->workspace = BlazeStartupOptions::GetWorkspace(globals->cwd);
+  globals->workspace = WorkspaceLayout::GetWorkspace(globals->cwd);
 }
 
 // Figure out the base directories based on embedded data, username, cwd, etc.
@@ -1630,7 +1629,7 @@ static void ComputeWorkspace() {
 static void ComputeBaseDirectories(const string &self_path) {
   // Only start a server when in a workspace because otherwise we won't do more
   // than emit a help message.
-  if (!BlazeStartupOptions::InWorkspace(globals->workspace)) {
+  if (!WorkspaceLayout::InWorkspace(globals->workspace)) {
     globals->options.batch = true;
   }
 
@@ -1732,29 +1731,9 @@ static void SetupStreams() {
 
   // Ensure we have three open fds.  Otherwise we can end up with
   // bizarre things like stdout going to the lock file, etc.
-  if (fcntl(0, F_GETFL) == -1) open("/dev/null", O_RDONLY);
-  if (fcntl(1, F_GETFL) == -1) open("/dev/null", O_WRONLY);
-  if (fcntl(2, F_GETFL) == -1) open("/dev/null", O_WRONLY);
-}
-
-// Set an 8MB stack for Blaze. When the stack max is unbounded, it changes the
-// layout in the JVM's address space, and we are unable to instantiate the
-// default 3000MB heap.
-static void EnsureFiniteStackLimit() {
-  struct rlimit limit;
-  const int default_stack = 8 * 1024 * 1024;  // 8MB.
-  if (getrlimit(RLIMIT_STACK, &limit)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "getrlimit() failed");
-  }
-
-  if (default_stack < limit.rlim_cur) {
-    limit.rlim_cur = default_stack;
-    if (setrlimit(RLIMIT_STACK, &limit)) {
-      perror("setrlimit() failed: If the stack limit is too high, "
-             "this can cause the JVM to be unable to allocate enough "
-             "contiguous address space for its heap");
-    }
-  }
+  if (fcntl(STDIN_FILENO, F_GETFL) == -1) open("/dev/null", O_RDONLY);
+  if (fcntl(STDOUT_FILENO, F_GETFL) == -1) open("/dev/null", O_WRONLY);
+  if (fcntl(STDERR_FILENO, F_GETFL) == -1) open("/dev/null", O_WRONLY);
 }
 
 static void CheckBinaryPath(const string& argv0) {
@@ -1857,7 +1836,6 @@ int main(int argc, const char *argv[]) {
   globals->command_wait_time = blaze_server->AcquireLock();
 
   WarnFilesystemType(globals->options.output_base);
-  EnsureFiniteStackLimit();
 
   ExtractData(self_path);
   VerifyJavaVersionAndSetJvm();
@@ -2044,10 +2022,14 @@ void GrpcBlazeServer::SendCancelMessage() {
   request.set_command_id(command_id_);
   grpc::ClientContext context;
   context.set_deadline(std::chrono::system_clock::now() +
-                       std::chrono::milliseconds(100));
+                       std::chrono::seconds(10));
   command_server::CancelResponse response;
   // There isn't a lot we can do if this request fails
-  client_->Cancel(&context, request, &response);
+  grpc::Status status = client_->Cancel(&context, request, &response);
+  if (!status.ok()) {
+    fprintf(stderr, "\nCould not interrupt server (%s)\n\n",
+            status.error_message().c_str());
+  }
 }
 
 // This will wait indefinitely until the server shuts down
@@ -2069,8 +2051,10 @@ void GrpcBlazeServer::KillRunningServer() {
   while (reader->Read(&response)) {}
 
   // Kill the server process for good measure.
-  KillServerProcess(globals->server_pid, globals->options.output_base,
-                    globals->options.install_base);
+  if (VerifyServerProcess(globals->server_pid, globals->options.output_base,
+                          globals->options.install_base)) {
+    KillServerProcess(globals->server_pid);
+  }
 
   connected_ = false;
 }
@@ -2114,17 +2098,13 @@ unsigned int GrpcBlazeServer::Communicate() {
     }
 
     if (response.standard_output().size() > 0) {
-      if (write(1, response.standard_output().c_str(),
-                response.standard_output().size()) <= 0) {
-        // Placate the compiler.
-      }
+      (void) write(STDOUT_FILENO, response.standard_output().c_str(),
+                   response.standard_output().size());
     }
 
     if (response.standard_error().size() > 0) {
-      if (write(2, response.standard_error().c_str(),
-            response.standard_error().size()) <= 0) {
-        // Placate the compiler.
-      }
+      (void) write(STDERR_FILENO, response.standard_error().c_str(),
+                   response.standard_error().size());
     }
 
     if (!command_id_set && response.command_id().size() > 0) {
@@ -2139,7 +2119,7 @@ unsigned int GrpcBlazeServer::Communicate() {
   cancel_thread.join();
 
   if (!response.finished()) {
-    fprintf(stderr, "\nServer finished RPC without an explicit exit code\n");
+    fprintf(stderr, "\nServer finished RPC without an explicit exit code\n\n");
     return GetExitCodeForAbruptExit(*globals);
   }
 
@@ -2158,7 +2138,7 @@ void GrpcBlazeServer::Disconnect() {
 void GrpcBlazeServer::SendAction(CancelThreadAction action) {
   char msg = action;
   if (write(send_socket_, &msg, 1) <= 0) {
-    // We assume this always works, just placate the compiler.
+    sigprintf("\nCould not interrupt server (cannot write to client pipe)\n\n");
   }
 }
 

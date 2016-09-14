@@ -15,14 +15,16 @@
 package com.google.devtools.build.lib.rules.apple;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.packages.SkylarkClassObject;
+import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.util.Preconditions;
 
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Set;
-
 import javax.annotation.Nullable;
 
 /** An enum that can be used to distinguish between various apple platforms. */
@@ -33,13 +35,13 @@ import javax.annotation.Nullable;
 )
 public enum Platform {
 
-  IOS_DEVICE("iPhoneOS", PlatformType.IOS),
-  IOS_SIMULATOR("iPhoneSimulator", PlatformType.IOS),
-  MACOS_X("MacOSX", PlatformType.MACOSX),
-  TVOS_DEVICE("AppleTVOS", PlatformType.TVOS),
-  TVOS_SIMULATOR("AppleTVSimulator", PlatformType.TVOS),
-  WATCHOS_DEVICE("WatchOS", PlatformType.WATCHOS),
-  WATCHOS_SIMULATOR("WatchSimulator", PlatformType.WATCHOS);
+  IOS_DEVICE("iPhoneOS", PlatformType.IOS, true),
+  IOS_SIMULATOR("iPhoneSimulator", PlatformType.IOS, false),
+  MACOS_X("MacOSX", PlatformType.MACOSX, true),
+  TVOS_DEVICE("AppleTVOS", PlatformType.TVOS, true),
+  TVOS_SIMULATOR("AppleTVSimulator", PlatformType.TVOS, false),
+  WATCHOS_DEVICE("WatchOS", PlatformType.WATCHOS, true),
+  WATCHOS_SIMULATOR("WatchSimulator", PlatformType.WATCHOS, false);
 
   private static final Set<String> IOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("ios_x86_64", "ios_i386");
@@ -54,17 +56,35 @@ public enum Platform {
 
   private final String nameInPlist;
   private final PlatformType platformType;
+  private final boolean isDevice;
 
-  Platform(String nameInPlist, PlatformType platformType) {
+  Platform(String nameInPlist, PlatformType platformType, boolean isDevice) {
     this.nameInPlist = Preconditions.checkNotNull(nameInPlist);
     this.platformType = platformType;
+    this.isDevice = isDevice;
+  }
+
+  /** Returns the platform type of this platform. */
+  @SkylarkCallable(
+    name = "platform_type",
+    doc = "Returns the platform type of this platform.",
+    structField = true
+  )
+  public PlatformType getType() {
+    return platformType;
   }
 
   /**
-   * Returns the platform type of this platform.
+   * Returns true if this platform is a device platform, or false if this is a simulator platform.
    */
-  public PlatformType getType() {
-    return platformType;
+  @SkylarkCallable(
+    name = "is_device",
+    doc = "Returns true if this platform is a device platform, or false if it is a simulator "
+        + "platform.",
+    structField = true
+  )
+  public boolean isDevice() {
+    return isDevice;
   }
 
   /**
@@ -142,12 +162,27 @@ public enum Platform {
    * type (for example, watchOS) together with a cpu value (for example, armv7).
    */
   // TODO(cparsons): Use these values in static retrieval methods in this class.
+  @SkylarkModule(
+    name = "platform_type",
+    category = SkylarkModuleCategory.NONE,
+    doc = "Describes Apple platform \"type\", such as iOS, tvOS, macOS etc."
+  )
   public enum PlatformType {
-    IOS,
-    WATCHOS,
-    TVOS,
-    MACOSX;
-    
+    IOS("ios"),
+    WATCHOS("watchos"),
+    TVOS("tvos"),
+    MACOSX("macosx");
+
+    /**
+     * The key used to access the enum value as a field in the Skylark apple_common.platform_type
+     * struct.
+     */
+    private final String skylarkKey;
+
+    PlatformType(String skylarkKey) {
+      this.skylarkKey = skylarkKey;
+    }
+
     @Override
     public String toString() {
       return name().toLowerCase();
@@ -165,6 +200,17 @@ public enum Platform {
         }
       }
       throw new IllegalArgumentException(String.format("Unsupported platform type \"%s\"", name));
+    }
+
+    /** Returns a Skylark struct that contains the instances of this enum. */
+    public static SkylarkClassObject getSkylarkStruct() {
+      SkylarkClassObjectConstructor constructor =
+          new SkylarkClassObjectConstructor("platform_types");
+      HashMap<String, Object> fields = new HashMap<>();
+      for (PlatformType type : values()) {
+        fields.put(type.skylarkKey, type);
+      }
+      return new SkylarkClassObject(constructor, fields);
     }
   }
 }

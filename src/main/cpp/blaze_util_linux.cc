@@ -14,6 +14,7 @@
 
 #include <errno.h>  // errno, ENAMETOOLONG
 #include <limits.h>
+#include <linux/magic.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -71,7 +72,7 @@ void WarnFilesystemType(const string& output_base) {
     return;
   }
 
-  if (buf.f_type == 0x00006969) {  // NFS_SUPER_MAGIC
+  if (buf.f_type == NFS_SUPER_MAGIC) {
     fprintf(stderr, "WARNING: Output base '%s' is on NFS. This may lead "
             "to surprising failures and undetermined behavior.\n",
             output_base.c_str());
@@ -93,16 +94,6 @@ string GetSelfPath() {
   return string(buffer);
 }
 
-pid_t GetPeerProcessId(int socket) {
-  struct ucred creds = {};
-  socklen_t len = sizeof creds;
-  if (getsockopt(socket, SOL_SOCKET, SO_PEERCRED, &creds, &len) == -1) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "can't get server pid from connection");
-  }
-  return creds.pid;
-}
-
 uint64_t MonotonicClock() {
   struct timespec ts = {};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -116,14 +107,6 @@ uint64_t ProcessClock() {
 }
 
 void SetScheduling(bool batch_cpu_scheduling, int io_nice_level) {
-  // Move ourself into a low priority CPU scheduling group if the
-  // machine is configured appropriately.  Fail silently, because this
-  // isn't available on all kernels.
-  if (FILE *f = fopen("/dev/cgroup/cpu/batch/tasks", "w")) {
-    fprintf(f, "%d", getpid());
-    fclose(f);
-  }
-
   if (batch_cpu_scheduling) {
     sched_param param = {};
     param.sched_priority = 0;
@@ -224,16 +207,12 @@ void WriteSystemSpecificProcessIdentifier(const string& server_dir) {
 // On Linux we use a combination of PID and start time to identify the server
 // process. That is supposed to be unique unless one can start more processes
 // than there are PIDs available within a single jiffy.
-//
-// This looks complicated, but all it does is an open(), then read(), then
-// close(), all of which are safe to call from signal handlers.
-bool KillServerProcess(
+bool VerifyServerProcess(
     int pid, const string& output_base, const string& install_base) {
   string start_time;
   if (!GetStartTime(ToString(pid), &start_time)) {
-    // Cannot read PID file from /proc . Process died in the meantime?
-    fprintf(stderr, "Found stale PID file (pid=%d). "
-            "Server probably died abruptly, continuing...\n", pid);
+    // Cannot read PID file from /proc . Process died meantime, all is good. No
+    // stale server is present.
     return false;
   }
 
@@ -242,14 +221,12 @@ bool KillServerProcess(
       blaze_util::JoinPath(output_base, "server/server.starttime"),
       &recorded_start_time);
 
-  // start time file got deleted, but PID file didn't. This is strange.
-  // Assume that this is an old Blaze process that doesn't know how to  write
-  // start time files yet.
-  if (file_present && recorded_start_time != start_time) {
-    // This is a different process.
-    return false;
-  }
+  // If start time file got deleted, but PID file didn't, assume taht this is an
+  // old Blaze process that doesn't know how to write start time files yet.
+  return !file_present || recorded_start_time == start_time;
+}
 
+bool KillServerProcess(int pid) {
   // Kill the process and make sure it's dead before proceeding.
   killpg(pid, SIGKILL);
   int check_killed_retries = 10;

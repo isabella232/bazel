@@ -58,4 +58,9 @@ public interface CppSemantics {
    * in the action graph.
    */
   boolean needsIncludeScanning(RuleContext ruleContext);
+
+  void validateAttributes(RuleContext ruleContext);
+
+  /** Returns true iff this build requires include validation. */
+  boolean needsIncludeValidation();
 }

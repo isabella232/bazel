@@ -83,6 +83,7 @@ import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.apple.Platform.PlatformType;
+import com.google.devtools.build.lib.rules.cpp.CppCompileAction.DotdFile;
 import com.google.devtools.build.lib.rules.cpp.CppModuleMap;
 import com.google.devtools.build.lib.rules.cpp.CppModuleMapAction;
 import com.google.devtools.build.lib.rules.objc.XcodeProvider.Builder;
@@ -123,10 +124,18 @@ public final class CompilationSupport {
   static final ImmutableList<String> LINKER_COVERAGE_FLAGS =
       ImmutableList.of("-ftest-coverage", "-fprofile-arcs");
 
+  @VisibleForTesting
+  static final ImmutableList<String> LINKER_LLVM_COVERAGE_FLAGS =
+      ImmutableList.of("-fprofile-instr-generate");
+
   // Flags for clang 6.1(xcode 6.4)
   @VisibleForTesting
-  static final ImmutableList<String> CLANG_COVERAGE_FLAGS =
+  static final ImmutableList<String> CLANG_GCOV_COVERAGE_FLAGS =
       ImmutableList.of("-fprofile-arcs", "-ftest-coverage");
+
+  @VisibleForTesting
+  static final ImmutableList<String> CLANG_LLVM_COVERAGE_FLAGS =
+      ImmutableList.of("-fprofile-instr-generate", "-fcoverage-mapping");
 
   // These are added by Xcode when building, because the simulator is built on OSX
   // frameworks so we aim compile to match the OSX objc runtime.
@@ -548,7 +557,11 @@ public final class CompilationSupport {
 
     List<String> coverageFlags = ImmutableList.of();
     if (collectCodeCoverage) {
-      coverageFlags = CLANG_COVERAGE_FLAGS;
+      if (buildConfiguration.isLLVMCoverageMapFormatEnabled()) {
+        coverageFlags = CLANG_LLVM_COVERAGE_FLAGS;
+      } else {
+        coverageFlags = CLANG_GCOV_COVERAGE_FLAGS;
+      }
     }
 
     commandLine
@@ -643,22 +656,24 @@ public final class CompilationSupport {
     boolean runCodeCoverage =
         buildConfiguration.isCodeCoverageEnabled() && ObjcRuleClasses.isInstrumentable(sourceFile);
     boolean hasSwiftSources = compilationArtifacts.hasSwiftSources();
+    DotdFile dotdFile = intermediateArtifacts.dotdFile(sourceFile);
 
-    CustomCommandLine commandLine = compileActionCommandLine(
-        sourceFile,
-        objFile,
-        objcProvider,
-        priorityHeaders,
-        moduleMap,
-        compilationArtifacts.getPchFile(),
-        Optional.of(intermediateArtifacts.dotdFile(sourceFile)),
-        otherFlags,
-        runCodeCoverage,
-        isCPlusPlusSource,
-        hasSwiftSources);
+    CustomCommandLine commandLine =
+        compileActionCommandLine(
+            sourceFile,
+            objFile,
+            objcProvider,
+            priorityHeaders,
+            moduleMap,
+            compilationArtifacts.getPchFile(),
+            Optional.of(dotdFile.artifact()),
+            otherFlags,
+            runCodeCoverage,
+            isCPlusPlusSource,
+            hasSwiftSources);
 
     Optional<Artifact> gcnoFile = Optional.absent();
-    if (runCodeCoverage) {
+    if (runCodeCoverage && !buildConfiguration.isLLVMCoverageMapFormatEnabled()) {
       gcnoFile = Optional.of(intermediateArtifacts.gcnoFile(sourceFile));
     }
 
@@ -672,24 +687,25 @@ public final class CompilationSupport {
       moduleMapInputs = objcProvider.get(MODULE_MAP);
     }
 
-    // TODO(bazel-team): Remote private headers from inputs once they're added to the provider.
+    // TODO(bazel-team): Remove private headers from inputs once they're added to the provider.
     ruleContext.registerAction(
-        ObjcRuleClasses.spawnAppleEnvActionBuilder(
+        ObjcCompileAction.Builder.createObjcCompileActionBuilderWithAppleEnv(
                 appleConfiguration, appleConfiguration.getSingleArchPlatform())
+            .setSourceFile(sourceFile)
+            .addMandatoryInputs(swiftHeader.asSet())
+            .addTransitiveMandatoryInputs(moduleMapInputs)
+            .addTransitiveMandatoryInputs(objcProvider.get(STATIC_FRAMEWORK_FILE))
+            .addTransitiveMandatoryInputs(objcProvider.get(DYNAMIC_FRAMEWORK_FILE))
+            .setDotdFile(dotdFile)
+            .addInputs(compilationArtifacts.getPrivateHdrs())
+            .addInputs(compilationArtifacts.getPchFile().asSet())
             .setMnemonic("ObjcCompile")
             .setExecutable(xcrunwrapper(ruleContext))
             .setCommandLine(commandLine)
-            .addInput(sourceFile)
-            .addInputs(swiftHeader.asSet())
-            .addTransitiveInputs(moduleMapInputs)
             .addOutput(objFile)
             .addOutputs(gcnoFile.asSet())
-            .addOutput(intermediateArtifacts.dotdFile(sourceFile))
+            .addOutput(dotdFile.artifact())
             .addTransitiveInputs(objcProvider.get(HEADER))
-            .addInputs(compilationArtifacts.getPrivateHdrs())
-            .addTransitiveInputs(objcProvider.get(STATIC_FRAMEWORK_FILE))
-            .addTransitiveInputs(objcProvider.get(DYNAMIC_FRAMEWORK_FILE))
-            .addInputs(compilationArtifacts.getPchFile().asSet())
             .build(ruleContext));
   }
 
@@ -1388,11 +1404,17 @@ public final class CompilationSupport {
         .add(objcProvider.get(ObjcProvider.LINKOPT));
 
     if (buildConfiguration.isCodeCoverageEnabled()) {
-      commandLine.add(LINKER_COVERAGE_FLAGS);
+      if (buildConfiguration.isLLVMCoverageMapFormatEnabled()) {
+        commandLine.add(LINKER_LLVM_COVERAGE_FLAGS);
+      } else {
+        commandLine.add(LINKER_COVERAGE_FLAGS);
+      }
     }
 
     if (objcProvider.is(USES_SWIFT)) {
-      commandLine.add("-L").add(AppleToolchain.swiftLibDir(appleConfiguration));
+      commandLine
+          .add("-L")
+          .add(AppleToolchain.swiftLibDir(appleConfiguration.getSingleArchPlatform()));
     }
 
     for (String linkopt : attributes.linkopts()) {

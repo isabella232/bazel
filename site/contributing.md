@@ -55,12 +55,8 @@ for Java. We don't have IDE support for other languages in Bazel right now.
 
 ### Creating an IntelliJ project
 
-To work with IntelliJ:
-
-* Install the [IntelliJ-with-Bazel](https://github.com/bazelbuild/intellij)
-  plugin.
-* Follow the instructions at [ij.bazel.io](www.ij.bazel.io) to setup your
-  project.
+To work with IntelliJ, follow the instructions at
+[ij.bazel.io](https://ij.bazel.io).
 
 ### Creating an Eclipse project
 
@@ -125,7 +121,7 @@ But if you want to debug the Java code, you must attach to the server using the 
   [remote Java application launch
   configuration](http://help.eclipse.org/luna/index.jsp?topic=%2Forg.eclipse.jdt.doc.user%2Ftasks%2Ftask-remotejava_launch_config.htm).
 * Our IntelliJ plugin has built-in
-  [debugging support](www.ij.bazel.io/docs/run-configurations.html)
+  [debugging support](https://ij.bazel.io/docs/run-configurations.html)
 
 ## Bazel's code description
 
@@ -134,7 +130,7 @@ Bazel is organized in several parts:
 * Client code in `src/main/cpp` provides the command-line interface.
 * Protocol buffers in `src/main/protobuf`.
 * Server code in `src/main/java` and `src/test/java`.
-  * Core code which is mostly composed of [SkyFrame](docs/skyframe.html) and some
+  * Core code which is mostly composed of [SkyFrame](designs/skyframe.html) and some
     utilities.
   * Rules written in Bazel's extension language
     [Skylark](docs/skylark/index.html) are defined in `tools/build_rules`. If
@@ -142,7 +138,7 @@ Bazel is organized in several parts:
     first.
   * Builtin rules in `com.google.devtools.build.lib.rules` and in
     `com.google.devtools.build.lib.bazel.rules`. You might want to read about
-    the [Challenges of Writing Rules](rule-challenges.html) first.
+    the [Challenges of Writing Rules](docs/rule-challenges.html) first.
 * Java native interfaces in `src/main/native`.
 * Various tooling for language support (see the list in the
   [compiling Bazel](#compile-bazel) section).

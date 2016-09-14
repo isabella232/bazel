@@ -43,9 +43,32 @@ using std::string;
 #define DATA_DIR_TOP
 #endif
 
+const char kPathLibData1[] = DATA_DIR_TOP "src/tools/singlejar/libdata1.jar";
+const char kPathLibData2[] = DATA_DIR_TOP "src/tools/singlejar/libdata2.jar";
+
 static bool HasSubstr(const string &s, const string &what) {
   return string::npos != s.find(what);
 }
+
+// A subclass of the OutputJar which concatenates the contents of each
+// entry in the data/ directory from the input archives.
+class CustomOutputJar : public OutputJar {
+ public:
+  ~CustomOutputJar() override {}
+  void ExtraHandler(const CDH *cdh) override {
+    auto file_name = cdh->file_name();
+    auto file_name_length = cdh->file_name_length();
+    if (file_name_length > 0 && file_name[file_name_length - 1] != '/' &&
+        begins_with(file_name, file_name_length, "tools/singlejar/data/")) {
+      // The contents of the data/<FILE> on the output is the
+      // concatenation of the data/<FILE> files from all inputs.
+      std::string metadata_file_path(file_name, file_name_length);
+      if (NewEntry(metadata_file_path)) {
+        ExtraCombiner(metadata_file_path, new Concatenator(metadata_file_path));
+      }
+    }
+  }
+};
 
 class OutputJarSimpleTest : public ::testing::Test {
  protected:
@@ -262,10 +285,10 @@ TEST_F(OutputJarSimpleTest, BuildInfoFile) {
 // --resources option.
 TEST_F(OutputJarSimpleTest, Resources) {
   string res11_path = CreateTextFile("res11", "res11.line1\nres11.line2\n");
-  string res11_spec = string("res1:") + res11_path;
+  string res11_spec = res11_path + ":res1";
 
   string res12_path = CreateTextFile("res12", "res12.line1\nres12.line2\n");
-  string res12_spec = string("res1:") + res12_path;
+  string res12_spec = res12_path + ":res1";
 
   string res2_path = CreateTextFile("res2", "res2.line1\nres2.line2\n");
 
@@ -297,10 +320,10 @@ TEST_F(OutputJarSimpleTest, DuplicateResources) {
   string cp_res_path = CreateTextFile("cp_res", "line1\nline2\n");
 
   string res1_path = CreateTextFile("res1", "resline1\nresline2\n");
-  string res1_spec = "foo:" + res1_path;
+  string res1_spec = res1_path + ":foo";
 
   string res2_path = CreateTextFile("res2", "line3\nline4\n");
-  string res2_spec = "foo:" + res2_path;
+  string res2_spec = res2_path + ":foo";
 
   string out_path = OutputFilePath("out.jar");
   CreateOutput(out_path,
@@ -319,16 +342,26 @@ TEST_F(OutputJarSimpleTest, ExtraCombiners) {
   string out_path = OutputFilePath("out.jar");
   const char kEntry[] = "tools/singlejar/data/extra_file1";
   output_jar_.ExtraCombiner(kEntry, new Concatenator(kEntry));
-  CreateOutput(out_path,
-               {"--sources", DATA_DIR_TOP "src/tools/singlejar/libdata1.jar",
-                DATA_DIR_TOP "src/tools/singlejar/libdata2.jar"});
-  string extra_file_contents = GetEntryContents(out_path, kEntry);
-  EXPECT_EQ(
-      "extra_file_1 line1\n"
-      "extra_file_1 line2\n"
-      "extra_file_1 line1\n"
-      "extra_file_1 line2\n",
-      extra_file_contents);
+  CreateOutput(out_path, {"--sources", kPathLibData1, kPathLibData2});
+  string contents1 = GetEntryContents(kPathLibData1, kEntry);
+  string contents2 = GetEntryContents(kPathLibData2, kEntry);
+  EXPECT_EQ(contents1 + contents2, GetEntryContents(out_path, kEntry));
+}
+
+// Test ExtraHandler override.
+TEST_F(OutputJarSimpleTest, ExtraHandler) {
+  string out_path = OutputFilePath("out.jar");
+  const char kEntry[] = "tools/singlejar/data/extra_file1";
+  const char *option_list[] = {"--output", out_path.c_str(), "--sources",
+                               kPathLibData1, kPathLibData2};
+  CustomOutputJar custom_output_jar;
+  options_.ParseCommandLine(arraysize(option_list), option_list);
+  ASSERT_EQ(0, custom_output_jar.Doit(&options_));
+  EXPECT_EQ(0, VerifyZip(out_path));
+
+  string contents1 = GetEntryContents(kPathLibData1, kEntry);
+  string contents2 = GetEntryContents(kPathLibData2, kEntry);
+  EXPECT_EQ(contents1 + contents2, GetEntryContents(out_path, kEntry));
 }
 
 // --include_headers
@@ -336,8 +369,7 @@ TEST_F(OutputJarSimpleTest, IncludeHeaders) {
   string out_path = OutputFilePath("out.jar");
   CreateOutput(out_path,
                {"--sources", DATA_DIR_TOP "src/tools/singlejar/libtest1.jar",
-                DATA_DIR_TOP "src/tools/singlejar/libdata1.jar",
-                "--include_prefixes", "tools/singlejar/data"});
+                kPathLibData1, "--include_prefixes", "tools/singlejar/data"});
   std::vector<string> expected_entries(
       {"META-INF/", "META-INF/MANIFEST.MF", "build-data.properties",
        "tools/singlejar/data/", "tools/singlejar/data/extra_file1",
@@ -424,6 +456,11 @@ TEST_F(OutputJarSimpleTest, Normalize) {
           << entry_name
           << " modification time for non .class entry should be 00:00:00";
     }
+    // Zip creates Unix timestamps, too. Check that normalization removes them.
+    ASSERT_EQ(nullptr, cdh->unix_time_extra_field())
+        << entry_name << ": CDH should not have Unix Time extra field";
+    ASSERT_EQ(nullptr, lh->unix_time_extra_field())
+        << entry_name << ": LH should not have Unix Time extra field";
   }
   input_jar.Close();
 }
@@ -556,6 +593,38 @@ TEST_F(OutputJarSimpleTest, DontChangeCompressionOption) {
     }
   }
   input_jar.Close();
+}
+
+const char kBuildDataFile[] = "build-data.properties";
+
+// Test --exclude_build_data option when none of the source archives contain
+// build-data.properties file: no such file in the output archive.
+TEST_F(OutputJarSimpleTest, ExcludeBuildData1) {
+  string out_path = OutputFilePath("out.jar");
+  CreateOutput(out_path, {"--exclude_build_data"});
+  InputJar input_jar;
+  ASSERT_TRUE(input_jar.Open(out_path));
+  const LH *lh;
+  const CDH *cdh;
+  while ((cdh = input_jar.NextEntry(&lh))) {
+    string entry_name = lh->file_name_string();
+    EXPECT_NE(kBuildDataFile, lh->file_name_string());
+  }
+  input_jar.Close();
+}
+
+// Test --exclude_build_data option when a source archive contains
+// build-data.properties file, it should be then copied to the output.
+TEST_F(OutputJarSimpleTest, ExcludeBuildData2) {
+  string out_dir = OutputFilePath("");
+  string testzip_path = OutputFilePath("testinput.zip");
+  string buildprop_path = CreateTextFile(kBuildDataFile, "build: foo");
+  unlink(testzip_path.c_str());
+  ASSERT_EQ(0, RunCommand("cd ", out_dir.c_str(), ";", "zip", "-m",
+                          "testinput.zip", kBuildDataFile , nullptr));
+  string out_path = OutputFilePath("out.jar");
+  CreateOutput(out_path, {"--exclude_build_data", "--sources", testzip_path});
+  EXPECT_EQ("build: foo", GetEntryContents(out_path, kBuildDataFile));
 }
 
 }  // namespace

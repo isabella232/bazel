@@ -35,7 +35,7 @@ public class FdoSupportFunction implements SkyFunction {
   /**
    * Wrapper for FDO exceptions.
    */
-  public class FdoSkyException extends SkyFunctionException {
+  public static class FdoSkyException extends SkyFunctionException {
     public FdoSkyException(Exception cause, Transience transience) {
       super(cause, transience);
     }
@@ -50,6 +50,7 @@ public class FdoSupportFunction implements SkyFunction {
       return null;
     }
 
+    // TODO(kchodorow): create a SkyFunction to get the main repository name and pass it in here.
     Path execRoot = blazeDirectories.getExecRoot();
     FdoSupportValue.Key key = (FdoSupportValue.Key) skyKey.argument();
     FdoSupport fdoSupport;

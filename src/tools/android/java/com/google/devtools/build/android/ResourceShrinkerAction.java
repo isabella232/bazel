@@ -234,10 +234,11 @@ public class ResourceShrinkerAction {
           options.shrunkApk,
           null /* proguardOutput */,
           null /* mainDexProguardOutput */,
-          null /* publicResourcesOut */);
+         null /* publicResourcesOut */,
+         null /* dataBindingInfoOut */);
       if (options.shrunkResources != null) {
         resourceProcessor.createResourcesZip(shrunkResources, resourceFiles.resolve("assets"),
-            options.shrunkResources);
+            options.shrunkResources, false /* compress */);
       }
       logger.fine(String.format("Packing resources finished at %sms",
           timer.elapsed(TimeUnit.MILLISECONDS)));

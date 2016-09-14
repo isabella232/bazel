@@ -283,9 +283,6 @@ public class BazelRuleClassProvider {
 
   @VisibleForTesting
   public static void initCpp(ConfiguredRuleClassProvider.Builder builder) {
-    // The tools repository prefix must be set before calling this method.
-    String toolsRepository = checkNotNull(builder.getToolsRepository());
-
     builder.addConfigurationOptions(CppOptions.class);
 
     builder.addBuildInfoFactory(new CppBuildInfo());
@@ -305,12 +302,6 @@ public class BazelRuleClassProvider {
     builder.addRuleDefinition(new BazelCppRuleClasses.BazelCcIncLibraryRule());
 
     builder.addConfigurationFragment(new CppConfigurationLoader(Functions.<String>identity()));
-
-    // TODO(ulfjack): Remove the xcode_config requirement from the C++ rules.
-    builder.addConfigurationOptions(AppleCommandLineOptions.class);
-    builder.addConfigurationFragment(new AppleConfiguration.Loader());
-    builder.addRuleDefinition(new AppleToolchain.RequiresXcodeConfigRule(toolsRepository));
-    builder.addRuleDefinition(new XcodeConfigRule());
   }
 
   private static void initJava(ConfiguredRuleClassProvider.Builder builder) {
@@ -428,6 +419,8 @@ public class BazelRuleClassProvider {
     }
 
     builder.addRuleDefinition(new AppleCcToolchainRule());
+    builder.addRuleDefinition(new AppleToolchain.RequiresXcodeConfigRule(toolsRepository));
+    builder.addRuleDefinition(new XcodeConfigRule());
     builder.addRuleDefinition(new IosTestRule());
     builder.addRuleDefinition(new IosDeviceRule());
     builder.addRuleDefinition(new AppleBinaryRule());
@@ -438,7 +431,7 @@ public class BazelRuleClassProvider {
     builder.addRuleDefinition(new ObjcFrameworkRule());
     builder.addRuleDefinition(new ObjcImportRule());
     builder.addRuleDefinition(new ObjcLibraryRule());
-    builder.addRuleDefinition(new ObjcProtoLibraryRule());
+    builder.addRuleDefinition(new ObjcProtoLibraryRule(objcProtoAspect));
     builder.addRuleDefinition(new ObjcXcodeprojRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CoptsRule());
     builder.addRuleDefinition(new ObjcRuleClasses.BundlingRule());
@@ -446,6 +439,7 @@ public class BazelRuleClassProvider {
     builder.addRuleDefinition(new ObjcRuleClasses.SimulatorRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CompilingRule());
     builder.addRuleDefinition(new ObjcRuleClasses.LinkingRule(objcProtoAspect));
+    builder.addRuleDefinition(new ObjcRuleClasses.MultiArchPlatformRule());
     builder.addRuleDefinition(new ObjcRuleClasses.ResourcesRule());
     builder.addRuleDefinition(new ObjcRuleClasses.XcodegenRule());
     builder.addRuleDefinition(new ObjcRuleClasses.AlwaysLinkRule());
@@ -485,7 +479,9 @@ public class BazelRuleClassProvider {
     builder.addRuleDefinition(new BazelJavaProtoLibraryRule(bazelJavaProtoAspect));
     builder.addRuleDefinition(new BazelJavaLiteProtoLibraryRule(bazelJavaLiteProtoAspect));
 
-    builder.addConfigurationFragment(new PythonConfigurationLoader(Functions.<String>identity()));
+    builder.addConfigurationOptions(AppleCommandLineOptions.class);
+    builder.addConfigurationFragment(new AppleConfiguration.Loader());
+    builder.addConfigurationFragment(new PythonConfigurationLoader());
     builder.addConfigurationFragment(new BazelPythonConfiguration.Loader());
     builder.addConfigurationFragment(new ObjcConfigurationLoader());
     builder.addConfigurationFragment(new J2ObjcConfiguration.Loader());

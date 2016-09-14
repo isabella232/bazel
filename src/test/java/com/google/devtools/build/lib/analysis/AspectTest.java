@@ -41,7 +41,6 @@ import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
-
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -57,6 +56,46 @@ public class AspectTest extends AnalysisTestCase {
 
   private void pkg(String name, String... contents) throws Exception {
     scratch.file("" + name + "/BUILD", contents);
+  }
+
+  @Test
+  public void testAspectAppliedToAliasWithSelect() throws Exception {
+    setRulesAvailableInTests(new TestAspects.BaseRule(), new AspectRequiringRule());
+    pkg("a",
+        "aspect(name='a', foo=[':b'])",
+        "alias(name='b', actual=select({'//conditions:default': ':c'}))",
+        "base(name='c')");
+    ConfiguredTarget a = getConfiguredTarget("//a:a");
+    assertThat(a.getProvider(RuleInfo.class).getData())
+        .containsExactly("aspect //a:c", "rule //a:a");
+  }
+
+  @Test
+  public void testAspectAppliedToChainedAliases() throws Exception {
+    setRulesAvailableInTests(new TestAspects.BaseRule(), new AspectRequiringRule());
+    pkg("a",
+        "aspect(name='a', foo=[':b'])",
+        "alias(name='b', actual=':c')",
+        "alias(name='c', actual=':d')",
+        "alias(name='d', actual=':e')",
+        "base(name='e')");
+
+    ConfiguredTarget a = getConfiguredTarget("//a:a");
+    assertThat(a.getProvider(RuleInfo.class).getData())
+        .containsExactly("aspect //a:e", "rule //a:a");
+  }
+
+  @Test
+  public void testAspectAppliedToChainedAliasesAndSelect() throws Exception {
+    setRulesAvailableInTests(new TestAspects.BaseRule(), new AspectRequiringRule());
+    pkg("a",
+        "aspect(name='a', foo=[':b'])",
+        "alias(name='b', actual=select({'//conditions:default': ':c'}))",
+        "alias(name='c', actual=select({'//conditions:default': ':d'}))",
+        "base(name='d')");
+    ConfiguredTarget a = getConfiguredTarget("//a:a");
+    assertThat(a.getProvider(RuleInfo.class).getData())
+        .containsExactly("aspect //a:d", "rule //a:a");
   }
 
   @Test
@@ -344,14 +383,5 @@ public class AspectTest extends AnalysisTestCase {
             .getTransitiveExtraActionArtifacts();
     assertThat(getOnlyElement(extraActionArtifacts).getLabel()).isEqualTo(Label.create("@//a", "b"));
 
-  }
-
-  @RunWith(JUnit4.class)
-  public static class AspectTestWithoutLoading extends AspectTest {
-
-    @Override
-    protected boolean isLoadingEnabled() {
-      return false;
-    }
   }
 }

@@ -48,6 +48,7 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
+import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.apple.Platform.PlatformType;
 import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.LinkedBinary;
@@ -108,13 +109,10 @@ final class WatchApplicationSupport {
    * @param innerBundleZips any zip files to be unzipped and merged into the application bundle
    * @param filesToBuild files to build for the rule; the watchOS application .ipa is added to this
    *     set
-   * @param exposedObjcProviderBuilder provider builder which watch application bundle outputs are
-   *     added to (for later consumption by depending rules)
    */
   void createBundle(
       Iterable<Artifact> innerBundleZips,
-      NestedSetBuilder<Artifact> filesToBuild,
-      ObjcProvider.Builder exposedObjcProviderBuilder)
+      NestedSetBuilder<Artifact> filesToBuild)
       throws InterruptedException {
 
     ObjcProvider objcProvider = objcProvider(innerBundleZips);
@@ -122,8 +120,7 @@ final class WatchApplicationSupport {
     createBundle(
         Optional.<XcodeProvider.Builder>absent(),
         objcProvider,
-        filesToBuild,
-        exposedObjcProviderBuilder);
+        filesToBuild);
   }
 
   /**
@@ -134,19 +131,16 @@ final class WatchApplicationSupport {
    * @param innerBundleZips any zip files to be unzipped and merged into the application bundle
    * @param filesToBuild files to build for the rule; the watchOS application .ipa is added to this
    *     set
-   * @param exposedObjcProviderBuilder provider builder which watch application bundle outputs are
-   *     added to (for later consumption by depending rules)
    */
   void createBundleAndXcodeproj(
       XcodeProvider.Builder xcodeProviderBuilder,
       Iterable<Artifact> innerBundleZips,
-      NestedSetBuilder<Artifact> filesToBuild,
-      ObjcProvider.Builder exposedObjcProviderBuilder)
+      NestedSetBuilder<Artifact> filesToBuild)
       throws InterruptedException {
     ObjcProvider objcProvider = objcProvider(innerBundleZips);
 
     createBundle(
-        Optional.of(xcodeProviderBuilder), objcProvider, filesToBuild, exposedObjcProviderBuilder);
+        Optional.of(xcodeProviderBuilder), objcProvider, filesToBuild);
 
     // Add common watch settings.
     WatchUtils.addXcodeSettings(ruleContext, xcodeProviderBuilder);
@@ -171,8 +165,7 @@ final class WatchApplicationSupport {
   private void createBundle(
       Optional<XcodeProvider.Builder> xcodeProviderBuilder,
       ObjcProvider depsObjcProvider,
-      NestedSetBuilder<Artifact> filesToBuild,
-      ObjcProvider.Builder exposedObjcProviderBuilder)
+      NestedSetBuilder<Artifact> filesToBuild)
       throws InterruptedException {
     registerActions();
 
@@ -194,6 +187,16 @@ final class WatchApplicationSupport {
       releaseBundling.setFallbackBundleId(attributes.bundleId());
     }
 
+    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+
+    PlatformType appPlatformType = watchOSVersion == WatchOSVersion.OS1
+         ? PlatformType.IOS : PlatformType.WATCHOS;
+    Platform appPlatform = appleConfiguration.getMultiArchPlatform(appPlatformType);
+    DottedVersion minimumOsVersion = appPlatformType == PlatformType.IOS
+        ? WatchUtils.determineMinimumIosVersion(
+            ObjcRuleClasses.objcConfiguration(ruleContext).getMinimumOs())
+        : appleConfiguration.getSdkVersionForPlatform(appPlatform);
+
     ReleaseBundlingSupport releaseBundlingSupport =
         new ReleaseBundlingSupport(
                 ruleContext,
@@ -201,9 +204,9 @@ final class WatchApplicationSupport {
                 LinkedBinary.DEPENDENCIES_ONLY,
                 watchOSVersion.getApplicationBundleDirFormat(),
                 bundleName,
-                WatchUtils.determineMinimumOsVersion(
-                    ObjcRuleClasses.objcConfiguration(ruleContext).getMinimumOs()),
-                releaseBundling.build())
+                minimumOsVersion,
+                releaseBundling.build(),
+                appleConfiguration.getMultiArchPlatform(appPlatformType))
             .registerActions(DsymOutputType.APP);
 
     if (xcodeProviderBuilder.isPresent()) {
@@ -211,14 +214,16 @@ final class WatchApplicationSupport {
     }
 
     releaseBundlingSupport
-        .addFilesToBuild(filesToBuild, DsymOutputType.APP)
+        .addFilesToBuild(filesToBuild, Optional.<DsymOutputType>absent())
         .validateResources()
-        .validateAttributes()
-        .addExportedDebugArtifacts(exposedObjcProviderBuilder, DsymOutputType.APP);
+        .validateAttributes();
   }
 
   /**
-   * Returns the {@link TargetDeviceFamily} that the watch application bundle is targeting.
+   * Returns the {@link TargetDeviceFamily} that the watch application bundle is targeting. This
+   * is always {@code TargetDeviceFamily.WATCH}, except for WatchOS1, which has the following
+   * special rules:
+   *
    * For simulator builds, this returns a set of {@code TargetDeviceFamily.IPHONE} and
    * {@code TargetDeviceFamily.WATCH} and for non-simulator builds, this returns
    * {@code TargetDeviceFamily.WATCH}.
@@ -226,7 +231,7 @@ final class WatchApplicationSupport {
   private ImmutableSet<TargetDeviceFamily> families() {
     Platform platform =
         ruleContext.getFragment(AppleConfiguration.class).getMultiArchPlatform(PlatformType.IOS);
-    if (platform == Platform.IOS_DEVICE) {
+    if (watchOSVersion != WatchOSVersion.OS1 || platform == Platform.IOS_DEVICE) {
       return ImmutableSet.of(TargetDeviceFamily.WATCH);
     } else {
       return ImmutableSet.of(TargetDeviceFamily.IPHONE, TargetDeviceFamily.WATCH);

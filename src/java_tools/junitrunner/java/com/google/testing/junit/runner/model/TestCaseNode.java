@@ -16,22 +16,18 @@ package com.google.testing.junit.runner.model;
 
 import static com.google.testing.junit.runner.util.TestPropertyExporter.INITIAL_INDEX_FOR_REPEATED_PROPERTY;
 
-import com.google.common.collect.ConcurrentHashMultiset;
-import com.google.common.collect.LinkedListMultimap;
-import com.google.common.collect.ListMultimap;
-import com.google.common.collect.Multimaps;
-import com.google.common.collect.Multiset;
 import com.google.testing.junit.runner.model.TestResult.Status;
 import com.google.testing.junit.runner.util.TestPropertyExporter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
 import javax.annotation.Nullable;
-import org.joda.time.Interval;
 import org.junit.runner.Description;
 
 /**
@@ -40,12 +36,12 @@ import org.junit.runner.Description;
 class TestCaseNode extends TestNode implements TestPropertyExporter.Callback {
   private final TestSuiteNode parent;
   private final Map<String, String> properties = new ConcurrentHashMap<>();
-  private final Multiset<String> repeatedPropertyNames = ConcurrentHashMultiset.create();
+  private final Map<String, Integer> repeatedPropertyNamesToRepetitions = new HashMap<>();
   private final Queue<Throwable> globalFailures = new ConcurrentLinkedQueue<>();
-  private final ListMultimap<Description, Throwable> dynamicTestToFailures =
-      Multimaps.synchronizedListMultimap(LinkedListMultimap.<Description, Throwable>create());
+  private final ConcurrentMap<Description, List<Throwable>> dynamicTestToFailures =
+      new ConcurrentHashMap<>();
 
-  @Nullable private volatile Interval runTimeInterval = null;
+  @Nullable private volatile TestInterval runTimeInterval = null;
   private volatile State state = State.INITIAL;
 
   TestCaseNode(Description description, TestSuiteNode parent) {
@@ -118,17 +114,37 @@ class TestCaseNode extends TestNode implements TestPropertyExporter.Callback {
   @Override
   public void dynamicTestFailure(Description test, Throwable throwable, long now) {
     compareAndSetState(State.INITIAL, State.FINISHED, now);
-    dynamicTestToFailures.put(test, throwable);
+    addThrowableToDynamicTestToFailures(test, throwable);
   }
 
   private String getRepeatedPropertyName(String name) {
-    int index = repeatedPropertyNames.add(name, 1) + INITIAL_INDEX_FOR_REPEATED_PROPERTY;
+    int index = addNameToRepeatedPropertyNamesAndGetRepetitionsNr(name)
+        + INITIAL_INDEX_FOR_REPEATED_PROPERTY;
     return name + index;
   }
 
   @Override
   public boolean isTestCase() {
     return true;
+  }
+
+  private synchronized void addThrowableToDynamicTestToFailures(
+      Description test, Throwable throwable) {
+    List<Throwable> throwables = dynamicTestToFailures.get(test);
+    if (throwables == null) {
+      throwables = new ArrayList<>();
+      dynamicTestToFailures.put(test, throwables);
+    }
+    throwables.add(throwable);
+  }
+
+  private synchronized int addNameToRepeatedPropertyNamesAndGetRepetitionsNr(String name) {
+    Integer previousRepetitionsNr = repeatedPropertyNamesToRepetitions.get(name);
+    if (previousRepetitionsNr == null) {
+      previousRepetitionsNr = 0;
+    }
+    repeatedPropertyNamesToRepetitions.put(name, previousRepetitionsNr + 1);
+    return previousRepetitionsNr;
   }
 
   private synchronized boolean compareAndSetState(State fromState, State toState, long now) {
@@ -138,15 +154,15 @@ class TestCaseNode extends TestNode implements TestPropertyExporter.Callback {
 
     if (fromState == state && toState != state) {
       state = toState;
-      runTimeInterval = runTimeInterval == null
-          ? new Interval(now, now) : runTimeInterval.withEndMillis(now);
+      runTimeInterval =
+          runTimeInterval == null ? new TestInterval(now, now) : runTimeInterval.withEndMillis(now);
       return true;
     }
     return false;
   }
 
   @Nullable
-  public Interval getRuntime() {
+  public TestInterval getRuntime() {
     return runTimeInterval;
   }
 
@@ -194,11 +210,14 @@ class TestCaseNode extends TestNode implements TestPropertyExporter.Callback {
         .build();
   }
 
-  private TestResult buildDynamicResult(Description test, @Nullable Interval runTime,
-      TestResult.Status status) {
+  private TestResult buildDynamicResult(
+      Description test, @Nullable TestInterval runTime, TestResult.Status status) {
     // The dynamic test fails if the testcase itself fails or there is
     // a dynamic failure specifically for the dynamic test.
     List<Throwable> dynamicFailures = dynamicTestToFailures.get(test);
+    if (dynamicFailures == null) {
+      dynamicFailures = new ArrayList<>();
+    }
     boolean failed = !globalFailures.isEmpty() || !dynamicFailures.isEmpty();
     return new TestResult.Builder()
         .name(test.getDisplayName())

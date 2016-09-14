@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
+import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
@@ -35,7 +36,6 @@ import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.OsUtils;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
-
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -77,15 +77,7 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
         .getEventBus()
         .post(ActionStatusMessage.runningStrategy(spawn.getResourceOwner(), "standalone"));
 
-    int timeout = -1;
-    String timeoutStr = spawn.getExecutionInfo().get("timeout");
-    if (timeoutStr != null) {
-      try {
-        timeout = Integer.parseInt(timeoutStr);
-      } catch (NumberFormatException e) {
-        throw new UserExecException("could not parse timeout: ", e);
-      }
-    }
+    int timeoutSeconds = Spawns.getTimeoutSeconds(spawn);
 
     // We must wrap the subprocess with process-wrapper to kill the process tree.
     // All actions therefore depend on the process-wrapper file. Since it's embedded,
@@ -97,7 +89,7 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
       // Disable it for now to make the setup easier and to avoid further PATH hacks.
       // Ideally we should have a native implementation of process-wrapper for Windows.
       args.add(processWrapper.getPathString());
-      args.add(Integer.toString(timeout));
+      args.add(Integer.toString(timeoutSeconds));
       args.add("5"); /* kill delay: give some time to print stacktraces and whatnot. */
 
       // TODO(bazel-team): use process-wrapper redirection so we don't have to
@@ -108,8 +100,12 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
     args.addAll(spawn.getArguments());
 
     String cwd = executor.getExecRoot().getPathString();
-    Command cmd = new Command(args.toArray(new String[]{}),
-        locallyDeterminedEnv(spawn.getEnvironment()), new File(cwd));
+    Command cmd =
+        new Command(
+            args.toArray(new String[] {}),
+            locallyDeterminedEnv(execRoot, productName, spawn.getEnvironment()),
+            new File(cwd),
+            OS.getCurrent() == OS.WINDOWS && timeoutSeconds >= 0 ? timeoutSeconds * 1000 : -1);
 
     FileOutErr outErr = actionExecutionContext.getFileOutErr();
     try {
@@ -121,7 +117,8 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
           /*killSubprocessOnInterrupt*/ true);
     } catch (AbnormalTerminationException e) {
       TerminationStatus status = e.getResult().getTerminationStatus();
-      boolean timedOut = !status.exited() && (status.getTerminatingSignal() == 14 /* SIGALRM */);
+      boolean timedOut = !status.exited() && (
+          status.timedout() || status.getTerminatingSignal() == 14 /* SIGALRM */);
       String message =
           CommandFailureUtils.describeCommandFailure(
               verboseFailures, spawn.getArguments(), spawn.getEnvironment(), cwd);
@@ -147,18 +144,18 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
    * Adds to the given environment all variables that are dependent on system state of the host
    * machine.
    *
-   * <p> Admittedly, hermeticity is "best effort" in such cases; these environment values
-   * should be as tied to configuration parameters as possible.
+   * <p>Admittedly, hermeticity is "best effort" in such cases; these environment values should be
+   * as tied to configuration parameters as possible.
    *
-   * <p>For example, underlying iOS toolchains require that SDKROOT resolve to an absolute
-   * system path, but, when selecting which SDK to resolve, the version number comes from
-   * build configuration.
+   * <p>For example, underlying iOS toolchains require that SDKROOT resolve to an absolute system
+   * path, but, when selecting which SDK to resolve, the version number comes from build
+   * configuration.
    *
    * @return the new environment, comprised of the old environment plus any new variables
-   * @throws UserExecException if any variables dependent on system state could not be
-   *     resolved
+   * @throws UserExecException if any variables dependent on system state could not be resolved
    */
-  private ImmutableMap<String, String> locallyDeterminedEnv(ImmutableMap<String, String> env)
+  public static ImmutableMap<String, String> locallyDeterminedEnv(
+      Path execRoot, String productName, ImmutableMap<String, String> env)
       throws UserExecException {
     // TODO(bazel-team): Remove apple-specific logic from this class.
     ImmutableMap.Builder<String, String> newEnvBuilder = ImmutableMap.builder();
@@ -168,7 +165,9 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
     // should be explicitly set for build hermiticity.
     String developerDir = "";
     if (env.containsKey(AppleConfiguration.XCODE_VERSION_ENV_NAME)) {
-      developerDir = getDeveloperDir(env.get(AppleConfiguration.XCODE_VERSION_ENV_NAME));
+      developerDir =
+          getDeveloperDir(
+              execRoot, productName, env.get(AppleConfiguration.XCODE_VERSION_ENV_NAME));
       newEnvBuilder.put("DEVELOPER_DIR", developerDir);
     }
     if (env.containsKey(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME)) {
@@ -178,12 +177,15 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
       }
       String iosSdkVersion = env.get(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME);
       String appleSdkPlatform = env.get(AppleConfiguration.APPLE_SDK_PLATFORM_ENV_NAME);
-      newEnvBuilder.put("SDKROOT", getSdkRootEnv(developerDir, iosSdkVersion, appleSdkPlatform));
+      newEnvBuilder.put(
+          "SDKROOT",
+          getSdkRootEnv(execRoot, productName, developerDir, iosSdkVersion, appleSdkPlatform));
     }
     return newEnvBuilder.build();
   }
 
-  private String getDeveloperDir(String xcodeVersion) throws UserExecException {
+  private static String getDeveloperDir(Path execRoot, String productName, String xcodeVersion)
+      throws UserExecException {
     if (OS.getCurrent() != OS.DARWIN) {
       throw new UserExecException(
           "Cannot locate xcode developer directory on non-darwin operating system");
@@ -192,8 +194,13 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
         productName);
   }
 
-  private String getSdkRootEnv(String developerDir,
-      String iosSdkVersion, String appleSdkPlatform) throws UserExecException {
+  private static String getSdkRootEnv(
+      Path execRoot,
+      String productName,
+      String developerDir,
+      String iosSdkVersion,
+      String appleSdkPlatform)
+      throws UserExecException {
     if (OS.getCurrent() != OS.DARWIN) {
       throw new UserExecException("Cannot locate iOS SDK on non-darwin operating system");
     }

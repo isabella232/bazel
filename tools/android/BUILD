@@ -36,6 +36,11 @@ alias(
 )
 
 alias(
+    name = "resource_merger",
+    actual = "//src/tools/android/java/com/google/devtools/build/android:AndroidResourceMergingAction",
+)
+
+alias(
     name = "resource_parser",
     actual = "//src/tools/android/java/com/google/devtools/build/android:AndroidResourceParsingAction",
 )
@@ -43,6 +48,11 @@ alias(
 alias(
     name = "resource_shrinker",
     actual = "//src/tools/android/java/com/google/devtools/build/android:ResourceShrinkerAction",
+)
+
+alias(
+    name = "resource_validator",
+    actual = "//src/tools/android/java/com/google/devtools/build/android:AndroidResourceValidatorAction",
 )
 
 alias(
@@ -68,6 +78,23 @@ sh_binary(
 alias(
     name = "IdlClass",
     actual = "//src/tools/android/java/com/google/devtools/build/android/idlclass:IdlClass",
+)
+
+filegroup(
+    name = "jar_filter",
+    srcs = ["//src/tools/android/java/com/google/devtools/build/android/ideinfo:JarFilter_deploy.jar"],
+)
+
+java_binary(
+    name = "JarFilter",
+    main_class = "com.google.devtools.build.android.ideinfo.JarFilter",
+    visibility = ["//visibility:public"],
+    runtime_deps = [":jar_filter_import"],
+)
+
+java_import(
+    name = "jar_filter_import",
+    jars = [":jar_filter"],
 )
 
 filegroup(

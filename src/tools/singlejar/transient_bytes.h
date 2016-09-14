@@ -145,11 +145,16 @@ class TransientBytes {
   // Z_NO_COMPRESSION otherwise.
   uint16_t CompressOut(uint8_t *buffer, uint32_t *checksum,
                        uint64_t *bytes_written) {
+    *checksum = 0;
+    uint64_t to_compress = data_size();
+    if (to_compress == 0) {
+      *bytes_written = 0;
+      return Z_NO_COMPRESSION;
+    }
+
     Deflater deflater;
     deflater.next_out = buffer;
-    *checksum = 0;
     uint16_t compression_method = Z_DEFLATED;
-    uint64_t to_compress = data_size();
 
     // Feed data blocks to the deflater one by one, but break if the compressed
     // size exceeds the original size.
@@ -235,6 +240,18 @@ class TransientBytes {
       sink.operator()(data_block->data_, chunk_size);
       to_copy -= chunk_size;
     }
+  }
+
+  uint8_t last_byte() const {
+    if (!data_size()) {
+      diag_errx(1, "%s:%d: last_char() cannot be called if buffer is empty",
+                __FILE__, __LINE__);
+    }
+    if (free_size() >= sizeof(last_block_->data_)) {
+      diag_errx(1, "%s:%d: internal error: the last data block is empty",
+                __FILE__, __LINE__);
+    }
+    return *(last_block_->End() - free_size() - 1);
   }
 
  private:

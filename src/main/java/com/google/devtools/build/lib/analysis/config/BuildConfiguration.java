@@ -59,6 +59,7 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.util.CPU;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.lib.vfs.Path;
@@ -150,6 +151,14 @@ public final class BuildConfiguration {
      */
     @SuppressWarnings("unused")
     protected void addImplicitLabels(Multimap<String, Label> implicitLabels) {
+    }
+
+    /**
+     * Returns the roots used for the "all labels in the configuration must be reachable from the
+     * labels provided on the command line" sanity check.
+     */
+    public Iterable<Label> getSanityCheckRoots() {
+      return ImmutableList.of();
     }
 
     /**
@@ -373,13 +382,12 @@ public final class BuildConfiguration {
   }
 
   /**
-   * Converter for default --host_cpu to the auto-detected host cpu.
+   * Converter to auto-detect the cpu of the machine on which Bazel runs.
    *
-   * <p>This detects the host cpu of the Blaze's server but if the compilation happens in a
-   * compilation cluster then the host cpu of the compilation cluster might be different than
-   * the auto-detected one and the --host_cpu option must then be set explicitly.
+   * <p>If the compilation happens remotely then the cpu of the remote machine might be different
+   * from the auto-detected one and the --cpu and --host_cpu options must be set explicitly.
    */
-  public static class HostCpuConverter implements Converter<String> {
+  public static class AutoCpuConverter implements Converter<String> {
     @Override
     public String convert(String input) throws OptionsParsingException {
       if (input.isEmpty()) {
@@ -440,10 +448,6 @@ public final class BuildConfiguration {
    * simplest way to ensure that is to return the input string.
    */
   public static class Options extends FragmentOptions implements Cloneable {
-    public String getCpu() {
-      return cpu;
-    }
-
     @Option(
         name = "define",
         converter = Converters.AssignmentConverter.class,
@@ -455,8 +459,9 @@ public final class BuildConfiguration {
     public List<Map.Entry<String, String>> commandLineBuildVariables;
 
     @Option(name = "cpu",
-        defaultValue = "null",
+        defaultValue = "",
         category = "semantics",
+        converter = AutoCpuConverter.class,
         help = "The target CPU.")
     public String cpu;
 
@@ -548,7 +553,7 @@ public final class BuildConfiguration {
     @Option(name = "host_cpu",
         defaultValue = "",
         category = "semantics",
-        converter = HostCpuConverter.class,
+        converter = AutoCpuConverter.class,
         help = "The host CPU.")
     public String hostCpu;
 
@@ -594,6 +599,25 @@ public final class BuildConfiguration {
     )
     public List<Map.Entry<String, String>> testEnvironment;
 
+    // TODO(bazel-team): The set of available variables from the client environment for actions
+    // is computed independently in CommandEnvironment to inject a more restricted client
+    // environment to skyframe.
+    @Option(
+      name = "action_env",
+      converter = Converters.OptionalAssignmentConverter.class,
+      allowMultiple = true,
+      defaultValue = "",
+      category = "semantics",
+      help =
+          "Specifies the set of environment variables available available to actions. "
+              + "Variables can be either specified by name, in which case the value will be "
+              + "taken from the invocation environment, or by the name=value pair which sets "
+              + "the value independent of the invocation environment. This option can be used "
+              + "multiple times; for options given for the same variable, the latest wins, options "
+              + "for different variables accumulate."
+    )
+    public List<Map.Entry<String, String>> actionEnvironment;
+
     @Option(name = "collect_code_coverage",
         defaultValue = "false",
         category = "testing",
@@ -632,6 +656,14 @@ public final class BuildConfiguration {
             + "'//tools/test:coverage_report_generator'.")
     public Label coverageReportGenerator;
 
+    @Option(name = "experimental_use_llvm_covmap",
+        defaultValue = "false",
+        category = "experimental",
+        help = "If specified, Bazel will generate llvm-cov coverage map information rather than "
+            + "gcov when collect_code_coverage is enabled."
+    )
+    public boolean useLLVMCoverageMapFormat;
+
     @Option(name = "cache_test_results",
         defaultValue = "auto",
         category = "testing",
@@ -639,10 +671,10 @@ public final class BuildConfiguration {
         help = "If 'auto', Bazel will only rerun a test if any of the following conditions apply: "
             + "(1) Bazel detects changes in the test or its dependencies "
             + "(2) the test is marked as external "
-            + "(3) multiple test runs were requested with --runs_per_test"
-            + "(4) the test failed"
+            + "(3) multiple test runs were requested with --runs_per_test "
+            + "(4) the test failed "
             + "If 'yes', the caching behavior will be the same as 'auto' except that "
-            + "it may cache test failures and test runs with --runs_per_test."
+            + "it may cache test failures and test runs with --runs_per_test. "
             + "If 'no', all tests will be always executed.")
     public TriState cacheTestResults;
 
@@ -814,12 +846,6 @@ public final class BuildConfiguration {
         help = "Shows whether these options are set for host configuration.")
     public boolean isHost;
 
-    @Option(name = "experimental_proto_header_modules",
-        defaultValue = "false",
-        category = "undocumented",
-        help  = "Enables compilation of C++ header modules for proto libraries.")
-    public boolean protoHeaderModules;
-
     @Option(name = "features",
         allowMultiple = true,
         defaultValue = "",
@@ -946,17 +972,20 @@ public final class BuildConfiguration {
       Path execRoot = directories.getExecRoot();
       // configuration-specific output tree
       Path outputDir = directories.getOutputPath().getRelative(outputDirName);
-      this.outputDirectory = Root.asDerivedRoot(execRoot, outputDir);
+      this.outputDirectory = Root.asDerivedRoot(execRoot, outputDir, true);
 
       // specific subdirs under outputDirectory
-      this.binDirectory = Root.asDerivedRoot(execRoot, outputDir.getRelative("bin"));
-      this.genfilesDirectory = Root.asDerivedRoot(execRoot, outputDir.getRelative("genfiles"));
+      this.binDirectory = Root
+          .asDerivedRoot(execRoot, outputDir.getRelative("bin"), true);
+      this.genfilesDirectory = Root.asDerivedRoot(
+          execRoot, outputDir.getRelative("genfiles"), true);
       this.coverageMetadataDirectory = Root.asDerivedRoot(execRoot,
-          outputDir.getRelative("coverage-metadata"));
-      this.testLogsDirectory = Root.asDerivedRoot(execRoot, outputDir.getRelative("testlogs"));
-      this.includeDirectory = Root.asDerivedRoot(execRoot,
-          outputDir.getRelative(BlazeDirectories.RELATIVE_INCLUDE_DIR));
-      this.middlemanDirectory = Root.middlemanRoot(execRoot, outputDir);
+          outputDir.getRelative("coverage-metadata"), true);
+      this.testLogsDirectory = Root.asDerivedRoot(
+          execRoot, outputDir.getRelative("testlogs"), true);
+      this.includeDirectory = Root.asDerivedRoot(
+          execRoot, outputDir.getRelative(BlazeDirectories.RELATIVE_INCLUDE_DIR), true);
+      this.middlemanDirectory = Root.middlemanRoot(execRoot, outputDir, true);
     }
 
     @Override
@@ -1046,6 +1075,7 @@ public final class BuildConfiguration {
   private final ImmutableMap<String, String> globalMakeEnv;
 
   private final ImmutableMap<String, String> localShellEnvironment;
+  private final ImmutableSet<String> envVariables;
   private final BuildOptions buildOptions;
   private final Options options;
 
@@ -1164,12 +1194,33 @@ public final class BuildConfiguration {
     }
   }
 
-  private ImmutableMap<String, String> setupShellEnvironment() {
+  /**
+   * Compute the shell environment, which, at configuration level, is a pair consisting of the
+   * statically set environment variables with their values and the set of environment variables to
+   * be inherited from the client environment.
+   */
+  private Pair<ImmutableMap<String, String>, ImmutableSet<String>> setupShellEnvironment() {
     ImmutableMap.Builder<String, String> builder = new ImmutableMap.Builder<>();
     for (Fragment fragment : fragments.values()) {
       fragment.setupShellEnvironment(builder);
     }
-    return builder.build();
+    // Shell environment variables specified via options take precedence over the
+    // ones inherited from the fragments. In the long run, these fragments will
+    // be replaced by appropriate default rc files anyway.
+    Map<String, String> shellEnv = new TreeMap(builder.build());
+    for (Map.Entry<String, String> entry : options.actionEnvironment) {
+      shellEnv.put(entry.getKey(), entry.getValue());
+    }
+    Map<String, String> fixedShellEnv = new TreeMap(shellEnv);
+    Set<String> variableShellEnv = new HashSet();
+    for (Map.Entry<String, String> entry : shellEnv.entrySet()) {
+      if (entry.getValue() == null) {
+        String key = entry.getKey();
+        fixedShellEnv.remove(key);
+        variableShellEnv.add(key);
+      }
+    }
+    return Pair.of(ImmutableMap.copyOf(fixedShellEnv), ImmutableSet.copyOf(variableShellEnv));
   }
 
   /**
@@ -1241,7 +1292,10 @@ public final class BuildConfiguration {
         ? outputRoots
         : new OutputRoots(directories, outputDirName);
 
-    this.localShellEnvironment = setupShellEnvironment();
+    Pair<ImmutableMap<String, String>, ImmutableSet<String>> shellEnvironment =
+        setupShellEnvironment();
+    this.localShellEnvironment = shellEnvironment.getFirst();
+    this.envVariables = shellEnvironment.getSecond();
 
     this.transitiveOptionsMap = computeOptionsMap(buildOptions, fragments.values());
 
@@ -1250,15 +1304,7 @@ public final class BuildConfiguration {
       fragment.addGlobalMakeVariables(globalMakeEnvBuilder);
     }
 
-    // Lots of packages in third_party assume that BINMODE expands to either "-dbg", or "-opt". So
-    // for backwards compatibility we preserve that invariant, setting BINMODE to "-dbg" rather than
-    // "-fastbuild" if the compilation mode is "fastbuild".
-    // We put the real compilation mode in a new variable COMPILATION_MODE.
     globalMakeEnvBuilder.put("COMPILATION_MODE", options.compilationMode.toString());
-    globalMakeEnvBuilder.put("BINMODE", "-"
-        + ((options.compilationMode == CompilationMode.FASTBUILD)
-        ? "dbg"
-        : options.compilationMode.toString()));
     /*
      * Attention! Document these in the build-encyclopedia
      */
@@ -1876,8 +1922,8 @@ public final class BuildConfiguration {
   /**
    * Returns the bin directory for this build configuration.
    */
-  @SkylarkCallable(name = "bin_dir", structField = true,
-      doc = "The root corresponding to bin directory.")
+  @SkylarkCallable(name = "bin_dir", structField = true, documented = false)
+  @Deprecated
   public Root getBinDirectory() {
     return outputRoots.binDirectory;
   }
@@ -1913,8 +1959,8 @@ public final class BuildConfiguration {
   /**
    * Returns the genfiles directory for this build configuration.
    */
-  @SkylarkCallable(name = "genfiles_dir", structField = true,
-      doc = "The root corresponding to genfiles directory.")
+  @SkylarkCallable(name = "genfiles_dir", structField = true, documented = false)
+  @Deprecated
   public Root getGenfilesDirectory() {
     return outputRoots.genfilesDirectory;
   }
@@ -2004,14 +2050,18 @@ public final class BuildConfiguration {
   }
 
   @SkylarkCallable(
-      name = "default_shell_env",
-      structField = true,
-      doc = "A dictionary representing the local shell environment. It maps variables "
-          + "to their values (strings).  The local shell environment contains settings that are "
-          + "machine specific, therefore its use should be avoided in rules meant to be hermetic."
+    name = "default_shell_env",
+    structField = true,
+    doc =
+        "A dictionary representing the static local shell environment. It maps variables "
+            + "to their values (strings)."
   )
   public ImmutableMap<String, String> getLocalShellEnvironment() {
     return localShellEnvironment;
+  }
+
+  public ImmutableSet<String> getVariableShellEnvironment() {
+    return envVariables;
   }
 
   /**
@@ -2191,6 +2241,10 @@ public final class BuildConfiguration {
     return options.collectMicroCoverage;
   }
 
+  public boolean isLLVMCoverageMapFormatEnabled() {
+    return options.useLLVMCoverageMapFormat;
+  }
+
   public boolean isActionsEnabled() {
     return actionsEnabled;
   }
@@ -2347,13 +2401,6 @@ public final class BuildConfiguration {
     // TODO(bazel-team): enforce the above automatically (without having to explicitly check
     // for dynamic configuration mode).
     return useDynamicConfigurations() ? this : transitions.getArtifactOwnerConfiguration();
-  }
-
-  /**
-   * @return whether proto header modules should be built.
-   */
-  public boolean getProtoHeaderModules() {
-    return options.protoHeaderModules;
   }
 
   /**

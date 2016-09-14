@@ -322,7 +322,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   }
 
   private ImmutableMap<SkyFunctionName, SkyFunction> skyFunctions(
-      Root buildDataDirectory,
       PackageFactory pkgFactory,
       Predicate<PathFragment> allowedMissingInputs) {
     ConfiguredRuleClassProvider ruleClassProvider =
@@ -398,8 +397,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(SkyFunctions.ASPECT_COMPLETION, CompletionFunction.aspectCompletionFunction(eventBus));
     map.put(SkyFunctions.TEST_COMPLETION, new TestCompletionFunction());
     map.put(SkyFunctions.ARTIFACT, new ArtifactFunction(allowedMissingInputs));
-    map.put(SkyFunctions.BUILD_INFO_COLLECTION, new BuildInfoCollectionFunction(artifactFactory,
-        buildDataDirectory));
+    map.put(SkyFunctions.BUILD_INFO_COLLECTION, new BuildInfoCollectionFunction(artifactFactory));
     map.put(SkyFunctions.BUILD_INFO, new WorkspaceStatusFunction());
     map.put(SkyFunctions.COVERAGE_REPORT, new CoverageReportFunction());
     ActionExecutionFunction actionExecutionFunction =
@@ -529,7 +527,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   protected void init() {
     progressReceiver = newSkyframeProgressReceiver();
     ImmutableMap<SkyFunctionName, SkyFunction> skyFunctions =
-        skyFunctions(directories.getBuildDataDirectory(), pkgFactory, allowedMissingInputs);
+        skyFunctions(pkgFactory, allowedMissingInputs);
     memoizingEvaluator = evaluatorSupplier.create(
         skyFunctions, evaluatorDiffer(), progressReceiver, emittedEventState,
         hasIncrementalState());
@@ -621,10 +619,10 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     PrecomputedValue.DEFAULTS_PACKAGE_CONTENTS.set(injectable(), defaultsPackageContents);
   }
 
-  public void injectWorkspaceStatusData() {
+  public void injectWorkspaceStatusData(String workspaceName) {
     PrecomputedValue.WORKSPACE_STATUS_KEY.set(injectable(),
         workspaceStatusActionFactory.createWorkspaceStatusAction(
-            artifactFactory.get(), WorkspaceStatusValue.ARTIFACT_OWNER, buildId));
+            artifactFactory.get(), WorkspaceStatusValue.ARTIFACT_OWNER, buildId, workspaceName));
   }
 
   public void injectCoverageReportData(ImmutableList<ActionAnalysisMetadata> actions) {
@@ -685,6 +683,10 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   public void setCommandId(UUID commandId) {
     PrecomputedValue.BUILD_ID.set(injectable(), commandId);
     buildId.set(commandId);
+  }
+
+  protected void setPrecomputedClientEnv(Map<String, String> clientEnv) {
+    PrecomputedValue.CLIENT_ENV.set(injectable(), clientEnv);
   }
 
   /** Returns the build-info.txt and build-changelist.txt artifacts. */
@@ -749,7 +751,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       ContainingPackageLookupValue value = result.get(ContainingPackageLookupValue.key(
           PackageIdentifier.createInMainRepo(forFiles ? execPath.getParentDirectory() : execPath)));
       if (value.hasContainingPackage()) {
-        roots.put(execPath, Root.asSourceRoot(value.getContainingPackageRoot()));
+        roots.put(execPath, Root.asSourceRoot(value.getContainingPackageRoot(),
+            value.getContainingPackageName().getRepository().isMain()));
       } else {
         roots.put(execPath, null);
       }
@@ -892,11 +895,16 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
    *
    * <p>MUST be run before every incremental build.
    */
-  @VisibleForTesting  // productionVisibility = Visibility.PRIVATE
-  public void preparePackageLoading(PathPackageLocator pkgLocator, RuleVisibility defaultVisibility,
-                                    boolean showLoadingProgress, int globbingThreads,
-                                    String defaultsPackageContents, UUID commandId,
-                                    TimestampGranularityMonitor tsgm) {
+  @VisibleForTesting // productionVisibility = Visibility.PRIVATE
+  public void preparePackageLoading(
+      PathPackageLocator pkgLocator,
+      RuleVisibility defaultVisibility,
+      boolean showLoadingProgress,
+      int globbingThreads,
+      String defaultsPackageContents,
+      UUID commandId,
+      Map<String, String> clientEnv,
+      TimestampGranularityMonitor tsgm) {
     Preconditions.checkNotNull(pkgLocator);
     Preconditions.checkNotNull(tsgm);
     setActive(true);
@@ -904,6 +912,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     this.tsgm.set(tsgm);
     maybeInjectPrecomputedValuesForAnalysis();
     setCommandId(commandId);
+    setPrecomputedClientEnv(clientEnv);
     setBlacklistedPackagePrefixesFile(getBlacklistedPackagePrefixesFile());
     setShowLoadingProgress(showLoadingProgress);
     setDefaultVisibility(defaultVisibility);
@@ -966,6 +975,10 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
    */
   public void setEventBus(EventBus eventBus) {
     this.eventBus.set(eventBus);
+  }
+
+  public void setClientEnv(Map<String, String> clientEnv) {
+    this.skyframeActionExecutor.setClientEnv(clientEnv);
   }
 
   /**
@@ -1372,7 +1385,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       EventHandler eventHandler, Label label, BuildConfiguration configuration) {
     if (memoizingEvaluator.getExistingValueForTesting(
         PrecomputedValue.WORKSPACE_STATUS_KEY.getKeyForTesting()) == null) {
-      injectWorkspaceStatusData();
+      injectWorkspaceStatusData(label.getWorkspaceRoot());
     }
 
     Dependency dep;
@@ -1624,25 +1637,30 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return memoizingEvaluator;
   }
 
-  /**
-   * Stores the set of loaded packages and, if needed, evicts ConfiguredTarget values.
-   *
-   * <p>The set represents all packages from the transitive closure of the top-level targets from
-   * the latest build.
-   */
-  @ThreadCompatible
-  public abstract void updateLoadedPackageSet(Set<PackageIdentifier> loadedPackages);
-
-  public void sync(EventHandler eventHandler, PackageCacheOptions packageCacheOptions,
-      Path outputBase, Path workingDirectory, String defaultsPackageContents, UUID commandId,
+  public void sync(
+      EventHandler eventHandler,
+      PackageCacheOptions packageCacheOptions,
+      Path outputBase,
+      Path workingDirectory,
+      String defaultsPackageContents,
+      UUID commandId,
+      Map<String, String> clientEnv,
       TimestampGranularityMonitor tsgm)
-          throws InterruptedException, AbruptExitException{
+      throws InterruptedException, AbruptExitException {
     preparePackageLoading(
         createPackageLocator(
-            eventHandler, packageCacheOptions, outputBase, directories.getWorkspace(),
+            eventHandler,
+            packageCacheOptions,
+            outputBase,
+            directories.getWorkspace(),
             workingDirectory),
-        packageCacheOptions.defaultVisibility, packageCacheOptions.showLoadingProgress,
-        packageCacheOptions.globbingThreads, defaultsPackageContents, commandId, tsgm);
+        packageCacheOptions.defaultVisibility,
+        packageCacheOptions.showLoadingProgress,
+        packageCacheOptions.globbingThreads,
+        defaultsPackageContents,
+        commandId,
+        clientEnv,
+        tsgm);
     setDeletedPackages(packageCacheOptions.getDeletedPackages());
 
     incrementalBuildMonitor = new SkyframeIncrementalBuildMonitor();
@@ -1760,10 +1778,16 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     }
 
     @Override
-    public LoadingResult execute(EventHandler eventHandler, EventBus eventBus,
-        List<String> targetPatterns, PathFragment relativeWorkingDirectory, LoadingOptions options,
-        ListMultimap<String, Label> labelsToLoadUnconditionally, boolean keepGoing,
-        boolean enableLoading, boolean determineTests, @Nullable LoadingCallback callback)
+    public LoadingResult execute(
+        EventHandler eventHandler,
+        EventBus eventBus,
+        List<String> targetPatterns,
+        PathFragment relativeWorkingDirectory,
+        LoadingOptions options,
+        ListMultimap<String, Label> labelsToLoadUnconditionally,
+        boolean keepGoing,
+        boolean determineTests,
+        @Nullable LoadingCallback callback)
         throws TargetParsingException, LoadingFailedException, InterruptedException {
       Stopwatch timer = Stopwatch.createStarted();
       SkyKey key = TargetPatternPhaseValue.key(ImmutableList.copyOf(targetPatterns),

@@ -16,6 +16,7 @@
 #define SRC_TOOLS_SINGLEJAR_COMBINED_JAR_H_
 
 #include <stdint.h>
+#include <stdio.h>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -34,12 +35,32 @@ class OutputJar {
   // Do all that needs to be done. Can be called only once.
   int Doit(Options *options);
   // Destructor.
-  ~OutputJar();
+  virtual ~OutputJar();
   // Add a combiner to handle the entries with given name. OutputJar will
   // own the instance of the combiner and will delete it on self destruction.
   void ExtraCombiner(const std::string& entry_name, Combiner *combiner);
+  // Additional file handler to be redefined by a subclass.
+  virtual void ExtraHandler(const CDH *entry);
   // Return jar path.
   const char *path() const { return options_->output_jar.c_str(); }
+
+ protected:
+  // The purpose  of these two tiny utility methods is to avoid creating a
+  // std::string instance (which always involves allocating an object on the
+  // heap) when we just need to check that a sequence of bytes in memory has
+  // given prefix or suffix.
+  static bool begins_with(const char *str, size_t n, const char *head) {
+    const size_t n_head = strlen(head);
+    return n >= n_head && !strncmp(str, head, n_head);
+  }
+  static bool ends_with(const char *str, size_t n, const char *tail) {
+    const size_t n_tail = strlen(tail);
+    return n >= n_tail && !strncmp(str + n - n_tail, tail, n_tail);
+  }
+  // True if an entry with given name have not been added to this archive.
+  bool NewEntry(const std::string& entry_name) {
+    return known_members_.count(entry_name) == 0;
+  }
 
  private:
   // Open output jar.
@@ -63,23 +84,11 @@ class OutputJar {
   // Set classpath resource with given resource name and path.
   void ClasspathResource(const std::string& resource_name,
                          const std::string& resource_path);
-  // Copy the bytes from the given file.
-  ssize_t AppendFile(int in_fd, off_t *in_offset, size_t count);
+  // Copy 'count' bytes starting at 'offset' from the given file.
+  ssize_t AppendFile(int in_fd, off_t offset, size_t count);
   // Write bytes to the output file, return true on success.
-  bool WriteBytes(uint8_t *buffer, size_t count);
+  bool WriteBytes(void *buffer, size_t count);
 
-  // The purpose  of these two tiny utility methods is to avoid creating a
-  // std::string instance (which always involves allocating an object on the
-  // heap) when we just need to check that a sequence of bytes in memory has
-  // given prefix or suffix.
-  static bool begins_with(const char *str, size_t n, const char *head) {
-    const size_t n_head = strlen(head);
-    return n >= n_head && !strncmp(str, head, n_head);
-  }
-  static bool ends_with(const char *str, size_t n, const char *tail) {
-    const size_t n_tail = strlen(tail);
-    return n >= n_tail && !strncmp(str + n - n_tail, tail, n_tail);
-  }
 
   Options *options_;
   struct EntryInfo {
@@ -90,7 +99,9 @@ class OutputJar {
   };
 
   std::unordered_map<std::string, struct EntryInfo> known_members_;
-  int fd_;
+  FILE *file_;
+  off_t outpos_;
+  std::unique_ptr<char[]> buffer_;
   int entries_;
   int duplicate_entries_;
   uint8_t *cen_;

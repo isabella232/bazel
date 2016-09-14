@@ -43,7 +43,15 @@ public final class BinTools {
   private BinTools(BlazeDirectories directories, ImmutableList<String> tools) {
     this.directories = directories;
     this.binDir = directories.getExecRoot().getRelative("_bin");
-    this.embeddedTools = tools;
+    ImmutableList.Builder<String> builder = ImmutableList.builder();
+    // Files under embedded_tools shouldn't be copied to under _bin dir
+    // They won't be used during action execution time.
+    for (String tool : tools) {
+      if (!tool.startsWith("embedded_tools/")) {
+        builder.add(tool);
+      }
+    }
+    this.embeddedTools = builder.build();
   }
 
   /**
@@ -137,7 +145,7 @@ public final class BinTools {
   public Artifact getEmbeddedArtifact(String embedPath, ArtifactFactory artifactFactory) {
     PathFragment path = getExecPath(embedPath);
     Preconditions.checkNotNull(path, embedPath + " not found in embedded tools");
-    return artifactFactory.getDerivedArtifact(path);
+    return artifactFactory.getDerivedArtifact(path, binDir.getParentDirectory());
   }
 
   public ImmutableList<Artifact> getAllEmbeddedArtifacts(ArtifactFactory artifactFactory) {

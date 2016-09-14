@@ -16,10 +16,19 @@ filegroup(
 )
 
 sh_test(
+    name = "progress_reporting_test",
+    size = "medium",
+    srcs = ["progress_reporting_test.sh"],
+    data = [":test-deps"],
+    shard_count = 4,
+)
+
+sh_test(
     name = "runfiles_test",
     size = "medium",
     srcs = ["runfiles_test.sh"],
     data = [":test-deps"],
+    tags = ["local"],
 )
 
 sh_test(
@@ -39,6 +48,67 @@ sh_test(
 )
 
 sh_test(
+    name = "startup_options_test",
+    size = "medium",
+    srcs = ["startup_options_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "run_test",
+    size = "medium",
+    srcs = ["run_test.sh"],
+    data = [":test-deps"],
+    shard_count = 3,
+)
+
+sh_test(
+    name = "discard_analysis_cache_test",
+    size = "medium",
+    srcs = ["discard_analysis_cache_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "output_filter_test",
+    size = "medium",
+    srcs = ["output_filter_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "bazel_testjobs_test",
+    srcs = ["bazel_testjobs_test.sh"],
+    data = [":test-deps"],
+    shard_count = 3,
+)
+
+sh_test(
+    name = "bazel_query_test",
+    size = "medium",
+    srcs = ["bazel_query_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "bazel_command_log_test",
+    size = "medium",
+    srcs = ["bazel_command_log_test.sh"],
+    data = [":test-deps"],
+    shard_count = 4,
+)
+
+sh_test(
+    name = "ide_info_generation",
+    size = "medium",
+    srcs = ["ide_info_generation.sh"],
+    data = [
+        ":test-deps",
+        "//src/tools/android/java/com/google/devtools/build/android/ideinfo:PackageParser",
+    ],
+)
+
+sh_test(
     name = "ui_test",
     size = "medium",
     srcs = ["ui_test.sh"],
@@ -50,6 +120,21 @@ sh_test(
     size = "medium",
     srcs = ["rc_options_test.sh"],
     data = [":test-deps"],
+)
+
+sh_test(
+    name = "action_env_test",
+    size = "medium",
+    srcs = ["action_env_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "discard_graph_edges_test",
+    size = "medium",
+    srcs = ["discard_graph_edges_test.sh"],
+    data = [":test-deps"],
+    shard_count = 5,
 )
 
 test_suite(

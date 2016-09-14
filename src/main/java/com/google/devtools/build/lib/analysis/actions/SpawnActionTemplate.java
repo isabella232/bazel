@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.analysis.actions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
-import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Actions;
@@ -30,7 +29,6 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
-
 import java.util.Map;
 
 /**
@@ -168,7 +166,8 @@ public final class SpawnActionTemplate implements ActionAnalysisMetadata {
         getOwner(),
         /*defaultShellEnvironment=*/ null,
         /*defaultShellExecutable=*/ null,
-        /*paramsFile=*/ null);
+        /*paramsFile=*/ null,
+        /*paramFileWriteAction=*/ null);
   }
 
   private static void checkActionAndArtifactConflicts(Iterable<ActionAnalysisMetadata> actions)
@@ -262,6 +261,13 @@ public final class SpawnActionTemplate implements ActionAnalysisMetadata {
   @Override
   public Artifact getPrimaryOutput() {
     return outputTreeArtifact;
+  }
+
+  @Override
+  public Iterable<String> getClientEnvironmentVariables() {
+    return spawnActionBuilder
+        .buildSpawnAction(getOwner(), null, null, null, null)
+        .getClientEnvironmentVariables();
   }
 
   @Override

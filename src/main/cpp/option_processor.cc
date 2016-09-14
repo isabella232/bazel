@@ -27,6 +27,7 @@
 #include "src/main/cpp/blaze_util_platform.h"
 #include "src/main/cpp/util/file.h"
 #include "src/main/cpp/util/strings.h"
+#include "src/main/cpp/workspace_layout.h"
 
 using std::list;
 using std::map;
@@ -38,7 +39,7 @@ extern char **environ;
 
 namespace blaze {
 
-constexpr char BlazeStartupOptions::WorkspacePrefix[];
+constexpr char WorkspaceLayout::WorkspacePrefix[];
 
 OptionProcessor::RcOption::RcOption(int rcfile_index, const string& option)
     : rcfile_index_(rcfile_index), option_(option) {
@@ -109,9 +110,9 @@ blaze_exit_code::ExitCode OptionProcessor::RcFile::Parse(
 
     if (command == "import") {
       if (words.size() != 2
-          || (words[1].compare(0, BlazeStartupOptions::WorkspacePrefixLength,
-                               BlazeStartupOptions::WorkspacePrefix) == 0
-              && !BlazeStartupOptions::WorkspaceRelativizeRcFilePath(
+          || (words[1].compare(0, WorkspaceLayout::WorkspacePrefixLength,
+                               WorkspaceLayout::WorkspacePrefix) == 0
+              && !WorkspaceLayout::WorkspaceRelativizeRcFilePath(
                   workspace, &words[1]))) {
         blaze_util::StringPrintf(error,
             "Invalid import declaration in .blazerc file '%s': '%s'",
@@ -237,18 +238,24 @@ blaze_exit_code::ExitCode OptionProcessor::ParseOptions(
     }
   }
 
+  blaze_exit_code::ExitCode validate_startup_options_exit_code =
+      BlazeStartupOptions::ValidateStartupOptions(args, error);
+  if (validate_startup_options_exit_code != blaze_exit_code::SUCCESS) {
+    return validate_startup_options_exit_code;
+  }
+
   // Parse depot and user blazerc files.
   // This is a little inefficient (copying a multimap around), but it is a
   // small one and this way I don't have to care about memory management.
   vector<string> candidate_blazerc_paths;
   if (use_master_blazerc) {
-    BlazeStartupOptions::FindCandidateBlazercPaths(workspace, cwd, args[0],
-                                                   &candidate_blazerc_paths);
+    WorkspaceLayout::FindCandidateBlazercPaths(workspace, cwd, args,
+                                               &candidate_blazerc_paths);
   }
 
   string user_blazerc_path;
   blaze_exit_code::ExitCode find_blazerc_exit_code = FindUserBlazerc(
-      blazerc, BlazeStartupOptions::RcBasename(), workspace, &user_blazerc_path,
+      blazerc, WorkspaceLayout::RcBasename(), workspace, &user_blazerc_path,
       error);
   if (find_blazerc_exit_code != blaze_exit_code::SUCCESS) {
     return find_blazerc_exit_code;
@@ -423,10 +430,12 @@ void OptionProcessor::AddRcfileArgsAndOptions(bool batch, const string& cwd) {
       int pos = env_str.find("=");
       if (pos != string::npos) {
         string name = env_str.substr(0, pos);
-        if (name == "PATH" || name == "TMP") {
-          string value = env_str.substr(pos + 1);
-          value = ConvertPathList(value);
-          env_str = name + "=" + value;
+        if (name == "PATH") {
+          env_str = "PATH=" + ConvertPathList(env_str.substr(pos + 1));
+        } else if (name == "TMP") {
+          // A valid Windows path "c:/foo" is also a valid Unix path list of
+          // ["c", "/foo"] so must use ConvertPath here. See GitHub issue #1684.
+          env_str = "TMP=" + ConvertPath(env_str.substr(pos + 1));
         }
       }
       command_arguments_.push_back("--client_env=" + env_str);
@@ -434,8 +443,7 @@ void OptionProcessor::AddRcfileArgsAndOptions(bool batch, const string& cwd) {
   }
   command_arguments_.push_back("--client_cwd=" + blaze::ConvertPath(cwd));
 
-  const char *emacs = getenv("EMACS");
-  if (emacs != NULL && strcmp(emacs, "t") == 0) {
+  if (IsEmacsTerminal()) {
     command_arguments_.push_back("--emacs");
   }
 }

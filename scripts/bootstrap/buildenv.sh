@@ -59,7 +59,8 @@ esac
 # Fix TMPDIR on msys
 case "${PLATFORM}" in
 msys*|mingw*)
-  TMPDIR=${TMPDIR:-$(cygpath -m $TMP)}
+  default_tmp=${TMP:-$(cygpath -W)/Temp}
+  TMPDIR=$(cygpath -ml "${TMPDIR:-$default_tmp}")
 esac
 
 
@@ -157,7 +158,7 @@ function fail() {
     exitCode=1
   fi
   echo >&2
-  echo "$1" >&2
+  echo "$@" >&2
   exit $exitCode
 }
 
@@ -245,10 +246,12 @@ function get_java_version() {
     || fail "JAVA_HOME ($JAVA_HOME) is not a path to a working JDK."
 
   JAVAC_VERSION=$("${JAVAC}" -version 2>&1)
-  if [[ "$JAVAC_VERSION" =~ ^"javac "(1\.([789]|[1-9][0-9])).*$ ]]; then
+  if [[ "$JAVAC_VERSION" =~ javac\ (1\.([789]|[1-9][0-9])).*$ ]]; then
     JAVAC_VERSION=${BASH_REMATCH[1]}
   else
-    fail "Cannot determine JDK version, please set \$JAVA_HOME."
+    fail \
+      "Cannot determine JDK version, please set \$JAVA_HOME.\n" \
+      "\$JAVAC_VERSION is \"${JAVAC_VERSION}\""
   fi
 }
 

@@ -82,7 +82,7 @@ public class MethodLibrary {
     return str.substring(start, stop);
   }
 
-  private static int getListIndex(int index, int listSize, Location loc)
+  public static int getListIndex(int index, int listSize, Location loc)
       throws ConversionException, EvalException {
     // Get the nth element in the list
     if (index < 0) {
@@ -159,7 +159,7 @@ public class MethodLibrary {
             + "are removed."
             + "<pre class=\"language-python\">"
             + "\"abcba\".lstrip(\"ba\") == \"cba\""
-            + "</pre",
+            + "</pre>",
     parameters = {
       @Param(name = "self", type = String.class, doc = "This string"),
       @Param(
@@ -186,7 +186,7 @@ public class MethodLibrary {
             + "are removed."
             + "<pre class=\"language-python\">"
             + "\"abcba\".rstrip(\"ba\") == \"abc\""
-            + "</pre",
+            + "</pre>",
     parameters = {
       @Param(name = "self", type = String.class, doc = "This string"),
       @Param(
@@ -213,7 +213,7 @@ public class MethodLibrary {
             + "are removed."
             + "<pre class=\"language-python\">"
             + "\"abcba\".strip(\"ba\") == \"abc\""
-            + "</pre",
+            + "</pre>",
     parameters = {
       @Param(name = "self", type = String.class, doc = "This string"),
       @Param(
@@ -623,7 +623,7 @@ public class MethodLibrary {
   };
 
   @SkylarkSignature(name = "splitlines", objectType = StringModule.class,
-      returnType = MutableList.class,
+      returnType = SkylarkList.class,
       doc =
       "Splits the string at line boundaries ('\\n', '\\r\\n', '\\r') "
       + "and returns the result as a list.",
@@ -633,7 +633,7 @@ public class MethodLibrary {
               doc = "Whether the line breaks should be included in the resulting list.")})
   private static final BuiltinFunction splitLines = new BuiltinFunction("splitlines") {
     @SuppressWarnings("unused")
-    public MutableList<String> invoke(String self, Boolean keepEnds) throws EvalException {
+    public SkylarkList<String> invoke(String self, Boolean keepEnds) throws EvalException {
       List<String> result = new ArrayList<>();
       Matcher matcher = SPLIT_LINES_PATTERN.matcher(self);
       while (matcher.find()) {
@@ -649,7 +649,7 @@ public class MethodLibrary {
           result.add(line);
         }
       }
-      return new MutableList(result);
+      return SkylarkList.createImmutable(result);
     }
   };
 
@@ -2322,13 +2322,13 @@ public class MethodLibrary {
 
   static final List<BaseFunction> buildGlobalFunctions =
       ImmutableList.<BaseFunction>of(
-          all, any, bool, dict, enumerate, int_, len, list, max, min, minus, range, repr, reversed,
-          select, set, sorted, str, zip);
+          all, any, bool, dict, fail, enumerate, int_, len, list, max, min, minus, print, range,
+          repr, reversed, select, set, sorted, str, zip);
 
   static final List<BaseFunction> skylarkGlobalFunctions =
       ImmutableList.<BaseFunction>builder()
           .addAll(buildGlobalFunctions)
-          .add(dir, fail, getattr, hasattr, hash, print, type)
+          .add(dir, getattr, hasattr, hash, type)
           .build();
 
   /**

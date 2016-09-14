@@ -56,8 +56,6 @@ import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.TriState;
-import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
-import com.google.devtools.build.lib.rules.apple.AppleToolchain.RequiresXcodeConfigRule;
 import com.google.devtools.build.lib.rules.cpp.CcIncLibraryRule;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
@@ -95,6 +93,7 @@ public class BazelCppRuleClasses {
         "cc_inc_library",
         "cc_library",
         "objc_library",
+        "experimental_objc_library",
       };
 
   private static final RuleClass.Configurator<BuildConfiguration, Rule> LIPO_ON_DEMAND =
@@ -393,13 +392,18 @@ public class BazelCppRuleClasses {
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
           .add(attr("nocopts", STRING))
           /*<!-- #BLAZE_RULE($cc_rule).ATTRIBUTE(linkstatic) -->
-           Link the binary in mostly-static mode.
-           By default this option is on for <code>cc_binary</code> and off for <code>cc_test</code>.
+           For <a href="${link cc_binary}"><code>cc_binary</code></a> and
+           <a href="${link cc_test}"><code>cc_test</code></a>: link the binary in mostly-static
+           mode. For <code>cc_library.link_static</code>: see below.
            <p>
-             If enabled, this tells the build tool to link in <code>.a</code>'s instead of
-             <code>.so</code>'s for user libraries whenever possible. Some system libraries may
-             still be linked dynamically, as are libraries for which there's no static library. So
-             the resulting binary will be dynamically linked, hence only <i>mostly</i> static.
+             By default this option is on for <code>cc_binary</code> and off for the rest.
+           </p>
+           <p>
+             If enabled and this is a binary or test, this option tells the build tool to link in
+             <code>.a</code>'s instead of <code>.so</code>'s for user libraries whenever possible.
+             Some system libraries may still be linked dynamically, as are libraries for which
+             there's no static library. So the resulting binary will be dynamically linked, hence
+             only <i>mostly</i> static.
            </p>
            <p>There are really three different ways to link an executable:</p>
            <ul>
@@ -417,7 +421,7 @@ public class BazelCppRuleClasses {
            </ul>
            <p>
            The <code>linkstatic</code> attribute has a different meaning if used on a
-           <a href="#cc_library"><code>cc_library()</code></a> rule.
+           <a href="${link cc_library}"><code>cc_library()</code></a> rule.
            For a C++ library, <code>linkstatic=1</code> indicates that only
            static linking is allowed, so no <code>.so</code> will be produced.
            </p>
@@ -499,7 +503,7 @@ public class BazelCppRuleClasses {
       return RuleDefinition.Metadata.builder()
           .name("$cc_binary_base")
           .type(RuleClassType.ABSTRACT)
-          .ancestors(CcRule.class, RequiresXcodeConfigRule.class)
+          .ancestors(CcRule.class)
           .build();
     }
   }
@@ -511,7 +515,7 @@ public class BazelCppRuleClasses {
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
-          .requiresConfigurationFragments(CppConfiguration.class, AppleConfiguration.class)
+          .requiresConfigurationFragments(CppConfiguration.class)
           /*<!-- #BLAZE_RULE(cc_binary).IMPLICIT_OUTPUTS -->
           <ul>
           <li><code><var>name</var>.stripped</code> (only built if explicitly requested): A stripped
@@ -554,6 +558,7 @@ public class BazelCppRuleClasses {
           .cfg(LIPO_ON_DEMAND)
           .build();
     }
+
     @Override
     public Metadata getMetadata() {
       return RuleDefinition.Metadata.builder()
@@ -634,6 +639,7 @@ public class BazelCppRuleClasses {
           .add(attr("linkstamp", LABEL).allowedFileTypes(CPP_SOURCE, C_SOURCE))
           .build();
     }
+
     @Override
     public Metadata getMetadata() {
       return RuleDefinition.Metadata.builder()
@@ -654,7 +660,7 @@ public class BazelCppRuleClasses {
           // TODO: Google cc_library overrides documentation for:
           // deps, data, linkopts, defines, srcs; override here too?
 
-          .requiresConfigurationFragments(CppConfiguration.class, AppleConfiguration.class)
+          .requiresConfigurationFragments(CppConfiguration.class)
           /*<!-- #BLAZE_RULE(cc_library).ATTRIBUTE(alwayslink) -->
           If 1, any binary that depends (directly or indirectly) on this C++
           library will link in all the object files for the files listed in
@@ -669,11 +675,12 @@ public class BazelCppRuleClasses {
               .nonconfigurable("value is referenced in an ImplicitOutputsFunction"))
           .build();
     }
+
     @Override
     public Metadata getMetadata() {
       return RuleDefinition.Metadata.builder()
           .name("cc_library")
-          .ancestors(CcLibraryBaseRule.class, RequiresXcodeConfigRule.class)
+          .ancestors(CcLibraryBaseRule.class)
           .factoryClass(BazelCcLibrary.class)
           .build();
     }

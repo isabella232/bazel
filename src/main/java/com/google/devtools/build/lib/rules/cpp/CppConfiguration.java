@@ -271,7 +271,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
 
   private final CcToolchainFeatures toolchainFeatures;
   private final boolean supportsGoldLinker;
-  private final boolean supportsThinArchives;
   private final boolean supportsStartEndLib;
   private final boolean supportsDynamicLinker;
   private final boolean supportsInterfaceSharedObjects;
@@ -324,7 +323,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
   private final ImmutableList<String> objcopyOptions;
   private final ImmutableList<String> ldOptions;
   private final ImmutableList<String> arOptions;
-  private final ImmutableList<String> arThinArchivesOptions;
 
   private final ImmutableMap<String, String> additionalMakeVariables;
 
@@ -335,6 +333,7 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
   private final boolean stripBinaries;
   private final String solibDirectory;
   private final CompilationMode compilationMode;
+  private final boolean useLLVMCoverageMap;
 
   /**
    *  If true, the ConfiguredTarget is only used to get the necessary cross-referenced
@@ -355,10 +354,11 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
     this.crosstoolTop = params.crosstoolTop;
     this.ccToolchainLabel = params.ccToolchainLabel;
     this.compilationMode = params.commonOptions.compilationMode;
+    this.useLLVMCoverageMap = params.commonOptions.useLLVMCoverageMapFormat;
     this.lipoContextCollector = cppOptions.lipoCollector;
 
 
-    this.crosstoolTopPathFragment = crosstoolTop.getPackageIdentifier().getSourceRoot();
+    this.crosstoolTopPathFragment = crosstoolTop.getPackageIdentifier().getPathUnderExecRoot();
 
     try {
       this.staticRuntimeLibsLabel =
@@ -409,7 +409,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
     toolchain = addLegacyFeatures(toolchain);
     this.toolchainFeatures = new CcToolchainFeatures(toolchain);
     this.supportsGoldLinker = toolchain.getSupportsGoldLinker();
-    this.supportsThinArchives = toolchain.getSupportsThinArchives();
     this.supportsStartEndLib = toolchain.getSupportsStartEndLib();
     this.supportsInterfaceSharedObjects = toolchain.getSupportsInterfaceSharedObjects();
     this.supportsEmbeddedRuntimes = toolchain.getSupportsEmbeddedRuntimes();
@@ -515,8 +514,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
     this.objcopyOptions = ImmutableList.copyOf(toolchain.getObjcopyEmbedFlagList());
     this.ldOptions = ImmutableList.copyOf(toolchain.getLdEmbedFlagList());
     this.arOptions = copyOrDefaultIfEmpty(toolchain.getArFlagList(), "rcsD");
-    this.arThinArchivesOptions = copyOrDefaultIfEmpty(
-        toolchain.getArThinArchivesFlagList(), "rcsDT");
 
     this.abi = toolchain.getAbiVersion();
     this.abiGlibcVersion = toolchain.getAbiLibcVersion();
@@ -850,29 +847,32 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
             toolchainBuilder);
       }
       if (!features.contains("include_paths")) {
-        TextFormat.merge(""
-            + "feature {"
-            + "  name: 'include_paths'"
-            + "  flag_set {"
-            + "    action: 'preprocess-assemble'"
-            + "    action: 'c-compile'"
-            + "    action: 'c++-compile'"
-            + "    action: 'c++-header-parsing'"
-            + "    action: 'c++-header-preprocessing'"
-            + "    action: 'c++-module-compile'"
-            + "    flag_group {"
-            + "      flag: '-iquote'"
-            + "      flag: '%{quote_include_paths}'"
-            + "    }"
-            + "    flag_group {"
-            + "      flag: '-I%{include_paths}'"
-            + "    }"
-            + "    flag_group {"
-            + "      flag: '-isystem'"
-            + "      flag: '%{system_include_paths}'"
-            + "    }"
-            + "  }"
-            + "}",
+        TextFormat.merge(
+            ""
+                + "feature {"
+                + "  name: 'include_paths'"
+                + "  flag_set {"
+                + "    action: 'preprocess-assemble'"
+                + "    action: 'c-compile'"
+                + "    action: 'c++-compile'"
+                + "    action: 'c++-header-parsing'"
+                + "    action: 'c++-header-preprocessing'"
+                + "    action: 'c++-module-compile'"
+                + "    action: 'objc-compile'"
+                + "    action: 'objc++-compile'"
+                + "    flag_group {"
+                + "      flag: '-iquote'"
+                + "      flag: '%{quote_include_paths}'"
+                + "    }"
+                + "    flag_group {"
+                + "      flag: '-I%{include_paths}'"
+                + "    }"
+                + "    flag_group {"
+                + "      flag: '-isystem'"
+                + "      flag: '%{system_include_paths}'"
+                + "    }"
+                + "  }"
+                + "}",
             toolchainBuilder);
       }
       if (!features.contains("fdo_instrument")) {
@@ -952,6 +952,30 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
             toolchainBuilder);
       }
       if (!features.contains("coverage")) {
+        String compileFlags;
+        String linkerFlags;
+        if (useLLVMCoverageMap) {
+          compileFlags =
+              "flag_group {"
+              + " flag: '-fprofile-instr-generate'"
+              + " flag: '-fcoverage-mapping'"
+              + "}";
+          linkerFlags =
+              "  flag_group {"
+              + "  flag: '-fprofile-instr-generate'"
+              + "}";
+        } else {
+          compileFlags =
+              "  expand_if_all_available: 'gcov_gcno_file'"
+              + "flag_group {"
+              + "  flag: '-fprofile-arcs'"
+              + "  flag: '-ftest-coverage'"
+              + "}";
+          linkerFlags =
+              "  flag_group {"
+              + "  flag: '-lgcov'"
+              + "}";
+        }
         TextFormat.merge(
             ""
                 + "feature {"
@@ -964,19 +988,13 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
                 + "    action: 'c++-header-parsing'"
                 + "    action: 'c++-header-preprocessing'"
                 + "    action: 'c++-module-compile'"
-                + "    expand_if_all_available: 'gcov_gcno_file'"
-                + "    flag_group {"
-                + "      flag: '-fprofile-arcs'"
-                + "      flag: '-ftest-coverage'"
-                + "    }"
+                + compileFlags
                 + "  }"
                 + "  flag_set {"
                 + "    action: 'c++-link-interface-dynamic-library'"
                 + "    action: 'c++-link-dynamic-library'"
                 + "    action: 'c++-link-executable'"
-                + "    flag_group {"
-                + "      flag: '-lgcov'"
-                + "    }"
+                + linkerFlags
                 + "  }"
                 + "}",
             toolchainBuilder);
@@ -1239,13 +1257,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
   }
 
   /**
-   * Returns whether the toolchain supports thin archives.
-   */
-  public boolean supportsThinArchives() {
-    return supportsThinArchives;
-  }
-
-  /**
    * Returns whether the toolchain supports the --start-lib/--end-lib options.
    */
   public boolean supportsStartEndLib() {
@@ -1311,20 +1322,14 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
    * Returns the type of archives being used.
    */
   public Link.ArchiveType archiveType() {
-    if (useStartEndLib()) {
-      return Link.ArchiveType.START_END_LIB;
-    }
-    if (useThinArchives()) {
-      return Link.ArchiveType.THIN;
-    }
-    return Link.ArchiveType.FAT;
+    return useStartEndLib() ? Link.ArchiveType.START_END_LIB : Link.ArchiveType.REGULAR;
   }
 
   /**
    * Returns the ar flags to be used.
    */
-  public ImmutableList<String> getArFlags(boolean thinArchives) {
-    return thinArchives ? arThinArchivesOptions : arOptions;
+  public ImmutableList<String> getArFlags() {
+    return arOptions;
   }
 
   /**
@@ -1707,10 +1712,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
     return cppOptions.useStartEndLib && supportsStartEndLib();
   }
 
-  public boolean useThinArchives() {
-    return cppOptions.useThinArchives && supportsThinArchives();
-  }
-
   /**
    * Returns true if interface shared objects should be used.
    */
@@ -2001,6 +2002,17 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
     }
 
     implicitLabels.put("crosstool", crosstoolTop);
+  }
+
+  @Override
+  public Iterable<Label> getSanityCheckRoots() {
+    ImmutableList.Builder<Label> result = ImmutableList.builder();
+    result.add(cppOptions.crosstoolTop);
+    if (cppOptions.libcTop != null) {
+      result.add(cppOptions.libcTop.getLabel());
+    }
+
+    return result.build();
   }
 
   @Override

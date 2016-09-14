@@ -14,7 +14,11 @@
 
 """Skylark rules for Swift."""
 
-load("shared", "xcrun_action", "XCRUNWRAPPER_LABEL", "module_cache_path")
+load("shared",
+     "xcrun_action",
+     "XCRUNWRAPPER_LABEL",
+     "module_cache_path",
+     "label_scoped_path")
 
 def _parent_dirs(dirs):
   """Returns a set of parent directories for each directory in dirs."""
@@ -29,9 +33,18 @@ def _intersperse(separator, iterable):
 
   return result
 
-def _swift_target(cpu, sdk_version):
+def _swift_target(cpu, platform, sdk_version):
   """Returns a target triplet for Swift compiler."""
-  return "%s-apple-ios%s" % (cpu, sdk_version)
+  # TODO(dmishe): Use PlatformType object when available.
+  platform_string = None
+  if str(platform).startswith("IOS_"):
+    platform_string = "ios"
+  elif str(platform).startswith("WATCHOS_"):
+    platform_string = "watchos"
+  else:
+    fail("Platform %s is not supported")
+
+  return "%s-apple-%s%s" % (cpu, platform_string, sdk_version)
 
 def _swift_compilation_mode_flags(ctx):
   """Returns additional swiftc flags for the current compilation mode."""
@@ -61,17 +74,28 @@ def _module_name(ctx):
 def _swift_library_impl(ctx):
   """Implementation for swift_library Skylark rule."""
   # TODO(b/29772303): Assert xcode version.
-  cpu = ctx.fragments.apple.ios_cpu()
-  platform = ctx.fragments.apple.ios_cpu_platform()
-  sdk_version = ctx.fragments.apple.sdk_version_for_platform(platform)
-  target = _swift_target(cpu, sdk_version)
+  apple_fm = ctx.fragments.apple
+
+  # TODO(dmishe): Use single_arch_cpu and single_arch_platform when available.
+  if (hasattr(apple_fm, "single_arch_cpu")
+      and hasattr(apple_fm, "single_arch_platform")):
+    cpu = apple_fm.single_arch_cpu
+    platform = apple_fm.single_arch_platform
+  else:
+    # TODO(dmishe): Remove this branch when single_arch_platform is available
+    # by default.
+    cpu = apple_fm.ios_cpu()
+    platform = apple_fm.ios_cpu_platform()
+
+  target_os = ctx.fragments.objc.ios_minimum_os
+  target = _swift_target(cpu, platform, target_os)
   apple_toolchain = apple_common.apple_toolchain()
 
   module_name = ctx.attr.module_name or _module_name(ctx)
 
   # A list of paths to pass with -F flag.
   framework_dirs = set([
-      apple_toolchain.platform_developer_framework_dir(ctx.fragments.apple)])
+      apple_toolchain.platform_developer_framework_dir(apple_fm)])
 
   # Collect transitive dependecies.
   dep_modules = []
@@ -105,15 +129,20 @@ def _swift_library_impl(ctx):
     # their module cannot be compiled by clang), but did not occur in practice.
     objc_defines += objc.define
 
-  output_lib = ctx.new_file(module_name + ".a")
-  output_module = ctx.new_file(module_name + ".swiftmodule")
+  # A unique path for rule's outputs.
+  objs_outputs_path = label_scoped_path(ctx, "_objs/")
+
+  output_lib = ctx.new_file(objs_outputs_path + module_name + ".a")
+  output_module = ctx.new_file(objs_outputs_path + module_name + ".swiftmodule")
+
+  # These filenames are guaranteed unique, no need to scope.
   output_header = ctx.new_file(ctx.label.name + "-Swift.h")
   output_file_map = ctx.new_file(ctx.label.name + ".output_file_map.json")
 
   output_map = struct()
   output_objs = []
   for source in ctx.files.srcs:
-    obj = ctx.new_file(source.basename + ".o")
+    obj = ctx.new_file(objs_outputs_path + source.basename + ".o")
     output_objs.append(obj)
 
     output_map += struct(**{source.path: struct(object=obj.path)})
@@ -227,6 +256,7 @@ swift_library = rule(
         "defines": attr.string_list(mandatory=False, allow_empty=True),
         "_xcrunwrapper": attr.label(
             executable=True,
+            cfg="host",
             default=Label(XCRUNWRAPPER_LABEL))},
     fragments = ["apple", "objc"],
     output_to_genfiles=True,
