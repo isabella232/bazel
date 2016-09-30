@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.remote;
 
+import com.google.devtools.build.lib.profiler.Profiler;
+import com.google.devtools.build.lib.profiler.ProfilerTask;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collection;
@@ -64,6 +66,7 @@ public final class RestUrlCacheFactory {
 
     @Override
     public byte[] get(Object key) {
+      long startTime = Profiler.nanoTimeMaybe();
       try {
         HttpClient client = new DefaultHttpClient();
         HttpGet get = new HttpGet(baseUrl + "/" + key);
@@ -85,11 +88,14 @@ public final class RestUrlCacheFactory {
 
       } catch (IOException e) {
         throw new RuntimeException(e);
+      } finally {
+        Profiler.instance().logSimpleTask(startTime, ProfilerTask.FETCH, key);
       }
     }
 
     @Override
     public byte[] put(String key, byte[] value) {
+      long startTime = Profiler.nanoTimeMaybe();
       try {
         HttpClient client = new DefaultHttpClient();
         HttpPut put = new HttpPut(baseUrl + "/" + key);
@@ -102,6 +108,8 @@ public final class RestUrlCacheFactory {
         }
       } catch (IOException e) {
         throw new RuntimeException(e);
+      } finally {
+        Profiler.instance().logSimpleTask(startTime, ProfilerTask.UPLOAD_TIME, key);
       }
       return null;
     }
