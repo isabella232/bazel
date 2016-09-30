@@ -7,6 +7,9 @@ java_library(
     srcs = glob(["*.java"]),
     tags = ["bazel"],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/sandbox",
+        "//src/main/java/com/google/devtools/build/lib/standalone",
         "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib:concurrent",
         "//src/main/java/com/google/devtools/build/lib:events",
@@ -16,8 +19,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:shell",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib:vfs",
-        "//src/main/java/com/google/devtools/build/lib/actions",
-        "//src/main/java/com/google/devtools/build/lib/standalone",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:remote_protocol_java_proto",
         "//third_party:apache_httpclient",

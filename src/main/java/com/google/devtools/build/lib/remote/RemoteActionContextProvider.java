@@ -17,10 +17,14 @@ package com.google.devtools.build.lib.remote;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.devtools.build.lib.actions.ActionContextProvider;
+import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.Executor.ActionContext;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.sandbox.SandboxModule;
+
+import java.util.ArrayList;
 
 /**
  * Provide a remote execution context.
@@ -34,6 +38,15 @@ final class RemoteActionContextProvider extends ActionContextProvider {
       RemoteActionCache actionCache,
       RemoteWorkExecutor workExecutor) {
     boolean verboseFailures = buildRequest.getOptions(ExecutionOptions.class).verboseFailures;
+
+    SpawnActionContext sandboxStrategy = null;
+    SandboxModule sandboxModule = env.getRuntime().getBlazeModule(SandboxModule.class);
+    for (ActionContextProvider acp: sandboxModule.getActionContextProviders()) {
+        for (ActionContext ac: acp.getActionContexts()) {
+          sandboxStrategy = (SpawnActionContext)ac;
+        }
+    }
+
     Builder<ActionContext> strategiesBuilder = ImmutableList.builder();
     strategiesBuilder.add(
         new RemoteSpawnStrategy(
@@ -43,7 +56,8 @@ final class RemoteActionContextProvider extends ActionContextProvider {
             verboseFailures,
             actionCache,
             workExecutor,
-            env.getRuntime().getProductName()));
+            env.getRuntime().getProductName(),
+            sandboxStrategy));
     this.strategies = strategiesBuilder.build();
   }
 

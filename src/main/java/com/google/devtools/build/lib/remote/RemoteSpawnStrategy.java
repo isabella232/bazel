@@ -56,6 +56,7 @@ import java.util.concurrent.TimeoutException;
 final class RemoteSpawnStrategy implements SpawnActionContext {
   private final Path execRoot;
   private final StandaloneSpawnStrategy standaloneStrategy;
+  private final SpawnActionContext sandboxStrategy;
   private final RemoteActionCache remoteActionCache;
   private final RemoteWorkExecutor remoteWorkExecutor;
 
@@ -66,11 +67,13 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       boolean verboseFailures,
       RemoteActionCache actionCache,
       RemoteWorkExecutor workExecutor,
-      String productName) {
+      String productName,
+      SpawnActionContext sandboxStrategy) {
     this.execRoot = execRoot;
     this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
     this.remoteActionCache = actionCache;
     this.remoteWorkExecutor = workExecutor;
+    this.sandboxStrategy = sandboxStrategy;
   }
 
   /** Executes the given {@code spawn}. */
@@ -91,7 +94,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       eventHandler.handle(
           Event.warn(
               spawn.getMnemonic() + " Cannot instantiate remote action cache. Running locally."));
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      executeLocaly(spawn, actionExecutionContext);
       return;
     }
 
@@ -104,6 +107,10 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     // checked in.
     Preconditions.checkNotNull(actionMetadata.getKey());
     hasher.putString(actionMetadata.getKey(), Charset.defaultCharset());
+    if (sandboxStrategy != null) {
+        // If the sandbox is enabled we want to change our cache key.
+        hasher.putString("sandbox", Charset.defaultCharset());
+    }
 
     List<ActionInput> inputs =
         ActionInputHelper.expandArtifacts(
@@ -157,7 +164,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       }
 
       // If nothing works then run spawn locally.
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      executeLocaly(spawn, actionExecutionContext);
       if (remoteActionCache != null) {
         remoteActionCache.putActionOutput(actionOutputKey, spawn.getOutputFiles());
       }
@@ -167,6 +174,18 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       eventHandler.handle(
           Event.warn(spawn.getMnemonic() + " unsupported operation for action cache (" + e + ")"));
     }
+  }
+
+  private void executeLocaly(
+      Spawn spawn,
+      ActionExecutionContext actionExecutionContext)
+      throws ExecException, InterruptedException {
+    if (sandboxStrategy != null) {
+      sandboxStrategy.exec(spawn, actionExecutionContext);
+    } else {
+      standaloneStrategy.exec(spawn, actionExecutionContext);
+    }
+
   }
 
   /**
