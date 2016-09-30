@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Semaphore;
 import java.util.logging.Level;
 
 import javax.annotation.Nullable;
@@ -33,8 +34,9 @@ import javax.annotation.Nullable;
  */
 public class DigestUtils {
   // Object to synchronize on when serializing large file reads.
-  private static final Object MD5_LOCK = new Object();
   private static final AtomicBoolean MULTI_THREADED_DIGEST = new AtomicBoolean(false);
+  // Perform at most 32 parallel MD5 operations.
+  private static final Semaphore available = new Semaphore(32);
 
   /** Private constructor to prevent instantiation of utility class. */
   private DigestUtils() {}
@@ -47,9 +49,14 @@ public class DigestUtils {
    */
   private static byte[] getDigestInExclusiveMode(Path path) throws IOException {
     long startTime = BlazeClock.nanoTime();
-    synchronized (MD5_LOCK) {
+    try {
+      available.acquire();
       Profiler.instance().logSimpleTask(startTime, ProfilerTask.WAIT, path.getPathString());
-      return getDigestInternal(path);
+      byte[] retval = getDigestInternal(path);
+      available.release();
+      return retval;
+    } catch (InterruptedException e) {
+      throw new IOException("Error getting digest: " + e);
     }
   }
 
