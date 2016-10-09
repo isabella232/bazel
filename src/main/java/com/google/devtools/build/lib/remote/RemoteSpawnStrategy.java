@@ -143,9 +143,13 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     }
 
     try {
-      // Look up action cache using |actionOutputKey|. Reuse the action output if it is found.
-      if (writeActionOutput(spawn.getMnemonic(), actionOutputKey, eventHandler, true)) {
-        return;
+      try {
+        // Look up action cache using |actionOutputKey|. Reuse the action output if it is found.
+        if (writeActionOutput(spawn.getMnemonic(), actionOutputKey, eventHandler, true)) {
+          return;
+        }
+      } catch (RuntimeException e) {
+        // ignore
       }
 
       FileOutErr outErr = actionExecutionContext.getFileOutErr();
@@ -166,7 +170,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       // If nothing works then run spawn locally.
       executeLocaly(spawn, actionExecutionContext);
       if (remoteActionCache != null) {
-        remoteActionCache.putActionOutput(actionOutputKey, spawn.getOutputFiles());
+        try {
+          remoteActionCache.putActionOutput(actionOutputKey, spawn.getOutputFiles());
+        } catch (RuntimeException e) {
+          // ignore
+        }
       }
     } catch (IOException e) {
       throw new UserExecException("Unexpected IO error.", e);
