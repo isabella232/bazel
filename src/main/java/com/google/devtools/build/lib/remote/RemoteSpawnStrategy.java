@@ -150,6 +150,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         }
       } catch (RuntimeException e) {
         // ignore
+        eventHandler.handle(
+          Event.warn(spawn.getMnemonic() + " failed to fetch action output from cache (" + e + "), running locally"));
       }
 
       FileOutErr outErr = actionExecutionContext.getFileOutErr();
@@ -174,6 +176,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
           remoteActionCache.putActionOutput(actionOutputKey, spawn.getOutputFiles());
         } catch (RuntimeException e) {
           // ignore
+          eventHandler.handle(
+            Event.warn(spawn.getMnemonic() + " failed to write action output to cache (" + e + "), ignoring"));
         }
       }
     } catch (IOException e) {
