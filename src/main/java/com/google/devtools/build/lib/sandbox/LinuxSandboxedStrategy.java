@@ -170,7 +170,8 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
             outErr,
             outputFiles.build(),
             timeout,
-            !this.unblockNetwork && !spawn.getExecutionInfo().containsKey("requires-network"));
+            // Only sandbox network for tests.
+            !this.unblockNetwork && !spawn.getExecutionInfo().containsKey("requires-network") && spawn.isTest());
       } finally {
         // Due to the Linux kernel behavior, if we try to remove the sandbox too quickly after the
         // process has exited, we get "Device busy" errors because some of the mounts have not yet
