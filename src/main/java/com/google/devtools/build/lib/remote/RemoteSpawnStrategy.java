@@ -135,6 +135,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       }
     }
 
+    // Include output files names to hash to produce action output key.
+    for (ActionInput output : spawn.getOutputFiles()) {
+      hasher.putString(output.getExecPathString(), Charset.defaultCharset());
+    }
+
     // Save the action output if found in the remote action cache.
     String actionOutputKey = hasher.hash().toString();
 
