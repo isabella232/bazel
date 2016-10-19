@@ -80,6 +80,13 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   @Override
   public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
+    if (spawn.isTest()) {
+      // Attempt to run tests in a sandbox, by default. SandboxStrategy will automatically honor
+      // 'local' flags and fallback to using a standalone executor in such cases.
+      sandboxStrategy.exec(spawn, actionExecutionContext);
+      return;
+    }
+
     if (!spawn.isRemotable()) {
       standaloneStrategy.exec(spawn, actionExecutionContext);
       return;

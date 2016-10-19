@@ -45,6 +45,11 @@ public class DelegateSpawn implements Spawn {
   }
 
   @Override
+  public boolean isTest() {
+    return spawn.isTest();
+  }
+
+  @Override
   public ImmutableList<Artifact> getFilesetManifests() {
     return spawn.getFilesetManifests();
   }
