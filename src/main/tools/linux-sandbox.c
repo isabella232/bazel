@@ -502,6 +502,9 @@ static void SetupDevices() {
     CHECK_CALL(mount(devs[i], devs[i] + 1, NULL, MS_BIND, NULL));
   }
 
+  CHECK_CALL(CreateTarget("dev/shm", true));
+  CHECK_CALL(mount("none", "dev/shm", "tmpfs", 0, NULL));
+
   CHECK_CALL(symlink("/proc/self/fd", "dev/fd"));
 }
 
