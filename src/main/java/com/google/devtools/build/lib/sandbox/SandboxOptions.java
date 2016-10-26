@@ -49,4 +49,12 @@ public class SandboxOptions extends OptionsBase {
     help = "Add additional path to mount to sandbox. Path including workspace is not allowed."
   )
   public List<String> sandboxAddPath;
+
+  @Option(
+    name = "sandbox_rootfs_dir",
+    defaultValue = "null",
+    category = "config",
+    help = "Directory to be mounted as root inside sandbox instead of /"
+  )
+  public String sandboxRootfsDir;
 }

@@ -321,29 +321,56 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private MountMap mountUsualUnixDirs() throws IOException {
     MountMap mounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
-    mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
-    mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
-    mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
 
-    // Check if /etc/resolv.conf is a symlink and mount its target
-    // Fix #738
-    Path resolv = fs.getPath("/etc/resolv.conf");
-    if (resolv.exists() && resolv.isSymbolicLink()) {
-      mounts.put(resolv.resolveSymbolicLinks(), resolv.resolveSymbolicLinks());
-    }
+    if (sandboxOptions.sandboxRootfsDir == null) {
+      mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
+      mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
+      mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
 
-    for (String entry : NativePosixFiles.readdir("/")) {
-      if (entry.startsWith("lib")) {
+      // Check if /etc/resolv.conf is a symlink and mount its target
+      // Fix #738
+      Path resolv = fs.getPath("/etc/resolv.conf");
+      if (resolv.exists() && resolv.isSymbolicLink()) {
+        mounts.put(resolv.resolveSymbolicLinks(), resolv.resolveSymbolicLinks());
+      }
+
+      for (String entry : NativePosixFiles.readdir("/")) {
+        if (entry.startsWith("lib")) {
+          Path libDir = fs.getRootDirectory().getRelative(entry);
+          mounts.put(libDir, libDir);
+        }
+      }
+      for (String entry : NativePosixFiles.readdir("/usr")) {
+        if (!entry.equals("local")) {
+          Path usrDir = fs.getPath("/usr").getRelative(entry);
+          mounts.put(usrDir, usrDir);
+        }
+      }
+    } else {
+      String rootfsBase = sandboxOptions.sandboxRootfsDir;
+      // Check if /etc/resolv.conf is a symlink and mount its target
+      // Fix #738
+      Path resolv = fs.getPath("/etc/resolv.conf");
+      if (resolv.exists() && resolv.isSymbolicLink()) {
+        mounts.put(resolv.resolveSymbolicLinks(), resolv.resolveSymbolicLinks());
+      }
+
+      // TODO: Ensure that etc/resolv.conf in the rootfs points to the same symlink as in /etc/resolv.conf,
+      // or overwrite the file in rootfs with contents of `/etc/resolv.conf` (we need to be careful to do this
+      // operation only once, otherwise running sandboxes might see corrupted file states).
+      // Also, ensure that etc/hosts in rootfs is populated with contents of system /etc/hosts.
+
+      for (String entry : NativePosixFiles.readdir(rootfsBase)) {
+        // Special directories which should not be mounted inside the sandbox.
+        if (entry.equals("tmp") || entry.equals("dev") || entry.equals("home") || entry.equals("root") || entry.equals("sys")) {
+          continue;
+        }
         Path libDir = fs.getRootDirectory().getRelative(entry);
-        mounts.put(libDir, libDir);
+        Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);
+        mounts.put(libDir, rootfsLibDir);
       }
     }
-    for (String entry : NativePosixFiles.readdir("/usr")) {
-      if (!entry.equals("local")) {
-        Path usrDir = fs.getPath("/usr").getRelative(entry);
-        mounts.put(usrDir, usrDir);
-      }
-    }
+
     for (Path path : mounts.values()) {
       Preconditions.checkArgument(path.exists(), "%s does not exist", path.toString());
     }
