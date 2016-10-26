@@ -1,0 +1,5 @@
+{
+  "conduit_uri" : "https://tails.corp.dropbox.com/api/",
+  "repository.callsign": "DBBAZEL",
+  "base": "arc:upstream, git:merge-base(origin/master), arc:prompt"
+}
