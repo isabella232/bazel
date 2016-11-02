@@ -51,6 +51,7 @@ import com.google.devtools.build.lib.vfs.SearchPath;
 import com.google.devtools.build.lib.vfs.Symlinks;
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +80,8 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private final AtomicInteger execCounter = new AtomicInteger();
   private final String productName;
 
+  private LinuxSandboxRootfsManager rootfsManager;
+
   public LinuxSandboxedStrategy(
       SandboxOptions options,
       Map<String, String> clientEnv,
@@ -95,6 +98,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     this.verboseFailures = verboseFailures;
     this.unblockNetwork = unblockNetwork;
     this.productName = productName;
+    this.rootfsManager = new LinuxSandboxRootfsManager(blazeDirs.getFileSystem(), blazeDirs.getOutputBase().getRelative("rootfs").getPathString());
   }
 
   /**
@@ -321,29 +325,41 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private MountMap mountUsualUnixDirs() throws IOException {
     MountMap mounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
-    mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
-    mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
-    mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
 
-    // Check if /etc/resolv.conf is a symlink and mount its target
-    // Fix #738
-    Path resolv = fs.getPath("/etc/resolv.conf");
-    if (resolv.exists() && resolv.isSymbolicLink()) {
-      mounts.put(resolv.resolveSymbolicLinks(), resolv.resolveSymbolicLinks());
-    }
+    if (sandboxOptions.sandboxRootfs == null || sandboxOptions.sandboxRootfs.isEmpty()) {
+      mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
+      mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
+      mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
 
-    for (String entry : NativePosixFiles.readdir("/")) {
-      if (entry.startsWith("lib")) {
+      // Check if /etc/resolv.conf is a symlink and mount its target
+      // Fix #738
+      Path resolv = fs.getPath("/etc/resolv.conf");
+      if (resolv.exists() && resolv.isSymbolicLink()) {
+        mounts.put(resolv.resolveSymbolicLinks(), resolv.resolveSymbolicLinks());
+      }
+
+      for (String entry : NativePosixFiles.readdir("/")) {
+        if (entry.startsWith("lib")) {
+          Path libDir = fs.getRootDirectory().getRelative(entry);
+          mounts.put(libDir, libDir);
+        }
+      }
+      for (String entry : NativePosixFiles.readdir("/usr")) {
+        if (!entry.equals("local")) {
+          Path usrDir = fs.getPath("/usr").getRelative(entry);
+          mounts.put(usrDir, usrDir);
+        }
+      }
+    } else {
+      String rootfsBase = this.rootfsManager.getRootfsPath(new URL(sandboxOptions.sandboxRootfs));
+
+      for (String entry : NativePosixFiles.readdir(rootfsBase)) {
         Path libDir = fs.getRootDirectory().getRelative(entry);
-        mounts.put(libDir, libDir);
+        Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);
+        mounts.put(libDir, rootfsLibDir);
       }
     }
-    for (String entry : NativePosixFiles.readdir("/usr")) {
-      if (!entry.equals("local")) {
-        Path usrDir = fs.getPath("/usr").getRelative(entry);
-        mounts.put(usrDir, usrDir);
-      }
-    }
+
     for (Path path : mounts.values()) {
       Preconditions.checkArgument(path.exists(), "%s does not exist", path.toString());
     }

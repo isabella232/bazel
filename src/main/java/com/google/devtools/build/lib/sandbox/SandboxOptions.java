@@ -49,4 +49,16 @@ public class SandboxOptions extends OptionsBase {
     help = "Add additional path to mount to sandbox. Path including workspace is not allowed."
   )
   public List<String> sandboxAddPath;
+
+  @Option(
+    name = "sandbox_rootfs",
+    category = "config",
+    defaultValue = "",
+    help = "URL to a tarball (.tar, not .tar.gz or something else) containing the directory to be mounted "
+             + "as root inside sandbox instead of the host machine. For example, "
+             + "--sandbox_rootfs=http://example.com/path/to/my-image.tar. "
+             + "The tarball needs to extract as if the current directory is root. That is, "
+             + "if extracted to `/somedir`, `/usr` should be at `/somedir/usr`."
+  )
+  public String sandboxRootfs;
 }
