@@ -18,6 +18,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.StandardCopyOption;
+import java.util.zip.GZIPInputStream;
 
 
 /**
@@ -72,7 +73,7 @@ public class LinuxSandboxRootfsManager {
     System.out.println("Creating new rootfs image for " + rootfsName);
     try {
       stream = lazyStream.getStream();
-      tarStream = new TarArchiveInputStream(stream);
+      tarStream = new TarArchiveInputStream(new GZIPInputStream(stream));
       TarArchiveEntry tarEntry;
       while ((tarEntry = tarStream.getNextTarEntry()) != null) {
         this.extractTarEntry(basePath, tarStream, tarEntry);

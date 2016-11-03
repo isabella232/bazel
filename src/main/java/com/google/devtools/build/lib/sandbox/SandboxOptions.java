@@ -54,7 +54,8 @@ public class SandboxOptions extends OptionsBase {
     name = "sandbox_rootfs",
     category = "config",
     defaultValue = "",
-    help = "URL to a tarball (.tar, not .tar.gz or something else) containing the directory to be mounted "
+    help = "URL to a gzipped tarball (.tar.gz, not .tar or something else) containing "
+             + "the directory to be mounted "
              + "as root inside sandbox instead of the host machine. For example, "
              + "--sandbox_rootfs=http://example.com/path/to/my-image.tar. "
              + "The tarball needs to extract as if the current directory is root. That is, "
