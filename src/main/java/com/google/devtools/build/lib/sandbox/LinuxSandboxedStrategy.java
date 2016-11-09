@@ -80,7 +80,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private final AtomicInteger execCounter = new AtomicInteger();
   private final String productName;
 
-  private LinuxSandboxRootfsManager rootfsManager;
+  private final String rootfsBase;
 
   public LinuxSandboxedStrategy(
       SandboxOptions options,
@@ -89,7 +89,8 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       ExecutorService backgroundWorkers,
       boolean verboseFailures,
       boolean unblockNetwork,
-      String productName) {
+      String productName,
+      String rootfsBase) {
     this.sandboxOptions = options;
     this.clientEnv = ImmutableMap.copyOf(clientEnv);
     this.blazeDirs = blazeDirs;
@@ -98,7 +99,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     this.verboseFailures = verboseFailures;
     this.unblockNetwork = unblockNetwork;
     this.productName = productName;
-    this.rootfsManager = new LinuxSandboxRootfsManager(blazeDirs.getFileSystem(), blazeDirs.getOutputBase().getRelative("rootfs").getPathString());
+    this.rootfsBase = rootfsBase;
   }
 
   /**
@@ -326,7 +327,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     MountMap mounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
 
-    if (sandboxOptions.sandboxRootfs == null || sandboxOptions.sandboxRootfs.isEmpty()) {
+    if (rootfsBase == null) {
       mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
       mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
       mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
@@ -351,8 +352,6 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
         }
       }
     } else {
-      String rootfsBase = this.rootfsManager.getRootfsPath(new URL(sandboxOptions.sandboxRootfs));
-
       for (String entry : NativePosixFiles.readdir(rootfsBase)) {
         Path libDir = fs.getRootDirectory().getRelative(entry);
         Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);

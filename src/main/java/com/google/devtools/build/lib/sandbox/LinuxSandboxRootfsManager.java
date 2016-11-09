@@ -1,6 +1,7 @@
 package com.google.devtools.build.lib.sandbox;
 
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -27,6 +28,7 @@ import java.util.zip.GZIPInputStream;
 public class LinuxSandboxRootfsManager {
   private FileSystem fs;
   private final String imagesRoot;
+  private EventHandler eventHandler;
 
   // files that should be copied from host machine into rootfs
   private static final String COPY_FROM_HOST[] = new String[]{
@@ -45,9 +47,10 @@ public class LinuxSandboxRootfsManager {
     "tmp",
   };
 
-  public LinuxSandboxRootfsManager(FileSystem fs, String imagesRoot) {
+  public LinuxSandboxRootfsManager(FileSystem fs, String imagesRoot, EventHandler eventHandler) {
     this.fs = fs;
     this.imagesRoot = imagesRoot;
+    this.eventHandler = eventHandler;
   }
 
   public interface LazyInputStream {
@@ -70,7 +73,7 @@ public class LinuxSandboxRootfsManager {
     }
     InputStream stream = null;
     TarArchiveInputStream tarStream = null;
-    System.out.println("Creating new rootfs image for " + rootfsName);
+    eventHandler.handle(Event.info("Creating new rootfs image for " + rootfsName));
     try {
       stream = lazyStream.getStream();
       tarStream = new TarArchiveInputStream(new GZIPInputStream(stream));
