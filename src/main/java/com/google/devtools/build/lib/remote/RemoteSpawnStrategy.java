@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.remote.RemoteProtocol.RemoteWorkResponse;
+import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.FileOutErr;
@@ -116,7 +117,10 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     hasher.putString(actionMetadata.getKey(), Charset.defaultCharset());
     if (sandboxStrategy != null) {
         // If the sandbox is enabled we want to change our cache key.
-        hasher.putString("sandbox", Charset.defaultCharset());
+        if (sandboxStrategy instanceof LinuxSandboxedStrategy) {
+          String key = ((LinuxSandboxedStrategy) sandboxStrategy).getActionHashKey();
+          hasher.putString(key, Charset.defaultCharset());
+        }
     }
 
     List<ActionInput> inputs =

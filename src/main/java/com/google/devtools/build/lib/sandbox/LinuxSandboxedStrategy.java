@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicates;
+import com.google.common.hash.Hasher;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -52,6 +53,7 @@ import com.google.devtools.build.lib.vfs.Symlinks;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -204,6 +206,15 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       }
     } catch (IOException e) {
       throw new UserExecException("I/O error during sandboxed execution", e);
+    }
+  }
+
+  public String getActionHashKey() {
+    if (sandboxOptions.sandboxRootfs != null) {
+      String labelString = sandboxOptions.sandboxRootfs.getDefaultCanonicalForm();
+      return "sandbox" + labelString;
+    } else {
+      return "sandbox";
     }
   }
 
