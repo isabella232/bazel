@@ -46,6 +46,7 @@
 
 // The username of 'nobody'.
 static const char *kNobodyUsername = "nobody";
+static const char *RW_MOUNTS[] = {"/etc"};
 
 // Options parsing result.
 struct Options {
@@ -508,6 +509,17 @@ static void SetupDevices() {
   CHECK_CALL(symlink("/proc/self/fd", "dev/fd"));
 }
 
+static int isRWMount(const char *mountTarget) {
+  size_t length = sizeof RW_MOUNTS / sizeof (char*);
+  size_t i;
+  for (i = 0; i < length; ++i) {
+    if (strcmp(mountTarget, RW_MOUNTS[i]) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static int rmrf(const char *fpath, const struct stat *sb, int typeflag,
                 struct FTW *ftwbuf) {
   if (typeflag == FTW_DP) {
@@ -626,7 +638,7 @@ static void SetupDirectories() {
     strcpy(full_sandbox_path, opt.sandbox_root);
     strcat(full_sandbox_path, opt.mount_targets[i]);
     CHECK_CALL(CreateTarget(full_sandbox_path, S_ISDIR(sb.st_mode)));
-    if (S_ISDIR(sb.st_mode)) {
+    if (S_ISDIR(sb.st_mode) && isRWMount(opt.mount_targets[i])) {
         char *upper_dir = malloc(strlen(scratch_dir) + 12 /* strlen("/upperXXXXXX") */ + 1);
         strcpy(upper_dir, scratch_dir);
         strcat(upper_dir, "/upperXXXXXX");
