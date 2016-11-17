@@ -488,7 +488,9 @@ static int CreateTarget(const char *path, bool is_directory) {
   if (is_directory) {
     CHECK_CALL(mkdir(path, 0755));
   } else {
-    LinkFile(path);
+    // NOTE(naphat) this now creates an empty file. The hack with hard
+    // linking is problematic when we mix different file systems.
+    CreateFile(path);
   }
 
   return 0;
