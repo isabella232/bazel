@@ -65,4 +65,15 @@ public class SandboxOptions extends OptionsBase {
              + "if extracted to `/somedir`, `/usr` should be at `/somedir/usr`."
   )
   public Label sandboxRootfs;
+
+  @Option(
+    name = "sandbox_rootfs_cache_path",
+    category = "config",
+    defaultValue = "",
+    help = "The path to cache extracted rootfs images. By default, this is stored "
+             + "somewhere in the output root, and is cleaned up by bazel. If "
+             + "a custom value is used, then the user is responsible for cleaning "
+             + "the directory as needed."
+  )
+  public String sandboxRootfsCachePath;
 }

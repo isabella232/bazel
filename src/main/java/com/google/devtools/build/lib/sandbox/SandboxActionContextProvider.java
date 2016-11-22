@@ -54,13 +54,18 @@ public class SandboxActionContextProvider extends ActionContextProvider {
     Builder<ActionContext> strategies = ImmutableList.builder();
 
     if (OS.getCurrent() == OS.LINUX) {
-      Label rootfsLabel = buildRequest.getOptions(SandboxOptions.class).sandboxRootfs;
+      SandboxOptions sandboxOptions = buildRequest.getOptions(SandboxOptions.class);
+      Label rootfsLabel = sandboxOptions.sandboxRootfs;
       String rootfsBase = null;
       if (rootfsLabel != null) {
-        // TODO(naphat) allow this to be a filegroup
         BlazeDirectories blazeDirs = env.getDirectories();
-        LinuxSandboxRootfsManager rootfsManager = new LinuxSandboxRootfsManager(blazeDirs.getFileSystem(), blazeDirs.getOutputBase().getRelative("rootfs").getPathString(), env.getReporter());
+        String rootfsCachePath = sandboxOptions.sandboxRootfsCachePath;
+        if (rootfsCachePath == null || rootfsCachePath.isEmpty()) {
+          rootfsCachePath = blazeDirs.getOutputBase().getRelative("rootfs").getPathString();
+        }
+        LinuxSandboxRootfsManager rootfsManager = new LinuxSandboxRootfsManager(blazeDirs.getFileSystem(), rootfsCachePath, env.getReporter());
         try {
+          // TODO(naphat) allow this to be a filegroup
           Path rootfsArchivePath = env.getBlazeModuleEnvironment().getFileFromWorkspace(rootfsLabel);
           rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
         } catch (NoSuchThingException | InterruptedException e) {
