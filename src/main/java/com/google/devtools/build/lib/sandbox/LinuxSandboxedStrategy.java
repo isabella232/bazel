@@ -55,9 +55,12 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -70,6 +73,10 @@ import java.util.concurrent.atomic.AtomicInteger;
   contextType = SpawnActionContext.class
 )
 public class LinuxSandboxedStrategy implements SpawnActionContext {
+  private static final Set<String> RW_MOUNTS = new HashSet<String>(
+    Arrays.asList(new String[]{"/etc"})
+  );
+
   private final ExecutorService backgroundWorkers;
 
   private final SandboxOptions sandboxOptions;
@@ -254,7 +261,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private ImmutableMap<Path, Path> getMounts(Spawn spawn, ActionExecutionContext executionContext)
       throws IOException, ExecException {
     ImmutableMap.Builder<Path, Path> result = new ImmutableMap.Builder<>();
-    result.putAll(mountUsualUnixDirs());
+    result.putAll(handleRWMounts(mountUsualUnixDirs()));
     result.putAll(mountUserDefinedPath());
 
     MountMap mounts = new MountMap();
@@ -323,6 +330,42 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
         }
       } else {
         finalizeMountPath(finalizedMounts, target, source, stat);
+      }
+    }
+    return finalizedMounts;
+  }
+
+  /**
+   * For each directory in the mount map, if it is a RW mount, then mount
+   * everything immediately inside the directory instead. This allows
+   * the directory itself to be mounted as RW.
+   *
+   * @return a new mounts multimap with all mounts and the added mounts.
+   */
+  MountMap handleRWMounts(Map<Path, Path> mounts) throws IOException {
+    MountMap finalizedMounts = new MountMap();
+    FileSystem fs = blazeDirs.getFileSystem();
+    Path rootfsBasePath = rootfsBase == null ? fs.getPath("/") : fs.getPath(rootfsBase);
+    Path rootPath = fs.getPath("/");
+    for (Entry<Path, Path> mount : mounts.entrySet()) {
+      Path target = mount.getKey();
+      Path source = mount.getValue();
+
+      FileStatus stat = source.statNullable(Symlinks.NOFOLLOW);
+
+      if (stat != null && stat.isDirectory() && RW_MOUNTS.contains(target.toString())) {
+        for (String entry : NativePosixFiles.readdir(source.toString())) {
+          Path subSource = source.getRelative(entry);
+          Path subTarget = target.getRelative(entry);
+          FileStatus subStat = subSource.statNullable(Symlinks.NOFOLLOW);
+          if (subStat != null && subStat.isSymbolicLink()) {
+            // symlinks are skipped because we cannot mount those correctly.
+            continue;
+          }
+          finalizedMounts.put(subTarget, subSource);
+        }
+      } else {
+        finalizedMounts.put(target, source);
       }
     }
     return finalizedMounts;
