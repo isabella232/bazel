@@ -46,7 +46,6 @@
 
 // The username of 'nobody'.
 static const char *kNobodyUsername = "nobody";
-static const char *RW_MOUNTS[] = {"/etc"};
 
 // Options parsing result.
 struct Options {
@@ -511,17 +510,6 @@ static void SetupDevices() {
   CHECK_CALL(symlink("/proc/self/fd", "dev/fd"));
 }
 
-static int isRWMount(const char *mountTarget) {
-  size_t length = sizeof RW_MOUNTS / sizeof (char*);
-  size_t i;
-  for (i = 0; i < length; ++i) {
-    if (strcmp(mountTarget, RW_MOUNTS[i]) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 static int rmrf(const char *fpath, const struct stat *sb, int typeflag,
                 struct FTW *ftwbuf) {
   if (typeflag == FTW_DP) {
@@ -606,12 +594,6 @@ static void SetupDirectories() {
   }
 
   // Mount all mounts.
-  char template[] = "tmp/bazel-rootfs-scratchXXXXXX";
-  char *scratch_dir = mkdtemp(template);
-  if (scratch_dir == NULL) {
-    fprintf(stderr, "Error creating a scratch directory for rootfs.\n");
-    exit(EXIT_FAILURE);
-  }
   for (int i = 0; i < opt.num_mounts; i++) {
     struct stat sb;
     stat(opt.mount_sources[i], &sb);
@@ -640,60 +622,8 @@ static void SetupDirectories() {
     strcpy(full_sandbox_path, opt.sandbox_root);
     strcat(full_sandbox_path, opt.mount_targets[i]);
     CHECK_CALL(CreateTarget(full_sandbox_path, S_ISDIR(sb.st_mode)));
-    if (S_ISDIR(sb.st_mode) && isRWMount(opt.mount_targets[i])) {
-        char *upper_dir = malloc(strlen(scratch_dir) + 12 /* strlen("/upperXXXXXX") */ + 1);
-        strcpy(upper_dir, scratch_dir);
-        strcat(upper_dir, "/upperXXXXXX");
-        upper_dir = mkdtemp(upper_dir);
-        if (upper_dir == NULL) {
-          perror("Error creating a upper directory for rootfs");
-          exit(EXIT_FAILURE);
-        }
-        PRINT_DEBUG("upper dir: %s\n", upper_dir);
-
-        char *mount_options = malloc(
-          9 + // lowerdir=
-          strlen(opt.mount_sources[i]) +
-          1 + // ,
-          9 + // upperdir=
-          strlen(upper_dir) +
-          1
-        );
-        strcpy(mount_options, "lowerdir=");
-        strcat(mount_options, opt.mount_sources[i]);
-        strcat(mount_options, ",upperdir=");
-        strcat(mount_options, upper_dir);
-        PRINT_DEBUG("mount options: %s\n", mount_options);
-        if (mount("overlay", full_sandbox_path, "overlayfs", 0, mount_options) != 0) {
-          // newer versions of linux requires an extra argument
-          char *work_dir = malloc(strlen(scratch_dir) + 11 /* strlen("/workXXXXXX") */ + 1);
-          strcpy(work_dir, scratch_dir);
-          strcat(work_dir, "/workXXXXXX");
-          work_dir = mkdtemp(work_dir);
-          if (work_dir == NULL) {
-            perror("Error creating a work directory for rootfs");
-            exit(EXIT_FAILURE);
-          }
-          PRINT_DEBUG("work dir: %s\n", work_dir);
-
-          mount_options = realloc(mount_options,
-            strlen(mount_options) +
-            1 + // ,
-            8 + // workdir=
-            strlen(work_dir) +
-            1
-          );
-          strcat(mount_options, ",workdir=");
-          strcat(mount_options, work_dir);
-          free(work_dir);
-          CHECK_CALL(mount("overlay", full_sandbox_path, "overlayfs", 0, mount_options));
-        }
-        free(mount_options);
-        free(upper_dir);
-    } else {
-        CHECK_CALL(mount(opt.mount_sources[i], full_sandbox_path, NULL,
-                         MS_REC | MS_BIND | MS_RDONLY, NULL));
-    }
+    CHECK_CALL(mount(opt.mount_sources[i], full_sandbox_path, NULL,
+                     MS_REC | MS_BIND | MS_RDONLY, NULL));
     free(full_sandbox_path);
   }
 }
