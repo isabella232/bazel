@@ -359,8 +359,18 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
           Path subTarget = target.getRelative(entry);
           FileStatus subStat = subSource.statNullable(Symlinks.NOFOLLOW);
           if (subStat != null && subStat.isSymbolicLink()) {
-            // symlinks are skipped because we cannot mount those correctly.
-            continue;
+            // if this is a symlink, and it doesn't exist, we'll have trouble mounting it.
+            // so, let's just skip it.
+            PathFragment symlinkTargetFragment = subSource.readSymbolicLink();
+            Path symlinkTargetPath;
+            if (symlinkTargetFragment.isAbsolute()) {
+              symlinkTargetPath = rootfsBasePath.getRelative(symlinkTargetFragment.relativeTo(rootPath.asFragment()));
+            } else {
+              symlinkTargetPath = target.getRelative(symlinkTargetFragment);
+            }
+            if (!symlinkTargetPath.exists()) {
+              continue;
+            }
           }
           finalizedMounts.put(subTarget, subSource);
         }
