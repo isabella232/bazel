@@ -89,7 +89,9 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private final AtomicInteger execCounter = new AtomicInteger();
   private final String productName;
 
-  private final String rootfsBase;
+  private final LinuxSandboxRootfsManager rootfsManager;
+  private final Path rootfsArchivePath;
+  private final Label rootfsLabel;
 
   public LinuxSandboxedStrategy(
       SandboxOptions options,
@@ -99,7 +101,9 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       boolean verboseFailures,
       boolean unblockNetwork,
       String productName,
-      String rootfsBase) {
+      LinuxSandboxRootfsManager rootfsManager,
+      Path rootfsArchivePath,
+      Label rootfsLabel) {
     this.sandboxOptions = options;
     this.clientEnv = ImmutableMap.copyOf(clientEnv);
     this.blazeDirs = blazeDirs;
@@ -108,7 +112,9 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     this.verboseFailures = verboseFailures;
     this.unblockNetwork = unblockNetwork;
     this.productName = productName;
-    this.rootfsBase = rootfsBase;
+    this.rootfsManager = rootfsManager;
+    this.rootfsArchivePath = rootfsArchivePath;
+    this.rootfsLabel = rootfsLabel;
   }
 
   /**
@@ -217,8 +223,8 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   }
 
   public String getActionHashKey() {
-    if (sandboxOptions.sandboxRootfs != null) {
-      String labelString = sandboxOptions.sandboxRootfs.getDefaultCanonicalForm();
+    if (rootfsLabel != null) {
+      String labelString = rootfsLabel.getDefaultCanonicalForm();
       return "sandbox" + labelString;
     } else {
       return "sandbox";
@@ -345,7 +351,10 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   MountMap handleRWMounts(Map<Path, Path> mounts) throws IOException {
     MountMap finalizedMounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
-    Path rootfsBasePath = rootfsBase == null ? fs.getPath("/") : fs.getPath(rootfsBase);
+    Path rootfsBasePath = fs.getPath("/");
+    if (rootfsArchivePath != null) {
+      rootfsBasePath = fs.getPath(rootfsManager.getRootfsPath(rootfsArchivePath));
+    }
     Path rootPath = fs.getPath("/");
     for (Entry<Path, Path> mount : mounts.entrySet()) {
       Path target = mount.getKey();
@@ -391,7 +400,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     MountMap mounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
 
-    if (rootfsBase == null) {
+    if (rootfsArchivePath == null) {
       mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
       mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
       mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
@@ -416,6 +425,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
         }
       }
     } else {
+      String rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
       for (String entry : NativePosixFiles.readdir(rootfsBase)) {
         Path libDir = fs.getRootDirectory().getRelative(entry);
         Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);
