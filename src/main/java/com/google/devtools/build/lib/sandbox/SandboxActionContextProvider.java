@@ -97,6 +97,7 @@ public class SandboxActionContextProvider extends ActionContextProvider {
               verboseFailures,
               unblockNetwork,
               env.getRuntime().getProductName(),
+              env.getReporter(),
               rootfsManager,
               rootfsArchivePath,
               rootfsLabel));

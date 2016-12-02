@@ -36,6 +36,8 @@ import com.google.devtools.build.lib.analysis.AnalysisUtils;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction;
 import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
 import com.google.devtools.build.lib.rules.test.TestRunnerAction;
@@ -89,6 +91,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private final AtomicInteger execCounter = new AtomicInteger();
   private final String productName;
 
+  private final Reporter reporter;
   private final LinuxSandboxRootfsManager rootfsManager;
   private final Path rootfsArchivePath;
   private final Label rootfsLabel;
@@ -101,6 +104,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       boolean verboseFailures,
       boolean unblockNetwork,
       String productName,
+      Reporter reporter,
       LinuxSandboxRootfsManager rootfsManager,
       Path rootfsArchivePath,
       Label rootfsLabel) {
@@ -112,6 +116,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     this.verboseFailures = verboseFailures;
     this.unblockNetwork = unblockNetwork;
     this.productName = productName;
+    this.reporter = reporter;
     this.rootfsManager = rootfsManager;
     this.rootfsArchivePath = rootfsArchivePath;
     this.rootfsLabel = rootfsLabel;
@@ -426,6 +431,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       }
     } else {
       String rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
+      reporter.handle(Event.progress("Using rootfs " + rootfsLabel));
       for (String entry : NativePosixFiles.readdir(rootfsBase)) {
         Path libDir = fs.getRootDirectory().getRelative(entry);
         Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);
