@@ -76,7 +76,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 )
 public class LinuxSandboxedStrategy implements SpawnActionContext {
   private static final Set<String> RW_MOUNTS = new HashSet<String>(
-    Arrays.asList(new String[]{"/etc"})
+    Arrays.asList(new String[]{"/etc", "/run"})
   );
 
   private final ExecutorService backgroundWorkers;
