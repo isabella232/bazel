@@ -71,6 +71,10 @@ fi
 cat > "${PACKAGE_DIR}/WORKSPACE" <<EOF
 workspace(name = "bazel_tools")
 EOF
+
+cat > "${PACKAGE_DIR}/BUILD" <<EOF
+exports_files(glob(['**/*']))
+EOF
 mkdir -p "${PACKAGE_DIR}/tools/defaults"
 touch "${PACKAGE_DIR}/tools/defaults/BUILD"
 for i in $(find "${PACKAGE_DIR}" -name BUILD.tools); do
