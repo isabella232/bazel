@@ -101,7 +101,7 @@ static int CheckNamespacesSupported() {
   // sometimes. As this check has to run as fast as possible, we can't afford to
   // spend time sleeping and retrying here until it eventually works (or not).
   CHECK_CALL(pid = clone(CheckNamespacesSupportedChild, stackTop,
-                         CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWUTS |
+                         CLONE_NEWPID | CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWUTS |
                              CLONE_NEWIPC | CLONE_NEWNET | SIGCHLD,
                          NULL));
   CHECK_CALL(waitpid(pid, NULL, 0));
@@ -415,7 +415,7 @@ static void CreateNamespaces(int create_netns) {
   int tries = 0;
   const int max_tries = 100;
   while (tries++ < max_tries) {
-    if (unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
+    if (unshare(CLONE_NEWPID | CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
                 (create_netns ? CLONE_NEWNET : 0)) == 0) {
       PRINT_DEBUG("unshare succeeded after %d tries\n", tries);
       return;
@@ -735,6 +735,8 @@ static void SpawnCommand(char *const *argv, double timeout_secs,
     // Force umask to include read and execute for everyone, to make
     // output permissions predictable.
     umask(022);
+
+    CHECK_CALL(mount("proc", "/proc", "proc", 0, NULL));
 
     // Does not return unless something went wrong.
     CHECK_CALL(execvp(argv[0], argv));
