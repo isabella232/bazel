@@ -748,6 +748,7 @@ static void SpawnCommand(char *const *argv, double timeout_secs,
     HandleSignal(SIGALRM, OnSignal);
     HandleSignal(SIGTERM, OnSignal);
     HandleSignal(SIGINT, OnSignal);
+    HandleSignal(SIGQUIT, OnSignal);
     SetTimeout(timeout_secs);
 
     int status = WaitChild(global_child_pid, argv[0]);
