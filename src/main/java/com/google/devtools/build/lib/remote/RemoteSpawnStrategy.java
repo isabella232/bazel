@@ -123,10 +123,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         }
     }
 
+    Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
     List<ActionInput> inputs =
         ActionInputHelper.expandArtifacts(
-            spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
-    for (ActionInput input : inputs) {
+            spawnInputs, actionExecutionContext.getArtifactExpander());
+    for (ActionInput input : spawnInputs) {
       hasher.putString(input.getExecPathString(), Charset.defaultCharset());
       try {
         // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
