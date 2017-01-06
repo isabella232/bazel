@@ -155,13 +155,19 @@ public class LinuxSandboxRunner {
 
     // Create all needed directories.
     for (Path createDir : createDirs) {
-      fileArgs.add("-d");
+      fileArgs.add("-e");
       fileArgs.add(createDir.getPathString());
     }
 
     if (blockNetwork) {
       // Block network access out of the namespace.
-      fileArgs.add("-n");
+      fileArgs.add("-N");
+    }
+
+    // make test-tmpdir writable
+    if (env.containsKey("TEST_TMPDIR")) {
+      fileArgs.add("-w");
+      fileArgs.add(sandboxExecRoot.getRelative(env.get("TEST_TMPDIR")).getPathString());
     }
 
     // Mount all the inputs.
