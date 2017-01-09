@@ -129,11 +129,10 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         ActionInputHelper.expandArtifacts(
             spawnInputs, actionExecutionContext.getArtifactExpander());
     for (ActionInput input : spawnInputs) {
-      byte[] digest;
+      byte[] digest = null;
       try {
         digest = inputFileCache.getDigest(input);
       } catch (IOException e) {
-        throw new UserExecException("Failed to get digest for input.", e);
       }
       if (digest == null) {
         // Happens for error-propogating middlemen. Such artifacts do
