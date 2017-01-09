@@ -431,7 +431,6 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       }
     } else {
       String rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
-      reporter.handle(Event.progress("Using rootfs " + rootfsLabel));
       for (String entry : NativePosixFiles.readdir(rootfsBase)) {
         Path libDir = fs.getRootDirectory().getRelative(entry);
         Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);
