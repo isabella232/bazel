@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
@@ -128,16 +129,24 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         ActionInputHelper.expandArtifacts(
             spawnInputs, actionExecutionContext.getArtifactExpander());
     for (ActionInput input : spawnInputs) {
-      hasher.putString(input.getExecPathString(), Charset.defaultCharset());
+      byte[] digest;
       try {
-        // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
-        // changes. It might not be sufficient to identify the input file globally in the
-        // remote action cache. Consider upgrading this to a better hash algorithm with
-        // less collision.
-        hasher.putBytes(inputFileCache.getDigest(input));
+        digest = inputFileCache.getDigest(input);
       } catch (IOException e) {
         throw new UserExecException("Failed to get digest for input.", e);
       }
+      if (digest == null) {
+        // Happens for error-propogating middlemen. Such artifacts do
+        // not cause invalidation of their reverse dependencies.
+        Preconditions.checkState(input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact(), input);
+        continue;
+      }
+      hasher.putString(input.getExecPathString(), Charset.defaultCharset());
+      // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
+      // changes. It might not be sufficient to identify the input file globally in the
+      // remote action cache. Consider upgrading this to a better hash algorithm with
+      // less collision.
+      hasher.putBytes(digest);
     }
 
     // Include output files names to hash to produce action output key.
