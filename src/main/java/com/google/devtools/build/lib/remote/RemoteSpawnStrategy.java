@@ -129,8 +129,13 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         ActionInputHelper.expandArtifacts(
             spawnInputs, actionExecutionContext.getArtifactExpander());
     for (ActionInput input : spawnInputs) {
+      hasher.putString(input.getExecPathString(), Charset.defaultCharset());
       byte[] digest = null;
       try {
+	// TODO(alpha): The digest from ActionInputFileCache is used to detect local file
+	// changes. It might not be sufficient to identify the input file globally in the
+	// remote action cache. Consider upgrading this to a better hash algorithm with
+	// less collision.
         digest = inputFileCache.getDigest(input);
       } catch (IOException e) {
       }
@@ -140,11 +145,6 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         Preconditions.checkState(input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact(), input);
         continue;
       }
-      hasher.putString(input.getExecPathString(), Charset.defaultCharset());
-      // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
-      // changes. It might not be sufficient to identify the input file globally in the
-      // remote action cache. Consider upgrading this to a better hash algorithm with
-      // less collision.
       hasher.putBytes(digest);
     }
 
