@@ -43,6 +43,7 @@ public class LinuxSandboxRootfsManager {
     "mnt",
     "proc",
     "root",
+    "srv",
     "sys",
     "tmp",
   };
