@@ -280,6 +280,12 @@ static void CopyFile(const char *src, const char *dst) {
       DIE("write(out_fd, &buf[0], result) for %s -> %s", src, dst);
     }
   }
+  if (close(in_fd) < 0) {
+    DIE("close(%s)", src);
+  }
+  if (close(out_fd) < 0) {
+    DIE("close(%s)", dst);
+  }
 }
 
 static void MountFilesystems() {
