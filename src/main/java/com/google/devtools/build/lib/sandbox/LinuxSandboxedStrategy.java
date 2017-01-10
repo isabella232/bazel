@@ -92,8 +92,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
   private final String productName;
 
   private final Reporter reporter;
-  private final LinuxSandboxRootfsManager rootfsManager;
-  private final Path rootfsArchivePath;
+  private final String rootfsBase;
   private final Label rootfsLabel;
 
   public LinuxSandboxedStrategy(
@@ -105,8 +104,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       boolean unblockNetwork,
       String productName,
       Reporter reporter,
-      LinuxSandboxRootfsManager rootfsManager,
-      Path rootfsArchivePath,
+      String rootfsBase,
       Label rootfsLabel) {
     this.sandboxOptions = options;
     this.clientEnv = ImmutableMap.copyOf(clientEnv);
@@ -117,8 +115,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     this.unblockNetwork = unblockNetwork;
     this.productName = productName;
     this.reporter = reporter;
-    this.rootfsManager = rootfsManager;
-    this.rootfsArchivePath = rootfsArchivePath;
+    this.rootfsBase = rootfsBase;
     this.rootfsLabel = rootfsLabel;
   }
 
@@ -358,8 +355,8 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     MountMap finalizedMounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
     Path rootfsBasePath = fs.getPath("/");
-    if (rootfsArchivePath != null) {
-      rootfsBasePath = fs.getPath(rootfsManager.getRootfsPath(rootfsArchivePath));
+    if (rootfsBase != null) {
+      rootfsBasePath = fs.getPath(rootfsBase);
     }
     Path rootPath = fs.getPath("/");
     for (Entry<Path, Path> mount : mounts.entrySet()) {
@@ -406,7 +403,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
     MountMap mounts = new MountMap();
     FileSystem fs = blazeDirs.getFileSystem();
 
-    if (rootfsArchivePath == null) {
+    if (rootfsBase == null) {
       mounts.put(fs.getPath("/bin"), fs.getPath("/bin"));
       mounts.put(fs.getPath("/sbin"), fs.getPath("/sbin"));
       mounts.put(fs.getPath("/etc"), fs.getPath("/etc"));
@@ -431,7 +428,6 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
         }
       }
     } else {
-      String rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
       for (String entry : NativePosixFiles.readdir(rootfsBase)) {
         Path libDir = fs.getRootDirectory().getRelative(entry);
         Path rootfsLibDir = fs.getRootDirectory().getRelative(rootfsBase + "/" + entry);

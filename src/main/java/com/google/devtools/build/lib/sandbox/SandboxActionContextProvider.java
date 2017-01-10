@@ -65,7 +65,7 @@ public class SandboxActionContextProvider extends ActionContextProvider {
       }
       LinuxSandboxRootfsManager rootfsManager = new LinuxSandboxRootfsManager(blazeDirs.getFileSystem(), rootfsCachePath, env.getReporter());
       Label rootfsLabel = sandboxOptions.sandboxRootfs;
-      Path rootfsArchivePath = null;
+      String rootfsBase = null;
       if (rootfsLabel != null) {
         try {
           Target target = env.getPackageManager().getTarget(env.getReporter(), rootfsLabel);
@@ -82,7 +82,9 @@ public class SandboxActionContextProvider extends ActionContextProvider {
           } else if (!(target instanceof FileTarget)) {
             throw new IllegalArgumentException("sandbox_rootfs must either be a filegroup or a file target.");
           }
-          rootfsArchivePath = env.getBlazeModuleEnvironment().getFileFromWorkspace(rootfsLabel);
+          Path rootfsArchivePath = env.getBlazeModuleEnvironment().getFileFromWorkspace(rootfsLabel);
+
+          rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
         } catch (NoSuchThingException | InterruptedException e) {
           // TODO(naphat) better error handling
           throw new IllegalArgumentException(e);
@@ -98,8 +100,7 @@ public class SandboxActionContextProvider extends ActionContextProvider {
               unblockNetwork,
               env.getRuntime().getProductName(),
               env.getReporter(),
-              rootfsManager,
-              rootfsArchivePath,
+              rootfsBase,
               rootfsLabel));
     } else if (OS.getCurrent() == OS.DARWIN) {
       strategies.add(
