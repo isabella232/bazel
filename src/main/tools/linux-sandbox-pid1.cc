@@ -239,11 +239,6 @@ static void SetupDevices() {
     }
   }
 
-  CreateTarget("dev/shm", true);
-  if (mount("none", "dev/shm", "tmpfs", 0, NULL) < 0) {
-    DIE("mount(none, dev/shm, tmpfs, 0, NULL)");
-  }
-
   if (symlink("/proc/self/fd", "dev/fd") < 0) {
     DIE("symlink(/proc/self/fd, dev/fd)");
   }
@@ -301,6 +296,9 @@ static void MountFilesystems() {
     DIE("chdir(%s)", opt.sandbox_root_dir);
   }
 
+  SetupDevices();
+  MountProc();
+
   for (const char *tmpfs_dir : opt.tmpfs_dirs) {
     PRINT_DEBUG("tmpfs: %s", tmpfs_dir);
     CreateTarget(tmpfs_dir + 1, true);
@@ -310,9 +308,6 @@ static void MountFilesystems() {
           tmpfs_dir + 1);
     }
   }
-
-  SetupDevices();
-  MountProc();
 
   // Make sure the home directory exists, too.
   char *homedir_from_env = getenv("HOME");

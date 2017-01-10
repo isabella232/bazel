@@ -266,6 +266,7 @@ public class LinuxSandboxedStrategy implements SpawnActionContext {
       }
     }
     dirs.add(fs.getPath("/tmp"));
+    dirs.add(fs.getPath("/dev/shm"));
     return dirs.build();
   }
 
