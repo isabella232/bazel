@@ -125,7 +125,11 @@ public class LinuxSandboxRootfsManager {
     } else {
       if (tarEntry.isSymbolicLink()) {
         PathFragment linkName = new PathFragment(tarEntry.getLinkName());
-        FileSystemUtils.ensureSymbolicLink(filename, linkName);
+        try {
+          FileSystemUtils.ensureSymbolicLink(filename, linkName);
+        } catch (IOException e) {
+          // TODO(naphat) this is most likely unicode file name issue, but the exception is way too broad
+        }
       } else {
         try {
           Files.copy(
