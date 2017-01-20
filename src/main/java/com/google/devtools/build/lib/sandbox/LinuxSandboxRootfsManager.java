@@ -88,7 +88,6 @@ public class LinuxSandboxRootfsManager {
         if (!systemFile.exists()) {
           continue;
         }
-        reporter.handle(Event.progress("Copying " + systemFile.toPath() + " from host."));
         String rootfsPath = basePathString + path;
         File rootfsFile = new File(rootfsPath);
         Files.copy(systemFile.toPath(), rootfsFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
@@ -118,7 +117,6 @@ public class LinuxSandboxRootfsManager {
       }
     }
     Path filename = basePath.getRelative(name);
-    reporter.handle(Event.progress("Extracting to " + filename));
     FileSystemUtils.createDirectoryAndParents(filename.getParentDirectory());
     if (tarEntry.isDirectory()) {
       FileSystemUtils.createDirectoryAndParents(filename);
