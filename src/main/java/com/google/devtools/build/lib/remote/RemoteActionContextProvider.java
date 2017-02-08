@@ -17,10 +17,14 @@ package com.google.devtools.build.lib.remote;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.devtools.build.lib.actions.Executor.ActionContext;
+import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.exec.ActionContextProvider;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.sandbox.SandboxActionContextProvider;
+import java.io.IOException;
+import java.util.ArrayList;
 
 /**
  * Provide a remote execution context.
@@ -31,6 +35,15 @@ final class RemoteActionContextProvider extends ActionContextProvider {
   RemoteActionContextProvider(
       CommandEnvironment env,
       BuildRequest buildRequest) {
+    SpawnActionContext sandboxStrategy = null;
+    try {
+      ActionContextProvider acp = SandboxActionContextProvider.create(env, buildRequest);
+      for (ActionContext ac: acp.getActionContexts()) {
+        sandboxStrategy = (SpawnActionContext)ac;
+      }
+    } catch (IOException e) {
+      // NOTE(naphat) ignore, just don't use the sandbox
+    }
     boolean verboseFailures = buildRequest.getOptions(ExecutionOptions.class).verboseFailures;
     Builder<ActionContext> strategiesBuilder = ImmutableList.builder();
     strategiesBuilder.add(
@@ -39,7 +52,8 @@ final class RemoteActionContextProvider extends ActionContextProvider {
             env.getExecRoot(),
             buildRequest.getOptions(RemoteOptions.class),
             verboseFailures,
-            env.getRuntime().getProductName()));
+            env.getRuntime().getProductName(),
+            sandboxStrategy));
     this.strategies = strategiesBuilder.build();
   }
 

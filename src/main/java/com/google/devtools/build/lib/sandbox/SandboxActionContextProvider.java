@@ -35,7 +35,7 @@ import java.io.IOException;
 /**
  * Provides the sandboxed spawn strategy.
  */
-final class SandboxActionContextProvider extends ActionContextProvider {
+public final class SandboxActionContextProvider extends ActionContextProvider {
 
   public static final String SANDBOX_NOT_SUPPORTED_MESSAGE =
       "Sandboxed execution is not supported on your system and thus hermeticity of actions cannot "
