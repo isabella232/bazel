@@ -17,6 +17,8 @@ package com.google.devtools.build.lib.sandbox;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration.EmptyToNullLabelConverter;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
@@ -113,4 +115,29 @@ public class SandboxOptions extends OptionsBase {
     help = "Add additional path pair to mount in sandbox."
   )
   public List<ImmutableMap.Entry<String, String>> sandboxAdditionalMounts;
+
+  @Option(
+    name = "sandbox_rootfs",
+    category = "strategy",
+    defaultValue = "",
+    converter = EmptyToNullLabelConverter.class,
+    help = "File target for a gzipped tarball (.tar.gz, not .tar or something else) containing "
+             + "the directory to be mounted "
+             + "as root inside sandbox instead of the host machine. For example, "
+             + "--sandbox_rootfs=@some_repo//file:file_name. "
+             + "The tarball needs to extract as if the current directory is root. That is, "
+             + "if extracted to `/somedir`, `/usr` should be at `/somedir/usr`."
+  )
+  public Label sandboxRootfs;
+
+  @Option(
+    name = "sandbox_rootfs_cache_path",
+    category = "config",
+    defaultValue = "",
+    help = "The path to cache extracted rootfs images. By default, this is stored "
+             + "somewhere in the output root, and is cleaned up by bazel. If "
+             + "a custom value is used, then the user is responsible for cleaning "
+             + "the directory as needed."
+  )
+  public String sandboxRootfsCachePath;
 }

@@ -16,11 +16,19 @@ package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Executor.ActionContext;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.exec.ActionContextProvider;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
+import com.google.devtools.build.lib.packages.FileTarget;
+import com.google.devtools.build.lib.packages.NoSuchThingException;
+import com.google.devtools.build.lib.packages.RawAttributeMapper;
+import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.util.OS;
 import java.io.IOException;
 
@@ -54,13 +62,48 @@ final class SandboxActionContextProvider extends ActionContextProvider {
               && !buildRequest.getOptions(SandboxOptions.class).ignoreUnsupportedSandboxing) {
             env.getReporter().handle(Event.warn(SANDBOX_NOT_SUPPORTED_MESSAGE));
           }
+          SandboxOptions sandboxOptions = buildRequest.getOptions(SandboxOptions.class);
+          BlazeDirectories blazeDirs = env.getDirectories();
+          String rootfsCachePath = sandboxOptions.sandboxRootfsCachePath;
+          if (rootfsCachePath == null || rootfsCachePath.isEmpty()) {
+            rootfsCachePath = blazeDirs.getOutputBase().getRelative("rootfs").getPathString();
+          }
+          LinuxSandboxRootfsManager rootfsManager = new LinuxSandboxRootfsManager(blazeDirs.getFileSystem(), rootfsCachePath, env.getReporter());
+          Label rootfsLabel = sandboxOptions.sandboxRootfs;
+          String rootfsBase = null;
+          if (rootfsLabel != null) {
+            try {
+              Target target = env.getPackageManager().getTarget(env.getReporter(), rootfsLabel);
+              if (target instanceof Rule) {
+                Rule rule = (Rule) target;
+                if (!rule.getRuleClass().equals("filegroup")) {
+                  throw new IllegalArgumentException("sandbox_rootfs must either be a filegroup or a file target.");
+                }
+                ImmutableList attr = (ImmutableList) RawAttributeMapper.of(rule).getRawAttributeValue(rule, "srcs");
+                if (attr.size() != 1) {
+                  throw new IllegalArgumentException("sandbox_rootfs filegroup must have exactly one file.");
+                }
+                rootfsLabel = (Label) attr.get(0);
+              } else if (!(target instanceof FileTarget)) {
+                throw new IllegalArgumentException("sandbox_rootfs must either be a filegroup or a file target.");
+              }
+              Path rootfsArchivePath = env.getBlazeModuleEnvironment().getFileFromWorkspace(rootfsLabel);
+
+              rootfsBase = rootfsManager.getRootfsPath(rootfsArchivePath);
+            } catch (NoSuchThingException | InterruptedException e) {
+              // TODO(naphat) better error handling
+              throw new IllegalArgumentException(e);
+            }
+          }
           contexts.add(
               new LinuxSandboxedStrategy(
                   buildRequest,
                   env.getDirectories(),
                   verboseFailures,
                   env.getRuntime().getProductName(),
-                  fullySupported));
+                  fullySupported,
+                  rootfsBase,
+                  rootfsLabel));
         }
         break;
       case DARWIN:

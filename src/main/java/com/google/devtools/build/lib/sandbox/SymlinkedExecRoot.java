@@ -35,9 +35,19 @@ import java.util.Set;
 public final class SymlinkedExecRoot implements SandboxExecRoot {
 
   private final Path sandboxExecRoot;
+  private final boolean createSymlinks;
 
   public SymlinkedExecRoot(Path sandboxExecRoot) {
+    this(sandboxExecRoot, true);
+  }
+
+  /**
+   * If createSymlinks is false, then only create the enclosing folders for
+   * the inputs and outputs, not the actual symlinks.
+   */
+  public SymlinkedExecRoot(Path sandboxExecRoot, boolean createSymlinks) {
     this.sandboxExecRoot = sandboxExecRoot;
+    this.createSymlinks = createSymlinks;
   }
 
   @Override
@@ -99,6 +109,9 @@ public final class SymlinkedExecRoot implements SandboxExecRoot {
 
   private void createSymlinksForInputs(Map<PathFragment, Path> inputs) throws IOException {
     // All input files are relative to the execroot.
+    if (!this.createSymlinks) {
+      return;
+    }
     for (Entry<PathFragment, Path> entry : inputs.entrySet()) {
       Path key = sandboxExecRoot.getRelative(entry.getKey());
       FileStatus keyStat = key.statNullable(Symlinks.NOFOLLOW);
