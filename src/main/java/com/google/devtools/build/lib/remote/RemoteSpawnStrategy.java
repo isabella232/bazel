@@ -42,11 +42,12 @@ import com.google.devtools.build.lib.remote.RemoteProtocol.ExecuteReply;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecuteRequest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionStatus;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
+import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
-import io.grpc.StatusRuntimeException;
 import java.io.IOException;
+import java.lang.RuntimeException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -64,6 +65,7 @@ import java.util.TreeSet;
 final class RemoteSpawnStrategy implements SpawnActionContext {
   private final Path execRoot;
   private final StandaloneSpawnStrategy standaloneStrategy;
+  private final SpawnActionContext sandboxStrategy;
   private final boolean verboseFailures;
   private final RemoteOptions options;
 
@@ -72,9 +74,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       Path execRoot,
       RemoteOptions options,
       boolean verboseFailures,
-      String productName) {
+      String productName,
+      SpawnActionContext sandboxStrategy) {
     this.execRoot = execRoot;
     this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
+    this.sandboxStrategy = sandboxStrategy;
     this.verboseFailures = verboseFailures;
     this.options = options;
   }
@@ -110,7 +114,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   private void execLocally(
       Spawn spawn, ActionExecutionContext actionExecutionContext, RemoteActionCache actionCache,
       ActionKey actionKey) throws ExecException, InterruptedException {
-    standaloneStrategy.exec(spawn, actionExecutionContext);
+    if (sandboxStrategy != null) {
+      sandboxStrategy.exec(spawn, actionExecutionContext);
+    } else {
+      standaloneStrategy.exec(spawn, actionExecutionContext);
+    }
     if (actionCache != null && actionKey != null) {
       ArrayList<Path> outputFiles = new ArrayList<>();
       for (ActionInput output : spawn.getOutputFiles()) {
@@ -130,7 +138,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
             .handle(
                 Event.warn(
                     spawn.getMnemonic() + " unsupported operation for action cache (" + e + ")"));
-      } catch (StatusRuntimeException e) {
+      } catch (RuntimeException e) {
         actionExecutionContext
             .getExecutor()
             .getEventHandler()
@@ -160,6 +168,12 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   @Override
   public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
+    if (spawn.getExecutionInfo().containsKey("istest")) {
+      // Attempt to run tests in a sandbox, by default. SandboxStrategy will automatically honor
+      // 'local' flags and fallback to using a standalone executor in such cases.
+      sandboxStrategy.exec(spawn, actionExecutionContext);
+      return;
+    }
     ActionKey actionKey = null;
     String mnemonic = spawn.getMnemonic();
     Executor executor = actionExecutionContext.getExecutor();
@@ -188,7 +202,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       }
     }
     if (!spawn.isRemotable() || actionCache == null) {
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      if (sandboxStrategy != null) {
+        sandboxStrategy.exec(spawn, actionExecutionContext);
+      } else {
+        standaloneStrategy.exec(spawn, actionExecutionContext);
+      }
       return;
     }
 
@@ -208,7 +226,15 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
               repository.getMerkleDigest(inputRoot));
 
       // Look up action cache, and reuse the action output if it is found.
-      actionKey = ContentDigests.computeActionKey(action);
+      if (sandboxStrategy != null) {
+        String key = "unknown-sandbox";
+        if (sandboxStrategy instanceof LinuxSandboxedStrategy) {
+          key = ((LinuxSandboxedStrategy) sandboxStrategy).getActionHashKey();
+        }
+        actionKey = ContentDigests.computeActionKey(action, key.getBytes());
+      } else {
+        actionKey = ContentDigests.computeActionKey(action);
+      }
       ActionResult result = this.options.remoteAcceptCached
           ? actionCache.getCachedActionResult(actionKey) : null;
       boolean acceptCachedResult = this.options.remoteAcceptCached;
@@ -265,17 +291,6 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       eventHandler.handle(Event.warn(mnemonic + " remote work interrupted (" + e + ")"));
       Thread.currentThread().interrupt();
       throw e;
-    } catch (StatusRuntimeException e) {
-      String stackTrace = "";
-      if (verboseFailures) {
-        stackTrace = "\n" + Throwables.getStackTraceAsString(e);
-      }
-      eventHandler.handle(Event.warn(mnemonic + " remote work failed (" + e + ")" + stackTrace));
-      if (options.remoteAllowLocalFallback) {
-        execLocally(spawn, actionExecutionContext, actionCache, actionKey);
-      } else {
-        throw new UserExecException(e);
-      }
     } catch (CacheNotFoundException e) {
       eventHandler.handle(Event.warn(mnemonic + " remote work results cache miss (" + e + ")"));
       if (options.remoteAllowLocalFallback) {
@@ -286,6 +301,17 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     } catch (UnsupportedOperationException e) {
       eventHandler.handle(
           Event.warn(mnemonic + " unsupported operation for action cache (" + e + ")"));
+    } catch (RuntimeException e) {
+      // String stackTrace = "";
+      // if (verboseFailures) {
+      //   stackTrace = "\n" + Throwables.getStackTraceAsString(e);
+      // }
+      eventHandler.handle(Event.warn(mnemonic + " remote work failed (" + e + ")" /* + stackTrace */));
+      if (options.remoteAllowLocalFallback) {
+        execLocally(spawn, actionExecutionContext, actionCache, actionKey);
+      } else {
+        throw new UserExecException(e);
+      }
     }
   }
 

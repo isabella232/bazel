@@ -67,6 +67,14 @@ public final class ContentDigests {
     return new ActionKey(computeDigest(action));
   }
 
+  public static ActionKey computeActionKey(Action action, byte[] extraBytes) {
+    byte[] actionBytes = action.toByteArray();
+    byte[] allBytes = new byte[actionBytes.length + extraBytes.length];
+    System.arraycopy(actionBytes, 0, allBytes, 0, actionBytes.length);
+    System.arraycopy(extraBytes, 0, allBytes, actionBytes.length, extraBytes.length);
+    return new ActionKey(computeDigest(allBytes)); 
+  }
+
   /**
    * Assumes that the given ContentDigest is a valid digest of an Action, and creates an ActionKey
    * wrapper. This should not be called on the client side!
