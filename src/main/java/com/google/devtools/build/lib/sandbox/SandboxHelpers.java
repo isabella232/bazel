@@ -77,8 +77,17 @@ public final class SandboxHelpers {
       return false;
     }
 
-    // Network access is allowed by default.
-    return true;
+    // If the Spawn requests to allow network access, do so.
+    if (spawn.getExecutionInfo().containsKey("requires-network")) {
+      return true;
+    }
+
+    // network access is enabled for builds, but not for tests, by default.
+    if (spawn.getExecutionInfo().containsKey("istest")) {
+      return false;
+    } else {
+      return true;
+    }
   }
 
   static void postActionStatusMessage(Executor executor, Spawn spawn) {

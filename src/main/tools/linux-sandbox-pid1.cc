@@ -220,17 +220,80 @@ static int CreateTarget(const char *path, bool is_directory) {
   return 0;
 }
 
-static void MountFilesystems() {
-  if (mount("/", opt.sandbox_root_dir, NULL, MS_BIND | MS_REC, NULL) < 0) {
-    DIE("mount(/, %s, NULL, MS_BIND | MS_REC, NULL)", opt.sandbox_root_dir);
+static bool IsDirectory(const char *path) {
+  struct stat sb;
+  if (stat(path, &sb) < 0) {
+    DIE("stat(%s)", path);
   }
+  return S_ISDIR(sb.st_mode);
+}
+
+static void CopyFile(const char *src, const char *dst) {
+  int in_fd = open(src, O_RDONLY);
+  if (in_fd < 0) {
+    DIE("open(%s, O_RDONLY)", src);
+  }
+  int out_fd = open(dst, O_CREAT | O_WRONLY | O_EXCL, 0666);
+  if (out_fd < 0) {
+    DIE("open(%s, O_CREAT | O_WRONLY | O_EXCL, 0666)", dst);
+  }
+  char buf[8192];
+
+  while (1) {
+    ssize_t result = read(in_fd, &buf[0], sizeof(buf));
+    if (!result) break;
+    if (result < 0) {
+      DIE("read(in_fd, &buf[0], sizeof(buf)) for %s -> %s", src, dst);
+    }
+    if (write(out_fd, &buf[0], result) != result) {
+      DIE("write(out_fd, &buf[0], result) for %s -> %s", src, dst);
+    }
+  }
+  if (close(in_fd) < 0) {
+    DIE("close(%s)", src);
+  }
+  if (close(out_fd) < 0) {
+    DIE("close(%s)", dst);
+  }
+}
+
+static void SetupDevices() {
+  CreateTarget("dev", true);
+  const char *devs[] = {"/dev/null", "/dev/random", "/dev/urandom", "/dev/zero",
+                        NULL};
+  for (int i = 0; devs[i] != NULL; i++) {
+    CreateTarget(devs[i] + 1, false);
+    if (mount(devs[i], devs[i] + 1, NULL, MS_BIND, NULL) < 0) {
+      DIE("mount(%s, %s, NULL, MS_BIND, NULL)", devs[i], devs[i] + 1);
+    }
+  }
+
+  if (symlink("/proc/self/fd", "dev/fd") < 0) {
+    DIE("symlink(/proc/self/fd, dev/fd)");
+  }
+}
+
+static void MountProc();
+
+static void MountFilesystems() {
+  CreateTarget(opt.sandbox_root_dir, true);
+  if (mount(opt.sandbox_root_dir, opt.sandbox_root_dir, NULL, MS_BIND | MS_NOSUID, NULL) < 0) {
+    DIE("mount(%s, %s, NULL, MS_BIND | MS_NOSUID, NULL)", opt.sandbox_root_dir, opt.sandbox_root_dir);
+  }
+  // if (mount("/", opt.sandbox_root_dir, NULL, MS_BIND | MS_REC, NULL) < 0) {
+  //   DIE("mount(/, %s, NULL, MS_BIND | MS_REC, NULL)", opt.sandbox_root_dir);
+  // }
 
   if (chdir(opt.sandbox_root_dir) < 0) {
     DIE("chdir(%s)", opt.sandbox_root_dir);
   }
 
+  MountProc();
+  SetupDevices();
+
   for (const char *tmpfs_dir : opt.tmpfs_dirs) {
     PRINT_DEBUG("tmpfs: %s", tmpfs_dir);
+    CreateTarget(tmpfs_dir + 1, true);
     if (mount("tmpfs", tmpfs_dir + 1, "tmpfs",
               MS_NOSUID | MS_NODEV | MS_NOATIME, NULL) < 0) {
       DIE("mount(tmpfs, %s, tmpfs, MS_NOSUID | MS_NODEV | MS_NOATIME, NULL)",
@@ -242,7 +305,6 @@ static void MountFilesystems() {
   // do this is by bind-mounting it upon itself.
   PRINT_DEBUG("working dir: %s", opt.working_dir);
   PRINT_DEBUG("sandbox root: %s", opt.sandbox_root_dir);
-
   CreateTarget(opt.working_dir + 1, true);
   if (mount(opt.working_dir, opt.working_dir + 1, NULL, MS_BIND, NULL) < 0) {
     DIE("mount(%s, %s, NULL, MS_BIND, NULL)", opt.working_dir,
@@ -252,7 +314,14 @@ static void MountFilesystems() {
   for (size_t i = 0; i < opt.bind_mount_sources.size(); i++) {
     const char *source = opt.bind_mount_sources.at(i);
     const char *target = opt.bind_mount_targets.at(i);
+    if (strcmp(target, "/etc/hosts") == 0) {
+      // HACK(naphat): make /etc/hosts writable by making a copy of the file
+      PRINT_DEBUG("copy: %s -> %s", source, target);
+      CopyFile(source, target + 1);
+      continue;
+    }
     PRINT_DEBUG("bind mount: %s -> %s", source, target);
+    CreateTarget(target + 1, IsDirectory(source));
     if (mount(source, target + 1, NULL, MS_BIND, NULL) < 0) {
       DIE("mount(%s, %s, NULL, MS_BIND, NULL)", source, target + 1);
     }
@@ -260,6 +329,7 @@ static void MountFilesystems() {
 
   for (const char *writable_file : opt.writable_files) {
     PRINT_DEBUG("writable: %s", writable_file);
+    CreateTarget(writable_file + 1, IsDirectory(writable_file));
     if (mount(writable_file, writable_file + 1, NULL, MS_BIND, NULL) < 0) {
       DIE("mount(%s, %s, NULL, MS_BIND, NULL)", writable_file,
           writable_file + 1);
@@ -295,6 +365,10 @@ static void MountFilesystems() {
 // We later remount everything read-only, except the paths for which this method
 // returns true.
 static bool ShouldBeWritable(char *mnt_dir) {
+  if (strcmp(mnt_dir, opt.sandbox_root_dir) == 0) {
+    return true;
+  }
+
   mnt_dir += strlen(opt.sandbox_root_dir);
 
   if (strcmp(mnt_dir, opt.working_dir) == 0) {
@@ -339,10 +413,21 @@ static void MakeFilesystemMostlyReadOnly() {
     if (strstr(ent->mnt_dir, opt.sandbox_root_dir) != ent->mnt_dir) {
       continue;
     }
+
+    const char* mnt_dir = ent->mnt_dir + strlen(opt.sandbox_root_dir);
+
     // Skip mounts that are under tmpfs directories because we've already
     // replaced such directories with new tmpfs instances.
     // mount() would fail with ENOENT if we tried to remount such mount points.
-    if (IsUnderTmpDir(ent->mnt_dir + strlen(opt.sandbox_root_dir))) {
+    if (IsUnderTmpDir(mnt_dir)) {
+      continue;
+    }
+
+    if (strcmp(mnt_dir, "/proc") == 0) {
+      continue;
+    }
+
+    if (strstr(mnt_dir, "/dev") == mnt_dir) {
       continue;
     }
 
@@ -402,6 +487,7 @@ static void MakeFilesystemMostlyReadOnly() {
 static void MountProc() {
   // Mount a new proc on top of the old one, because the old one still refers to
   // our parent PID namespace.
+  CreateTarget("proc", true);
   if (mount("proc", "proc", "proc", MS_NODEV | MS_NOEXEC | MS_NOSUID, NULL) <
       0) {
     DIE("mount");
@@ -639,7 +725,7 @@ int Pid1Main(void *sync_pipe_param) {
   }
   MountFilesystems();
   MakeFilesystemMostlyReadOnly();
-  MountProc();
+  // MountProc();
   SetupNetworking();
   EnterSandbox();
   SetupSignalHandlers();

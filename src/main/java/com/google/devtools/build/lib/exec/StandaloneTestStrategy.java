@@ -112,6 +112,8 @@ public class StandaloneTestStrategy extends TestStrategy {
     Map<String, String> info = new HashMap<>();
     // This key is only understood by StandaloneSpawnStrategy.
     info.put("timeout", "" + getTimeout(action));
+    // HACK(naphat) indicate that this is a test
+    info.put("istest", "1");
     info.putAll(action.getTestProperties().getExecutionInfo());
 
     Spawn spawn =
