@@ -14,15 +14,19 @@
 
 package com.google.devtools.build.lib.remote;
 
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.google.devtools.build.lib.concurrent.ExecutorUtil;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
+import com.google.devtools.build.lib.concurrent.ThrowableRecordingRunnableWrapper;
 import com.google.devtools.build.lib.remote.ContentDigests.ActionKey;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ActionResult;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.FileMetadata;
 import com.google.devtools.build.lib.remote.RemoteProtocol.FileNode;
-import com.google.devtools.build.lib.remote.RemoteProtocol.Output;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Output.ContentCase;
+import com.google.devtools.build.lib.remote.RemoteProtocol.Output;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -31,9 +35,12 @@ import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.RuntimeException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -52,15 +59,56 @@ public final class ConcurrentMapActionCache implements RemoteActionCache {
     this.cache = cache;
   }
 
+  private Runnable uploadJob(FileNode fileNode) {
+    return new Runnable() {
+      @Override
+      public void run() {
+        try {
+          uploadBlob(fileNode.toByteArray());
+        } catch (InterruptedException e) {
+          throw new RuntimeException(e);
+        }
+      }
+    };
+  }
+
+  private Runnable uploadLeafJob(TreeNode leaf, Path execRoot) {
+    return new Runnable() {
+      @Override
+      public void run() {
+        try {
+          uploadFileContents(execRoot.getRelative(leaf.getActionInput().getExecPathString()));
+        } catch (InterruptedException e) {
+          throw new RuntimeException(e);
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
+      }
+    };
+  }
+
   @Override
   public void uploadTree(TreeNodeRepository repository, Path execRoot, TreeNode root)
       throws IOException, InterruptedException {
+    ExecutorService executor =
+        Executors.newFixedThreadPool(
+            20,
+            new ThreadFactoryBuilder().setNameFormat("Tree uploader %d").build());
+
+    ThrowableRecordingRunnableWrapper wrapper = new ThrowableRecordingRunnableWrapper(
+        "ConcurrentMapActionCache#uploadTree");
+
     repository.computeMerkleDigests(root);
     for (FileNode fileNode : repository.treeToFileNodes(root)) {
-      uploadBlob(fileNode.toByteArray());
+      executor.execute(wrapper.wrap(uploadJob(fileNode)));
     }
     for (TreeNode leaf : repository.leaves(root)) {
-      uploadFileContents(execRoot.getRelative(leaf.getActionInput().getExecPathString()));
+      executor.execute(wrapper.wrap(uploadLeafJob(leaf, execRoot)));
+    }
+    boolean interrupted = ExecutorUtil.interruptibleShutdown(executor);
+    Throwables.propagateIfPossible(wrapper.getFirstThrownError());
+    if (interrupted) {
+      throw new InterruptedException();
     }
   }
 
