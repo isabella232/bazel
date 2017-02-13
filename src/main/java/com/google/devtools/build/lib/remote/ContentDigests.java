@@ -23,11 +23,16 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Helper methods relating to computing ContentDigest messages for remote execution. */
 @ThreadSafe
 public final class ContentDigests {
   private ContentDigests() {}
+
+  private static Map<Path, byte[]> sha1Cache = new HashMap<Path, byte[]>();
+  private static final Object CACHE_LOCK = new Object();
 
   public static ContentDigest computeDigest(byte[] blob) {
     return buildDigest(Hashing.sha1().hashBytes(blob).asBytes(), blob.length);
@@ -35,7 +40,20 @@ public final class ContentDigests {
 
   // TODO(olaola): cache these in ActionInputFileCache!
   public static ContentDigest computeDigest(Path file) throws IOException {
-    return buildDigest(file.getSHA1Digest(), file.getFileSize());
+    byte[] sha1 = null;
+    synchronized (CACHE_LOCK) {
+      if (sha1Cache.containsKey(file)) {
+        sha1 = sha1Cache.get(file);
+      }
+    }
+    if (sha1 == null) {
+      sha1 = file.getSHA1Digest();
+      synchronized (CACHE_LOCK) {
+        sha1Cache.put(file, sha1);
+        sha1 = sha1Cache.get(file);
+      }
+    }
+    return buildDigest(sha1, file.getFileSize());
   }
 
   /**
@@ -72,7 +90,7 @@ public final class ContentDigests {
     byte[] allBytes = new byte[actionBytes.length + extraBytes.length];
     System.arraycopy(actionBytes, 0, allBytes, 0, actionBytes.length);
     System.arraycopy(extraBytes, 0, allBytes, actionBytes.length, extraBytes.length);
-    return new ActionKey(computeDigest(allBytes)); 
+    return new ActionKey(computeDigest(allBytes));
   }
 
   /**
