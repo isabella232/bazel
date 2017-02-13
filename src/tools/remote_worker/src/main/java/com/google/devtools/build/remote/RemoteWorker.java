@@ -223,9 +223,8 @@ public class RemoteWorker extends ExecuteServiceImplBase {
       return;
     }
 
-    System.out.println("*** Starting Hazelcast server.");
     ConcurrentMapActionCache cache =
-        new ConcurrentMapActionCache(ConcurrentMapFactory.createHazelcast(remoteOptions));
+        new ConcurrentMapActionCache(ConcurrentMapFactory.create(remoteOptions));
 
     System.out.println(
         "*** Starting grpc server on all locally bound IPs on port "

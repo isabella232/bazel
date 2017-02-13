@@ -29,6 +29,7 @@ java_library(
         "//third_party:jsr305",
         "//third_party/grpc:grpc-jar",
         "//third_party/protobuf:protobuf_java",
+        "//third_party:apache_commons_logging",
     ],
 )
 
