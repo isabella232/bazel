@@ -23,6 +23,7 @@ import com.google.common.collect.Interner;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.TreeTraverser;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
@@ -182,8 +183,11 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
   private final Map<ContentDigest, TreeNode> digestTreeNodeCache = new HashMap<>();
   private final Map<TreeNode, FileNode> fileNodeCache = new HashMap<>();
 
-  public TreeNodeRepository(Path execRoot) {
+  private final ActionInputFileCache inputCache;
+
+  public TreeNodeRepository(Path execRoot, ActionInputFileCache inputCache) {
     this.execRoot = execRoot;
+    this.inputCache = inputCache;
   }
 
   @Override
@@ -271,7 +275,7 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
       throws IOException {
     ContentDigest digest = fileContentsDigestCache.get(actionInput);
     if (digest == null) {
-      digest = ContentDigests.computeDigest(execRoot.getRelative(actionInput.getExecPathString()));
+      digest = ContentDigests.computeDigest(execRoot.getRelative(actionInput.getExecPathString()), inputCache.getDigest(actionInput));
       fileContentsDigestCache.put(actionInput, digest);
       digestFileContentsCache.put(digest, actionInput);
     }
