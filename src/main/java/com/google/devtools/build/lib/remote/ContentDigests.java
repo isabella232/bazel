@@ -31,7 +31,7 @@ import java.util.Map;
 public final class ContentDigests {
   private ContentDigests() {}
 
-  private static Map<Path, byte[]> sha1Cache = new HashMap<Path, byte[]>();
+  private static Map<String, byte[]> sha1Cache = new HashMap<String, byte[]>();
   private static final Object CACHE_LOCK = new Object();
 
   public static ContentDigest computeDigest(byte[] blob) {
@@ -40,17 +40,19 @@ public final class ContentDigests {
 
   // TODO(olaola): cache these in ActionInputFileCache!
   public static ContentDigest computeDigest(Path file) throws IOException {
+    return buildDigest(file.getSHA1Digest(), file.getFileSize());
+  }
+
+  public static ContentDigest computeDigest(Path file, byte[] cacheHash) throws IOException {
+    String cacheHashString = HashCode.fromBytes(cacheHash).toString();
     byte[] sha1 = null;
-    synchronized (CACHE_LOCK) {
-      if (sha1Cache.containsKey(file)) {
-        sha1 = sha1Cache.get(file);
-      }
+    synchronized(CACHE_LOCK) {
+      sha1 = sha1Cache.get(cacheHashString);
     }
     if (sha1 == null) {
       sha1 = file.getSHA1Digest();
-      synchronized (CACHE_LOCK) {
-        sha1Cache.put(file, sha1);
-        sha1 = sha1Cache.get(file);
+      synchronized(CACHE_LOCK) {
+        sha1Cache.put(cacheHashString, sha1);
       }
     }
     return buildDigest(sha1, file.getFileSize());

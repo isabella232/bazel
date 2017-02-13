@@ -212,7 +212,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
 
     try {
       // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
-      TreeNodeRepository repository = new TreeNodeRepository(execRoot);
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, actionExecutionContext.getActionInputFileCache());
       List<ActionInput> inputs =
           ActionInputHelper.expandArtifacts(
               spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
