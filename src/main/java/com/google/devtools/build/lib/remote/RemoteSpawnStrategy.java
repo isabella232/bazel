@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionStatusMessage;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
@@ -46,6 +47,7 @@ import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.lang.RuntimeException;
 import java.util.ArrayList;
@@ -216,6 +218,26 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       List<ActionInput> inputs =
           ActionInputHelper.expandArtifacts(
               spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
+
+      Map<PathFragment, Map<PathFragment, Artifact>> rootsAndMappings =
+        spawn.getRunfilesSupplier().getMappings();
+      for (Map.Entry<PathFragment, Map<PathFragment, Artifact>> rootAndMappings :
+          rootsAndMappings.entrySet()) {
+        PathFragment root = rootAndMappings.getKey();
+        if (root.isAbsolute()) {
+          root = root.relativeTo(execRoot.asFragment());
+        }
+        for (Map.Entry<PathFragment, Artifact> mapping : rootAndMappings.getValue().entrySet()) {
+          Artifact sourceArtifact = mapping.getValue();
+          PathFragment source =
+              (sourceArtifact != null) ? sourceArtifact.getExecPath() : new PathFragment("/dev/null");
+
+          // Preconditions.checkArgument(!mapping.getKey().isAbsolute());
+          PathFragment target = root.getRelative(mapping.getKey());
+          inputs.add(ActionInputHelper.fromPath(target));
+        }
+      }
+
       TreeNode inputRoot = repository.buildFromActionInputs(inputs);
       repository.computeMerkleDigests(inputRoot);
       Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
