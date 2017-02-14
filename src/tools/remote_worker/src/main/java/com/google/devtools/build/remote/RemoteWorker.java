@@ -20,6 +20,8 @@ import com.google.devtools.build.lib.remote.ConcurrentMapActionCache;
 import com.google.devtools.build.lib.remote.ConcurrentMapFactory;
 import com.google.devtools.build.lib.remote.ContentDigests;
 import com.google.devtools.build.lib.remote.ExecuteServiceGrpc.ExecuteServiceImplBase;
+import com.google.devtools.build.lib.remote.GrpcActionCache;
+import com.google.devtools.build.lib.remote.RemoteActionCache;
 import com.google.devtools.build.lib.remote.RemoteOptions;
 import com.google.devtools.build.lib.remote.RemoteProtocol;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Action;
@@ -33,6 +35,7 @@ import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionStatus;
 import com.google.devtools.build.lib.shell.AbnormalTerminationException;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
+import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.ProcessUtils;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -68,13 +71,13 @@ public class RemoteWorker extends ExecuteServiceImplBase {
   private final Path workPath;
   private final RemoteOptions remoteOptions;
   private final RemoteWorkerOptions options;
-  private final ConcurrentMapActionCache cache;
+  private final RemoteActionCache cache;
 
   public RemoteWorker(
       Path workPath,
       RemoteOptions remoteOptions,
       RemoteWorkerOptions options,
-      ConcurrentMapActionCache cache) {
+      RemoteActionCache cache) {
     this.workPath = workPath;
     this.remoteOptions = remoteOptions;
     this.options = options;
@@ -96,7 +99,10 @@ public class RemoteWorker extends ExecuteServiceImplBase {
     try {
       RemoteProtocol.Command command =
           RemoteProtocol.Command.parseFrom(cache.downloadBlob(action.getCommandDigest()));
+
+      long startTimeNs = BlazeClock.nanoTime();
       cache.downloadTree(action.getInputRootDigest(), execRoot);
+      System.out.println("Downloaded tree in " + (BlazeClock.nanoTime()-startTimeNs)/1000000 + "ms.");
 
       List<Path> outputs = new ArrayList<>(action.getOutputPathList().size());
       for (String output : action.getOutputPathList()) {
@@ -223,8 +229,12 @@ public class RemoteWorker extends ExecuteServiceImplBase {
       return;
     }
 
-    ConcurrentMapActionCache cache =
-        new ConcurrentMapActionCache(ConcurrentMapFactory.create(remoteOptions));
+    RemoteActionCache actionCache = null;
+    if (ConcurrentMapFactory.isRemoteCacheOptions(remoteOptions)) {
+      actionCache = new ConcurrentMapActionCache(ConcurrentMapFactory.create(remoteOptions));
+    } else if (GrpcActionCache.isRemoteCacheOptions(remoteOptions)) {
+      actionCache = new GrpcActionCache(remoteOptions);
+    }
 
     System.out.println(
         "*** Starting grpc server on all locally bound IPs on port "
@@ -232,7 +242,7 @@ public class RemoteWorker extends ExecuteServiceImplBase {
             + ".");
     Path workPath = getFileSystem().getPath(remoteWorkerOptions.workPath);
     FileSystemUtils.createDirectoryAndParents(workPath);
-    RemoteWorker worker = new RemoteWorker(workPath, remoteOptions, remoteWorkerOptions, cache);
+    RemoteWorker worker = new RemoteWorker(workPath, remoteOptions, remoteWorkerOptions, actionCache);
     final Server server =
         ServerBuilder.forPort(remoteWorkerOptions.listenPort).addService(worker).build();
     server.start();

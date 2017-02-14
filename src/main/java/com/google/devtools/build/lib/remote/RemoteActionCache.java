@@ -27,7 +27,7 @@ import javax.annotation.Nullable;
 
 /** A cache for storing artifacts (input and output) as well as the output of running an action. */
 @ThreadCompatible
-interface RemoteActionCache {
+public interface RemoteActionCache {
   // CAS API
 
   // TODO(olaola): create a unified set of exceptions raised by the cache to encapsulate the
