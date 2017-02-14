@@ -92,6 +92,11 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     action.setInputRootDigest(inputRoot);
     // Somewhat ugly: we rely on the stable order of outputs here for remote action caching.
     for (ActionInput output : outputs) {
+      if (output.getExecPathString().endsWith(".cache_status") ||
+          // TODO(anupc): Make this work for shards and runs.
+          output.getExecPathString().endsWith("test.log")) {
+        continue;
+      }
       action.addOutputPath(output.getExecPathString());
     }
     // TODO(olaola): Need to set platform as well!
@@ -170,12 +175,12 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   @Override
   public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
-    if (spawn.getExecutionInfo().containsKey("istest")) {
+    // if (spawn.getExecutionInfo().containsKey("istest")) {
       // Attempt to run tests in a sandbox, by default. SandboxStrategy will automatically honor
       // 'local' flags and fallback to using a standalone executor in such cases.
-      sandboxStrategy.exec(spawn, actionExecutionContext);
-      return;
-    }
+      // sandboxStrategy.exec(spawn, actionExecutionContext);
+      // return;
+    // }
     ActionKey actionKey = null;
     String mnemonic = spawn.getMnemonic();
     Executor executor = actionExecutionContext.getExecutor();
