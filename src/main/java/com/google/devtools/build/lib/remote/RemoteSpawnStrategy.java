@@ -46,6 +46,7 @@ import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import io.grpc.StatusRuntimeException;
 import java.io.IOException;
 import java.lang.RuntimeException;
 import java.util.ArrayList;
@@ -301,12 +302,23 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     } catch (UnsupportedOperationException e) {
       eventHandler.handle(
           Event.warn(mnemonic + " unsupported operation for action cache (" + e + ")"));
+    } catch (StatusRuntimeException e) {
+      String stackTrace = "";
+      if (verboseFailures) {
+        stackTrace = "\n" + Throwables.getStackTraceAsString(e);
+      }
+      eventHandler.handle(Event.warn(mnemonic + " remote work failed (" + e + ", " + e.getStatus() + ", " + e.getTrailers() + ")" + stackTrace));
+      if (options.remoteAllowLocalFallback) {
+        execLocally(spawn, actionExecutionContext, actionCache, actionKey);
+      } else {
+        throw new UserExecException(e);
+      }
     } catch (RuntimeException e) {
-      // String stackTrace = "";
-      // if (verboseFailures) {
-      //   stackTrace = "\n" + Throwables.getStackTraceAsString(e);
-      // }
-      eventHandler.handle(Event.warn(mnemonic + " remote work failed (" + e + ")" /* + stackTrace */));
+      String stackTrace = "";
+      if (verboseFailures) {
+        stackTrace = "\n" + Throwables.getStackTraceAsString(e);
+      }
+      eventHandler.handle(Event.warn(mnemonic + " remote work failed (" + e + ")" + stackTrace));
       if (options.remoteAllowLocalFallback) {
         execLocally(spawn, actionExecutionContext, actionCache, actionKey);
       } else {
