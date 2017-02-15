@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterators;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.CasServiceGrpc.CasServiceBlockingStub;
@@ -80,6 +81,8 @@ public final class GrpcActionCache implements RemoteActionCache {
   private final RemoteOptions options;
 
   private static final int MAX_MEMORY_KBYTES = 512 * 1024;
+
+  private  static final Object UPLOAD_TREE_LOCK = new Object();
 
   /** Reads from multiple sequential inputs and chunks the data into BlobChunks. */
   static interface BlobChunkIterator {
@@ -152,6 +155,7 @@ public final class GrpcActionCache implements RemoteActionCache {
 
   final class BlobChunkFileIterator implements BlobChunkIterator {
     private final Iterator<Path> fileIterator;
+    private final Iterator<byte[]> cacheHashIterator;
     private InputStream currentStream;
     private final Set<ContentDigest> digests;
     private ContentDigest digest;
@@ -161,12 +165,22 @@ public final class GrpcActionCache implements RemoteActionCache {
         throws IOException {
       this.digests = digests;
       this.fileIterator = fileIterator;
+      this.cacheHashIterator = null;
+      advanceInput();
+    }
+
+    public BlobChunkFileIterator(Set<ContentDigest> digests, Iterator<Path> fileIterator, Iterator<byte[]> cacheHashIterator)
+        throws IOException {
+      this.digests = digests;
+      this.fileIterator = fileIterator;
+      this.cacheHashIterator = cacheHashIterator;
       advanceInput();
     }
 
     public BlobChunkFileIterator(Path file) throws IOException {
       fileIterator = Iterators.singletonIterator(file);
       digests = ImmutableSet.of(ContentDigests.computeDigest(file));
+      cacheHashIterator = null;
       advanceInput();
     }
 
@@ -174,7 +188,11 @@ public final class GrpcActionCache implements RemoteActionCache {
       do {
         if (fileIterator != null && fileIterator.hasNext()) {
           Path file = fileIterator.next();
-          digest = ContentDigests.computeDigest(file);
+          if (cacheHashIterator != null && cacheHashIterator.hasNext()) {
+            digest = ContentDigests.computeDigest(file, cacheHashIterator.next());
+          } else {
+            digest = ContentDigests.computeDigest(file);
+          }
           currentStream = file.getInputStream();
           bytesLeft = digest.getSizeBytes();
         } else {
@@ -226,6 +244,13 @@ public final class GrpcActionCache implements RemoteActionCache {
     this(RemoteUtils.createChannel(options.remoteCache), options);
   }
 
+  private ActionInputFileCache inputCache = null;
+
+  public GrpcActionCache(RemoteOptions options, ActionInputFileCache inputCache) throws InvalidConfigurationException {
+    this(RemoteUtils.createChannel(options.remoteCache), options);
+    this.inputCache = inputCache;
+  }
+
   public static boolean isRemoteCacheOptions(RemoteOptions options) {
     return options.remoteCache != null;
   }
@@ -260,29 +285,37 @@ public final class GrpcActionCache implements RemoteActionCache {
   @Override
   public void uploadTree(TreeNodeRepository repository, Path execRoot, TreeNode root)
       throws IOException, InterruptedException {
-    repository.computeMerkleDigests(root);
-    // TODO(olaola): avoid querying all the digests, only ask for novel subtrees.
-    ImmutableSet<ContentDigest> missingDigests = getMissingDigests(repository.getAllDigests(root));
+    // NOTE(naphat) serialize this, since multiple actions starting at the same time
+    // may share some inputs, and we don't want to upload unnecessarily
+    synchronized(UPLOAD_TREE_LOCK) {
+      repository.computeMerkleDigests(root);
+      // TODO(olaola): avoid querying all the digests, only ask for novel subtrees.
+      ImmutableSet<ContentDigest> missingDigests = getMissingDigests(repository.getAllDigests(root));
 
-    // Only upload data that was missing from the cache.
-    ArrayList<ActionInput> actionInputs = new ArrayList<>();
-    ArrayList<FileNode> treeNodes = new ArrayList<>();
-    repository.getDataFromDigests(missingDigests, actionInputs, treeNodes);
+      // Only upload data that was missing from the cache.
+      ArrayList<ActionInput> actionInputs = new ArrayList<>();
+      ArrayList<FileNode> treeNodes = new ArrayList<>();
+      repository.getDataFromDigests(missingDigests, actionInputs, treeNodes);
 
-    if (!treeNodes.isEmpty()) {
-      CasUploadTreeMetadataRequest.Builder metaRequest =
-          CasUploadTreeMetadataRequest.newBuilder().addAllTreeNode(treeNodes);
-      CasUploadTreeMetadataReply reply = getBlockingStub().uploadTreeMetadata(metaRequest.build());
-      if (!reply.getStatus().getSucceeded()) {
-        throw new RuntimeException(reply.getStatus().getErrorDetail());
+      if (!treeNodes.isEmpty()) {
+        CasUploadTreeMetadataRequest.Builder metaRequest =
+            CasUploadTreeMetadataRequest.newBuilder().addAllTreeNode(treeNodes);
+        CasUploadTreeMetadataReply reply = getBlockingStub().uploadTreeMetadata(metaRequest.build());
+        if (!reply.getStatus().getSucceeded()) {
+          throw new RuntimeException(reply.getStatus().getErrorDetail());
+        }
       }
-    }
-    if (!actionInputs.isEmpty()) {
-      ArrayList<Path> paths = new ArrayList<>();
-      for (ActionInput actionInput : actionInputs) {
-        paths.add(execRoot.getRelative(actionInput.getExecPathString()));
+      if (!actionInputs.isEmpty()) {
+        ArrayList<Path> paths = new ArrayList<>();
+        ArrayList<byte[]> cacheHash = new ArrayList<>();
+        for (ActionInput actionInput : actionInputs) {
+          paths.add(execRoot.getRelative(actionInput.getExecPathString()));
+          if (inputCache != null) {
+            cacheHash.add(inputCache.getDigest(actionInput));
+          }
+        }
+        uploadChunks(paths.size(), new BlobChunkFileIterator(missingDigests, paths.iterator(), cacheHash.iterator()));
       }
-      uploadChunks(paths.size(), new BlobChunkFileIterator(missingDigests, paths.iterator()));
     }
   }
 
