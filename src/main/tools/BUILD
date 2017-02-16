@@ -44,6 +44,7 @@ cc_binary(
         ],
     }),
     linkopts = ["-lm"],
+    visibility = ['//visibility:public'],
 )
 
 filegroup(
