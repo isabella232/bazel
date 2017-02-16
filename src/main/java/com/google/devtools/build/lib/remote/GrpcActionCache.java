@@ -68,6 +68,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -82,7 +83,7 @@ public final class GrpcActionCache implements RemoteActionCache {
 
   private static final int MAX_MEMORY_KBYTES = 512 * 1024;
 
-  private  static final Object UPLOAD_TREE_LOCK = new Object();
+  private static final Semaphore UPLOAD_TREE_AVAILABLE = new Semaphore(5);
 
   /** Reads from multiple sequential inputs and chunks the data into BlobChunks. */
   static interface BlobChunkIterator {
@@ -287,7 +288,8 @@ public final class GrpcActionCache implements RemoteActionCache {
       throws IOException, InterruptedException {
     // NOTE(naphat) serialize this, since multiple actions starting at the same time
     // may share some inputs, and we don't want to upload unnecessarily
-    synchronized(UPLOAD_TREE_LOCK) {
+    UPLOAD_TREE_AVAILABLE.acquire();
+    try {
       repository.computeMerkleDigests(root);
       // TODO(olaola): avoid querying all the digests, only ask for novel subtrees.
       ImmutableSet<ContentDigest> missingDigests = getMissingDigests(repository.getAllDigests(root));
@@ -316,6 +318,8 @@ public final class GrpcActionCache implements RemoteActionCache {
         }
         uploadChunks(paths.size(), new BlobChunkFileIterator(missingDigests, paths.iterator(), cacheHash.iterator()));
       }
+    } finally {
+      UPLOAD_TREE_AVAILABLE.release();
     }
   }
 
