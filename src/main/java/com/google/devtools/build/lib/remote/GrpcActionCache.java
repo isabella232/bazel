@@ -391,28 +391,36 @@ public final class GrpcActionCache implements RemoteActionCache {
     BlobChunk chunk = reply.getData();
     ContentDigest digest = chunk.getDigest();
     Preconditions.checkArgument(metadataMap.containsKey(digest));
-    for (Pair<Path, FileMetadata> metadata : metadataMap.get(digest)) {
-      Path path = metadata.first;
-      FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
-      try (OutputStream stream = path.getOutputStream()) {
-        ByteString data = chunk.getData();
-        data.writeTo(stream);
-        long bytesLeft = digest.getSizeBytes() - data.size();
-        while (bytesLeft > 0) {
-          Preconditions.checkArgument(replies.hasNext());
-          reply = replies.next();
-          if (reply.hasStatus()) {
-            handleDownloadStatus(reply.getStatus());
-          }
-          chunk = reply.getData();
-          data = chunk.getData();
-          Preconditions.checkArgument(!chunk.hasDigest());
-          Preconditions.checkArgument(chunk.getOffset() == digest.getSizeBytes() - bytesLeft);
-          data.writeTo(stream);
-          bytesLeft -= data.size();
+    Pair<Path, FileMetadata> metadata = metadataMap.get(digest).iterator().next();
+    Path path = metadata.first;
+    FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
+    try (OutputStream stream = path.getOutputStream()) {
+      ByteString data = chunk.getData();
+      data.writeTo(stream);
+      long bytesLeft = digest.getSizeBytes() - data.size();
+      while (bytesLeft > 0) {
+        Preconditions.checkArgument(replies.hasNext());
+        reply = replies.next();
+        if (reply.hasStatus()) {
+          handleDownloadStatus(reply.getStatus());
         }
-        path.setExecutable(metadata.second.getExecutable());
+        chunk = reply.getData();
+        data = chunk.getData();
+        Preconditions.checkArgument(!chunk.hasDigest());
+        Preconditions.checkArgument(chunk.getOffset() == digest.getSizeBytes() - bytesLeft);
+        data.writeTo(stream);
+        bytesLeft -= data.size();
       }
+      path.setExecutable(metadata.second.getExecutable());
+    }
+
+    for (Pair<Path, FileMetadata> copyMetadata : metadataMap.get(digest)) {
+      Path copyPath = copyMetadata.first;
+      if (copyPath.equals(path)) {
+        // Skip same path. Should only happen for first file
+        continue;
+      }
+      FileSystemUtils.copyFile(path, copyPath);
     }
     return digest;
   }
