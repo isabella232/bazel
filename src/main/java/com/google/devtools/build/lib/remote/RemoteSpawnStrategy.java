@@ -40,10 +40,12 @@ import com.google.devtools.build.lib.remote.RemoteProtocol.ActionResult;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Command;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecuteReply;
+import com.google.devtools.build.lib.remote.RemoteProtocol.Platform;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecuteRequest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionStatus;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
@@ -87,7 +89,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   }
 
   private Action buildAction(
-      Collection<? extends ActionInput> outputs, ContentDigest command, ContentDigest inputRoot) {
+      Collection<? extends ActionInput> outputs, ContentDigest command, ContentDigest inputRoot, boolean blockNetwork) {
     Action.Builder action = Action.newBuilder();
     action.setCommandDigest(command);
     action.setInputRootDigest(inputRoot);
@@ -101,6 +103,9 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       action.addOutputPath(output.getExecPathString());
     }
     // TODO(olaola): Need to set platform as well!
+    Platform.Builder platform = Platform.newBuilder();
+    platform.setBlockNetwork(blockNetwork);
+    action.setPlatform(platform.build());
     return action.build();
   }
 
@@ -251,7 +256,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
           buildAction(
               spawn.getOutputFiles(),
               ContentDigests.computeDigest(command),
-              repository.getMerkleDigest(inputRoot));
+              repository.getMerkleDigest(inputRoot),
+              SandboxHelpers.shouldAllowNetwork(spawn));
 
       // Look up action cache, and reuse the action output if it is found.
       if (sandboxStrategy != null) {

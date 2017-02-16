@@ -38,6 +38,7 @@ message Platform {
   // be uploaded as part of the inputs.
   // It will likely contain fields as architecture, vendor, OS + version,
   // ABI, etc.
+  bool blockNetwork = 1;
 }
 
 // All the fields of this message have the following in common: they are

@@ -61,7 +61,7 @@ public final class SandboxHelpers {
     return outputFiles.build();
   }
 
-  static boolean shouldAllowNetwork(BuildRequest buildRequest, Spawn spawn) {
+  public static boolean shouldAllowNetwork(BuildRequest buildRequest, Spawn spawn) {
     // Allow network access, when --java_debug is specified, otherwise we can't connect to the
     // remote debug server of the test. This intentionally overrides the "block-network" execution
     // tag.
@@ -71,7 +71,10 @@ public final class SandboxHelpers {
         .contains("--wrapper_script_flag=--debug")) {
       return true;
     }
+    return shouldAllowNetwork(spawn);
+  }
 
+  public static boolean shouldAllowNetwork(Spawn spawn) {
     // If the Spawn requests to block network access, do so.
     if (spawn.getExecutionInfo().containsKey("block-network")) {
       return false;
