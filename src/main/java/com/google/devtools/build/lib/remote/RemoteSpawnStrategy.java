@@ -257,7 +257,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
               spawn.getOutputFiles(),
               ContentDigests.computeDigest(command),
               repository.getMerkleDigest(inputRoot),
-              SandboxHelpers.shouldAllowNetwork(spawn));
+              !SandboxHelpers.shouldAllowNetwork(spawn));
 
       // Look up action cache, and reuse the action output if it is found.
       if (sandboxStrategy != null) {
