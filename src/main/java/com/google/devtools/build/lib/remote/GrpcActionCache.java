@@ -348,7 +348,7 @@ public final class GrpcActionCache implements RemoteActionCache {
     // Send all the file requests in a single synchronous batch.
     // TODO(olaola): profile to maybe replace with separate concurrent requests.
     CasDownloadBlobRequest.Builder request = CasDownloadBlobRequest.newBuilder();
-    Map<ContentDigest, Pair<Path, FileMetadata>> metadataMap = new HashMap<>();
+    Map<ContentDigest, Set<Pair<Path, FileMetadata>>> metadataMap = new HashMap<>();
     for (Output output : result.getOutputList()) {
       Path path = execRoot.getRelative(output.getPath());
       if (output.getContentCase() == ContentCase.FILE_METADATA) {
@@ -356,7 +356,9 @@ public final class GrpcActionCache implements RemoteActionCache {
         ContentDigest digest = fileMetadata.getDigest();
         if (digest.getSizeBytes() > 0) {
           request.addDigest(digest);
-          metadataMap.put(digest, Pair.of(path, fileMetadata));
+          Set<Pair<Path, FileMetadata>> current = metadataMap.getOrDefault(digest, new HashSet<>());
+          current.add(Pair.of(path, fileMetadata));
+          metadataMap.put(digest, current);
         } else {
           // Handle empty file locally.
           FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
@@ -379,7 +381,7 @@ public final class GrpcActionCache implements RemoteActionCache {
   }
 
   private ContentDigest createFileFromStream(
-      Map<ContentDigest, Pair<Path, FileMetadata>> metadataMap, Iterator<CasDownloadReply> replies)
+      Map<ContentDigest, Set<Pair<Path, FileMetadata>>> metadataMap, Iterator<CasDownloadReply> replies)
       throws IOException, CacheNotFoundException {
     Preconditions.checkArgument(replies.hasNext());
     CasDownloadReply reply = replies.next();
@@ -389,27 +391,28 @@ public final class GrpcActionCache implements RemoteActionCache {
     BlobChunk chunk = reply.getData();
     ContentDigest digest = chunk.getDigest();
     Preconditions.checkArgument(metadataMap.containsKey(digest));
-    Pair<Path, FileMetadata> metadata = metadataMap.get(digest);
-    Path path = metadata.first;
-    FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
-    try (OutputStream stream = path.getOutputStream()) {
-      ByteString data = chunk.getData();
-      data.writeTo(stream);
-      long bytesLeft = digest.getSizeBytes() - data.size();
-      while (bytesLeft > 0) {
-        Preconditions.checkArgument(replies.hasNext());
-        reply = replies.next();
-        if (reply.hasStatus()) {
-          handleDownloadStatus(reply.getStatus());
-        }
-        chunk = reply.getData();
-        data = chunk.getData();
-        Preconditions.checkArgument(!chunk.hasDigest());
-        Preconditions.checkArgument(chunk.getOffset() == digest.getSizeBytes() - bytesLeft);
+    for (Pair<Path, FileMetadata> metadata : metadataMap.get(digest)) {
+      Path path = metadata.first;
+      FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
+      try (OutputStream stream = path.getOutputStream()) {
+        ByteString data = chunk.getData();
         data.writeTo(stream);
-        bytesLeft -= data.size();
+        long bytesLeft = digest.getSizeBytes() - data.size();
+        while (bytesLeft > 0) {
+          Preconditions.checkArgument(replies.hasNext());
+          reply = replies.next();
+          if (reply.hasStatus()) {
+            handleDownloadStatus(reply.getStatus());
+          }
+          chunk = reply.getData();
+          data = chunk.getData();
+          Preconditions.checkArgument(!chunk.hasDigest());
+          Preconditions.checkArgument(chunk.getOffset() == digest.getSizeBytes() - bytesLeft);
+          data.writeTo(stream);
+          bytesLeft -= data.size();
+        }
+        path.setExecutable(metadata.second.getExecutable());
       }
-      path.setExecutable(metadata.second.getExecutable());
     }
     return digest;
   }
@@ -473,8 +476,8 @@ public final class GrpcActionCache implements RemoteActionCache {
     Iterator<CasDownloadReply> replies = getBlockingStub().downloadBlob(request.build());
     FileMetadata fileMetadata =
         FileMetadata.newBuilder().setDigest(digest).setExecutable(executable).build();
-    Map<ContentDigest, Pair<Path, FileMetadata>> metadataMap = new HashMap<>();
-    metadataMap.put(digest, Pair.of(dest, fileMetadata));
+    Map<ContentDigest, Set<Pair<Path, FileMetadata>>> metadataMap = new HashMap<>();
+    metadataMap.put(digest, ImmutableSet.of(Pair.of(dest, fileMetadata)));
     createFileFromStream(metadataMap, replies);
   }
 
