@@ -260,15 +260,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
               !SandboxHelpers.shouldAllowNetwork(spawn));
 
       // Look up action cache, and reuse the action output if it is found.
-      if (sandboxStrategy != null) {
-        String key = "unknown-sandbox";
-        if (sandboxStrategy instanceof LinuxSandboxedStrategy) {
-          key = ((LinuxSandboxedStrategy) sandboxStrategy).getActionHashKey();
-        }
-        actionKey = ContentDigests.computeActionKey(action, key.getBytes());
-      } else {
-        actionKey = ContentDigests.computeActionKey(action);
-      }
+      actionKey = ContentDigests.computeActionKey(action);
       ActionResult result = this.options.remoteAcceptCached
           ? actionCache.getCachedActionResult(actionKey) : null;
       boolean acceptCachedResult = this.options.remoteAcceptCached;
