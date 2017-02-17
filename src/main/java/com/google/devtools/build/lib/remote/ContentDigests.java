@@ -19,11 +19,12 @@ import com.google.common.hash.Hashing;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Action;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
+import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
 import java.io.IOException;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 
 /** Helper methods relating to computing ContentDigest messages for remote execution. */
@@ -31,8 +32,16 @@ import java.util.Map;
 public final class ContentDigests {
   private ContentDigests() {}
 
-  private static Map<String, byte[]> sha1Cache = new HashMap<String, byte[]>();
-  private static final Object CACHE_LOCK = new Object();
+  private static Map<String, byte[]> sha1Cache = new ConcurrentHashMap<>();
+  private static int SHARDS = 8;
+  private static Object[] CACHE_LOCK;
+
+  static {
+    CACHE_LOCK = new Object[SHARDS];
+    for (int i = 0; i < SHARDS; i ++) {
+      CACHE_LOCK[i] = new Object();
+    }
+  }
 
   public static ContentDigest computeDigest(byte[] blob) {
     return buildDigest(Hashing.sha1().hashBytes(blob).asBytes(), blob.length);
@@ -45,14 +54,16 @@ public final class ContentDigests {
 
   public static ContentDigest computeDigest(Path file, byte[] cacheHash) throws IOException {
     String cacheHashString = HashCode.fromBytes(cacheHash).toString();
+    int shard = (SHARDS+(HashCode.fromBytes(cacheHash).asInt())%SHARDS)%SHARDS;
     byte[] sha1 = null;
-    synchronized(CACHE_LOCK) {
-      sha1 = sha1Cache.get(cacheHashString);
-    }
+    sha1 = sha1Cache.get(cacheHashString);
     if (sha1 == null) {
-      sha1 = file.getSHA1Digest();
-      synchronized(CACHE_LOCK) {
-        sha1Cache.put(cacheHashString, sha1);
+      synchronized(CACHE_LOCK[shard]) {
+        sha1 = sha1Cache.get(cacheHashString);
+        if (sha1 == null) {
+          sha1 = file.getSHA1Digest();
+          sha1Cache.put(cacheHashString, sha1);
+        }
       }
     }
     return buildDigest(sha1, file.getFileSize());
