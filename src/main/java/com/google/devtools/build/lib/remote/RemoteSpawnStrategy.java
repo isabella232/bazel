@@ -261,18 +261,22 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
 
       // Look up action cache, and reuse the action output if it is found.
       actionKey = ContentDigests.computeActionKey(action);
-      ActionResult result = this.options.remoteAcceptCached
-          ? actionCache.getCachedActionResult(actionKey) : null;
-      boolean acceptCachedResult = this.options.remoteAcceptCached;
+      // Don't cache tests.
+      boolean acceptCachedResult = this.options.remoteAcceptCached && !spawn.getExecutionInfo().containsKey("istest");
+      ActionResult result = acceptCachedResult ? actionCache.getCachedActionResult(actionKey) : null;
       if (result != null) {
-        // We don't cache failed actions, so we know the outputs exist.
-        // For now, download all outputs locally; in the future, we can reuse the digests to
-        // just update the TreeNodeRepository and continue the build.
-        try {
-          actionCache.downloadAllResults(result, execRoot);
-          return;
-        } catch (CacheNotFoundException e) {
+        if (result.getReturnCode() != 0) {
           acceptCachedResult = false; // Retry the action remotely and invalidate the results.
+        } else {
+          // We don't cache failed actions, so we know the outputs exist.
+          // For now, download all outputs locally; in the future, we can reuse the digests to
+          // just update the TreeNodeRepository and continue the build.
+          try {
+            actionCache.downloadAllResults(result, execRoot);
+            return;
+          } catch (CacheNotFoundException e) {
+            acceptCachedResult = false; // Retry the action remotely and invalidate the results.
+          }
         }
       }
 
