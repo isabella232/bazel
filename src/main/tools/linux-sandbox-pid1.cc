@@ -228,14 +228,6 @@ static int CreateTarget(const char *path, bool is_directory) {
   return 0;
 }
 
-static bool IsDirectory(const char *path) {
-  struct stat sb;
-  if (stat(path, &sb) < 0) {
-    DIE("stat(%s)", path);
-  }
-  return S_ISDIR(sb.st_mode);
-}
-
 static void CopyFile(const char *src, const char *dst) {
   int in_fd = open(src, O_RDONLY);
   if (in_fd < 0) {
