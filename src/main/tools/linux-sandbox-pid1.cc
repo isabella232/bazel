@@ -719,7 +719,7 @@ int Pid1Main(void *sync_pipe_param) {
   SetupSelfDestruction(reinterpret_cast<int *>(sync_pipe_param));
   SetupMountNamespace();
   SetupUserNamespace();
-  SetupUtsNamespace();
+  // SetupUtsNamespace();
   MountFilesystems();
   MakeFilesystemMostlyReadOnly();
   // MountProc();
