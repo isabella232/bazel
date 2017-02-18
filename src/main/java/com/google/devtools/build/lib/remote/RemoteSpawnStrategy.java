@@ -295,7 +295,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
               .setAction(action)
               .setAcceptCached(acceptCachedResult)
               .setTotalInputFileCount(inputs.size())
-              .setTimeoutMillis(1000 * Spawns.getTimeoutSeconds(spawn, 120));
+              .setTimeoutMillis(1000 * Spawns.getTimeoutSeconds(spawn, options.defaultRemoteActionTimeoutSecs));
       // TODO(olaola): set sensible local and remote timouts.
       ExecuteReply reply = workExecutor.executeRemotely(request.build());
       ExecutionStatus status = reply.getStatus();

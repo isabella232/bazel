@@ -122,4 +122,12 @@ public final class RemoteOptions extends OptionsBase {
       help = "Whether to fall back to standalone strategy if remote fails."
     )
   public boolean remoteAllowLocalFallback;
+
+  @Option(
+    name = "default_remote_action_timeout_secs",
+    defaultValue = "900",
+    category = "remote",
+    help = "Default timeout for a remote action."
+  )
+  public int defaultRemoteActionTimeoutSecs;
 }
