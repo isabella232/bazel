@@ -315,9 +315,13 @@ public final class GrpcActionCache implements RemoteActionCache {
       if (!treeNodes.isEmpty()) {
         CasUploadTreeMetadataRequest.Builder metaRequest =
             CasUploadTreeMetadataRequest.newBuilder().addAllTreeNode(treeNodes);
-        CasUploadTreeMetadataReply reply = getBlockingStub().uploadTreeMetadata(metaRequest.build());
-        if (!reply.getStatus().getSucceeded()) {
-          throw new RuntimeException(reply.getStatus().getErrorDetail());
+        try {
+          CasUploadTreeMetadataReply reply = getFutureStub().uploadTreeMetadata(metaRequest.build()).get();
+          if (!reply.getStatus().getSucceeded()) {
+            throw new RuntimeException(reply.getStatus().getErrorDetail());
+          }
+        } catch (ExecutionException e) {
+          throw new RuntimeException(e);
         }
       }
       if (!actionInputs.isEmpty()) {
