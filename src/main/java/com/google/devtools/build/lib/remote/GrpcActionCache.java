@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.CasServiceGrpc.CasServiceBlockingStub;
+import com.google.devtools.build.lib.remote.CasServiceGrpc.CasServiceFutureStub;
 import com.google.devtools.build.lib.remote.CasServiceGrpc.CasServiceStub;
 import com.google.devtools.build.lib.remote.ContentDigests.ActionKey;
 import com.google.devtools.build.lib.remote.ExecutionCacheServiceGrpc.ExecutionCacheServiceBlockingStub;
@@ -68,6 +69,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -261,6 +263,11 @@ public final class GrpcActionCache implements RemoteActionCache {
         .withDeadlineAfter(options.grpcTimeoutSeconds, TimeUnit.SECONDS);
   }
 
+  private CasServiceFutureStub getFutureStub() {
+    return CasServiceGrpc.newFutureStub(channel)
+        .withDeadlineAfter(options.grpcTimeoutSeconds, TimeUnit.SECONDS);
+  }
+
   private CasServiceStub getStub() {
     return CasServiceGrpc.newStub(channel)
         .withDeadlineAfter(options.grpcTimeoutSeconds, TimeUnit.SECONDS);
@@ -271,12 +278,18 @@ public final class GrpcActionCache implements RemoteActionCache {
     if (request.getDigestCount() == 0) {
       return ImmutableSet.of();
     }
-    CasStatus status = getBlockingStub().lookup(request.build()).getStatus();
-    if (!status.getSucceeded() && status.getError() != CasStatus.ErrorCode.MISSING_DIGEST) {
-      // TODO(olaola): here and below, add basic retry logic on transient errors!
-      throw new RuntimeException(status.getErrorDetail());
-    }
+    try {
+      CasStatus status = getFutureStub().lookup(request.build()).get().getStatus();
+      if (!status.getSucceeded() && status.getError() != CasStatus.ErrorCode.MISSING_DIGEST) {
+        // TODO(olaola): here and below, add basic retry logic on transient errors!
+        throw new RuntimeException(status.getErrorDetail());
+      }
     return ImmutableSet.copyOf(status.getMissingDigestList());
+    } catch (InterruptedException e) {
+      throw new RuntimeException(e);
+    } catch (ExecutionException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
