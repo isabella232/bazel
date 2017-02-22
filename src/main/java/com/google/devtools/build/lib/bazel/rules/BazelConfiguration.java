@@ -75,20 +75,4 @@ public class BazelConfiguration extends Fragment {
     }
     return new PathFragment("/bin/bash");
   }
-
-  @Override
-  public void setupShellEnvironment(ImmutableMap.Builder<String, String> builder) {
-    String path = System.getenv("PATH");
-    builder.put("PATH", path == null ? "/bin:/usr/bin" : path);
-
-    String ldLibraryPath = System.getenv("LD_LIBRARY_PATH");
-    if (ldLibraryPath != null) {
-      builder.put("LD_LIBRARY_PATH", ldLibraryPath);
-    }
-
-    String tmpdir = System.getenv("TMPDIR");
-    if (tmpdir != null) {
-      builder.put("TMPDIR", tmpdir);
-    }
-  }
 }

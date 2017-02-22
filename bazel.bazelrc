@@ -1,3 +1,3 @@
 startup --host_jvm_args='-Xmx1024m' --host_jvm_args=-Dbazel.DigestFunction=SHA1 --deep_execroot
-build --package_path %workspace%:/srv/server --spawn_strategy=sandboxed --genrule_strategy=sandboxed --verbose_failures --jobs 4
+build --package_path %workspace%:/srv/server --spawn_strategy=sandboxed --genrule_strategy=sandboxed --verbose_failures --jobs 4 --action_env=PATH=/usr/bin:/bin
 test --package_path %workspace%:/srv/server --test_output=errors
