@@ -24,7 +24,7 @@ chmod +x $pkg_dir/usr/bin/bazel
 
 cp bazel.bazelrc $pkg_dir/usr/bin/bazel-bin.bazel-binrc
 
-./output/bazel --batch build scripts:bash_completion
+./output/bazel --batch build -c opt scripts:bash_completion
 cp ./bazel-bin/scripts/bazel-complete.bash $pkg_dir/etc/bash_completion.d/bazel || fail "Can't package bash_completion"
 
 # oracle-java8-jdk
