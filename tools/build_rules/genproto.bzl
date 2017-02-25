@@ -46,11 +46,12 @@ gensrcjar = rule(
             single_file = True,
         ),
         "grpc_java_plugin": attr.label(
-            cfg = HOST_CFG,
+            cfg = "host",
             executable = True,
             single_file = True,
         ),
         "_gensrcjar": attr.label(
+            cfg = "data",
             default = Label(str(Label("//tools/build_rules:gensrcjar"))),
             executable = True,
         ),
@@ -58,12 +59,14 @@ gensrcjar = rule(
         # value, but Skylark needs to support select first.
         "_proto_compiler": attr.label(
             default = Label("//third_party/protobuf:protoc"),
+            cfg = "data",
             allow_files = True,
             executable = True,
             single_file = True,
         ),
         "_jar": attr.label(
             default = Label("@bazel_tools//tools/jdk:jar"),
+            cfg = "data",
             allow_files = True,
             executable = True,
             single_file = True,
@@ -74,6 +77,7 @@ gensrcjar = rule(
         # the jar dependency above should just do the right thing on its own.
         "_jdk": attr.label(
             default = Label("@bazel_tools//tools/jdk:jdk"),
+            cfg = "data",
             allow_files = True,
         ),
     },
