@@ -116,11 +116,14 @@ fi
 [[ -n "$RUNTEST_PRESERVE_CWD" ]] && EXE="${TEST_NAME}"
 
 exitCode=0
+start=$(date +%s)
 if [ -z "$COVERAGE_DIR" ]; then
   "${TEST_PATH}" "$@" || exitCode=$?
 else
   "$1" "$TEST_PATH" "${@:3}" || exitCode=$?
 fi
+end=$(date +%s)
+duration=$(expr $end - $start)
 
 
 if [ -n "${XML_OUTPUT_FILE-}" -a ! -f "${XML_OUTPUT_FILE-}" ]; then
@@ -139,8 +142,8 @@ if [ -n "${XML_OUTPUT_FILE-}" -a ! -f "${XML_OUTPUT_FILE-}" ]; then
   cat <<EOF >${XML_OUTPUT_FILE}
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
-  <testsuite name="$TEST_NAME" tests="1" failures="0" errors="$errors">
-    <testcase name="$TEST_NAME" status="run">$error_msg</testcase>
+  <testsuite name="$TEST_NAME" tests="1" failures="0" errors="$errors" time="$duration">
+    <testcase name="$TEST_NAME" status="run" time="$duration">$error_msg</testcase>
   </testsuite>
 </testsuites>
 EOF
