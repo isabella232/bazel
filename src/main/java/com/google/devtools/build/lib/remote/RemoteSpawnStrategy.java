@@ -231,9 +231,6 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       }
       for (ActionInput input : spawnInputs) {
         hasher.putString(input.getExecPathString(), Charset.defaultCharset());
-        if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
-          continue;
-        }
         byte[] digest = null;
         try {
           // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
