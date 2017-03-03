@@ -19,7 +19,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
@@ -220,8 +219,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
 
     try {
       ActionInputFileCache inputFileCache = actionExecutionContext.getActionInputFileCache();
-      List<ActionInput> inputs =
-          ActionInputHelper.expandArtifacts(spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
+      Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
       Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
       Hasher hasher = Hashing.sha256().newHasher();
       if (sandboxStrategy != null) {
@@ -231,7 +229,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         }
         hasher.putBytes(key.getBytes());
       }
-       for (ActionInput input : inputs) {
+      for (ActionInput input : spawnInputs) {
         hasher.putString(input.getExecPathString(), Charset.defaultCharset());
         byte[] digest = null;
         try {
@@ -277,6 +275,9 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         return;
       }
 
+      List<ActionInput> inputs =
+          ActionInputHelper.expandArtifacts(
+              spawnInputs, actionExecutionContext.getArtifactExpander());
       // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
       TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
       TreeNode inputRoot = repository.buildFromActionInputs(inputs);
