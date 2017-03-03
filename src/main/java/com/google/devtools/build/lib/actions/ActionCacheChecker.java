@@ -347,6 +347,14 @@ public class ActionCacheChecker {
       // it in the cache entry and just use empty string instead.
       entry = new ActionCache.Entry("", ImmutableMap.<String, String>of(), false);
       for (Artifact input : action.getInputs()) {
+        // NOTE: Ignore manifest file contents while generating cache key for middleman artifacts.
+        // This is required for efficient/output-base-independent remote cache key computation.
+        // If manifest file contents are included in cache key computation, they will include
+        // absolute paths to the local filesystem, which will make the remote action cache key
+        // machine-specific.
+        if (input.getExecPathString().endsWith(".runfiles/MANIFEST")) {
+          continue;
+        }
         entry.addFile(input.getExecPath(), metadataHandler.getMetadataMaybe(input));
       }
     }
