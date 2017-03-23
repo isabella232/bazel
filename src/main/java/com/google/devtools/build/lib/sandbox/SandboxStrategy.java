@@ -105,10 +105,6 @@ abstract class SandboxStrategy implements SandboxedSpawnActionContext {
     }
 
     if (execException != null) {
-      outErr.printErr(
-          "Use --strategy="
-          + spawn.getMnemonic()
-          + "=standalone to disable sandboxing for the failing actions.\n");
       throw execException;
     }
   }
