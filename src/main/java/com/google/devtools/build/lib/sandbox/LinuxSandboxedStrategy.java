@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.sandbox;
 
-import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSet.Builder;
@@ -140,18 +139,17 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
 
     Set<Path> writableDirs = getWritableDirs(sandboxExecRoot, spawn.getEnvironment());
 
-    SymlinkedExecRoot symlinkedExecRoot = new SymlinkedExecRoot(sandboxExecRoot, false);
+    SymlinkedExecRoot symlinkedExecRoot = new SymlinkedExecRoot(sandboxExecRoot);
     ImmutableSet<PathFragment> outputs = SandboxHelpers.getOutputFiles(spawn);
-    Map<PathFragment, Path> inputMounts = getMounts(spawn, actionExecutionContext);
     try {
       symlinkedExecRoot.createFileSystem(
-          inputMounts, outputs, writableDirs);
+          getMounts(spawn, actionExecutionContext), outputs, writableDirs);
       sandboxTempDir.createDirectory();
     } catch (IOException e) {
       throw new UserExecException("I/O error during sandboxed execution", e);
     }
 
-    SandboxRunner runner = getSandboxRunner(spawn, sandboxPath, sandboxExecRoot, sandboxTempDir, inputMounts);
+    SandboxRunner runner = getSandboxRunner(spawn, sandboxPath, sandboxExecRoot, sandboxTempDir);
     try {
       runSpawn(
           spawn,
@@ -179,7 +177,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   }
 
   private SandboxRunner getSandboxRunner(
-      Spawn spawn, Path sandboxPath, Path sandboxExecRoot, Path sandboxTempDir, Map<PathFragment, Path> inputMounts)
+      Spawn spawn, Path sandboxPath, Path sandboxExecRoot, Path sandboxTempDir)
       throws UserExecException {
     if (fullySupported) {
       return new LinuxSandboxRunner(
@@ -190,7 +188,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
           getWritableDirs(sandboxExecRoot, spawn.getEnvironment()),
           getInaccessiblePaths(),
           getTmpfsPaths(),
-          getReadOnlyBindMounts(blazeDirs, sandboxExecRoot, inputMounts),
+          getReadOnlyBindMounts(blazeDirs, sandboxExecRoot),
           verboseFailures,
           sandboxOptions.sandboxDebug);
     } else {
@@ -208,7 +206,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   }
 
   private SortedMap<Path, Path> getReadOnlyBindMounts(
-      BlazeDirectories blazeDirs, Path sandboxExecRoot, Map<PathFragment, Path> inputMounts) throws UserExecException {
+      BlazeDirectories blazeDirs, Path sandboxExecRoot) throws UserExecException {
     Path tmpPath = blazeDirs.getFileSystem().getPath("/tmp");
     final SortedMap<Path, Path> bindMounts = Maps.newTreeMap();
     // NOTE(naphat) mount embedded binaries
@@ -382,70 +380,6 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
       Preconditions.checkArgument(path.exists(), "%s does not exist", path.toString());
     }
     return mounts;
-  }
-
-  /**
-   * Helper method of {@link #finalizeMounts}. This method handles adding a single path
-   * to the output map, including making sure it exists and adding the target of a
-   * symbolic link if necessary.
-   *
-   * @param finalizedMounts the map to add the mapping(s) to
-   * @param target the key to add to the map
-   * @param source the value to add to the map
-   * @param stat information about source (passed in to avoid fetching it twice)
-   */
-  private static void finalizeMountPath(
-      Map<Path, Path> finalizedMounts, Path target, Path source, FileStatus stat) throws IOException {
-    // The source must exist.
-    Preconditions.checkArgument(stat != null, "%s does not exist", source.toString());
-    finalizedMounts.put(target, source);
-
-    if (stat.isSymbolicLink()) {
-      Path symlinkTarget = source.resolveSymbolicLinks();
-      Preconditions.checkArgument(
-          symlinkTarget.exists(), "%s does not exist", symlinkTarget.toString());
-      finalizedMounts.put(symlinkTarget, symlinkTarget);
-    }
-    // HACK(naphat) in the new scheme, the sandbox exec root is not the same
-    // as the default exec root, and some our our rules get confused
-    if (!source.equals(target)) {
-      finalizedMounts.put(source, source);
-    }
-  }
-
-  /**
-   * Performs various checks on each mounted file which require stating each one.
-   * Contained in one function to allow minimizing the number of syscalls involved.
-   *
-   * Checks for each mount if the source refers to a symbolic link and if yes, adds another mount
-   * for the target of that symlink to ensure that it keeps working inside the sandbox.
-   *
-   * Checks for each mount if the source refers to a directory and if yes, replaces that mount with
-   * mounts of all files inside that directory.
-   *
-   * Validates all mounts against a set of criteria and throws an exception on error.
-   *
-   * @return a new mounts multimap with all mounts and the added mounts.
-   */
-  static Map<Path, Path> finalizeMounts(Map<Path, Path> mounts) throws IOException {
-    Map<Path, Path> finalizedMounts = Maps.newTreeMap();
-    for (Entry<Path, Path> mount : mounts.entrySet()) {
-      Path target = mount.getKey();
-      Path source = mount.getValue();
-
-      FileStatus stat = source.statNullable(Symlinks.NOFOLLOW);
-
-      if (stat != null && stat.isDirectory()) {
-        for (Path subSource : FileSystemUtils.traverseTree(source, Predicates.alwaysTrue())) {
-          Path subTarget = target.getRelative(subSource.relativeTo(source));
-          finalizeMountPath(
-              finalizedMounts, subTarget, subSource, subSource.statNullable(Symlinks.NOFOLLOW));
-        }
-      } else {
-        finalizeMountPath(finalizedMounts, target, source, stat);
-      }
-    }
-    return finalizedMounts;
   }
 
   /**

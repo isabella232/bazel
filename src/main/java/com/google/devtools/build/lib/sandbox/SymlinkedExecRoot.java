@@ -35,19 +35,9 @@ import java.util.Set;
 public final class SymlinkedExecRoot implements SandboxExecRoot {
 
   private final Path sandboxExecRoot;
-  private final boolean createSymlinks;
 
   public SymlinkedExecRoot(Path sandboxExecRoot) {
-    this(sandboxExecRoot, true);
-  }
-
-  /**
-   * If createSymlinks is false, then only create the enclosing folders for
-   * the inputs and outputs, not the actual symlinks.
-   */
-  public SymlinkedExecRoot(Path sandboxExecRoot, boolean createSymlinks) {
     this.sandboxExecRoot = sandboxExecRoot;
-    this.createSymlinks = createSymlinks;
   }
 
   @Override
