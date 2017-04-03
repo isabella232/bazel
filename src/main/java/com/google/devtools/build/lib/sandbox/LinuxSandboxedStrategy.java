@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.unix.NativePosixFiles;
 import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -211,28 +212,64 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     Path tmpPath = blazeDirs.getFileSystem().getPath("/tmp");
     final SortedMap<Path, Path> bindMounts = Maps.newTreeMap();
     // NOTE(naphat) mount embedded binaries
-    Path mount = blazeDirs.getEmbeddedBinariesRoot().getRelative("build-runfiles");
+    Path mount = blazeDirs.getEmbeddedBinariesRoot();
     bindMounts.put(mount, mount);
     try {
       bindMounts.putAll(handleRWMounts(mountUsualUnixDirs()));
 
-      SortedMap<Path, Path> inputMountsSorted = Maps.newTreeMap();
-      for (Entry<PathFragment, Path> entry: inputMounts.entrySet()) {
-        inputMountsSorted.put(sandboxExecRoot.getRelative(entry.getKey()), entry.getValue());
-      }
-
-      bindMounts.putAll(finalizeMounts(inputMountsSorted));
     } catch (IOException e) {
       throw new UserExecException(
           String.format("Error occurred while generating system mounts. %s", e.getMessage()));
     }
-    // NOTE(naphat) never mount these, since we mount each input individually
+    // NOTE(naphat) we mount these unconditionally, so things work in a rootfs
     // if (blazeDirs.getWorkspace().startsWith(tmpPath)) {
-    //  bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+     bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
     // }
     // if (blazeDirs.getOutputBase().startsWith(tmpPath)) {
-    //  bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
+     bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
     // }
+    Path externalRepositoriesRoot = blazeDirs.getOutputBase().getChild("external");
+    try {
+      if (externalRepositoriesRoot.exists()) {
+        // local repositories are stored in two ways in bazel: either
+        // $output/external/$repo is a symlink (local_repository) or
+        // the immediate children $output/external/$repo/$child are symlinks
+        // (new_local_repository)
+
+        // we use readSymbolicLink() instead of resolveSymbolicLinks() as we
+        // only want to resolve it one level
+
+        for (Dirent repoBase: externalRepositoriesRoot.readdir(Symlinks.NOFOLLOW)) {
+          Path repo = externalRepositoriesRoot.getChild(repoBase.getName());
+          if (repoBase.getType() == Dirent.Type.DIRECTORY) {
+            for (Dirent subEntryBase: repo.readdir(Symlinks.NOFOLLOW)) {
+              Path subEntry = repo.getChild(subEntryBase.getName());
+              if (subEntryBase.getType() == Dirent.Type.SYMLINK) {
+                Path symlinkTarget = repo.getRelative(subEntry.readSymbolicLink());
+                if (symlinkTarget.exists()) {
+                  // NOTE we ignore when the external repositories link to something that
+                  // doesn't exist. That is an internal bazel issue, or a bad input
+                  // issue.
+                  bindMounts.put(symlinkTarget, symlinkTarget);
+                }
+              }
+            }
+          } else if (repoBase.getType() == Dirent.Type.SYMLINK) {
+            Path symlinkTarget = externalRepositoriesRoot.getRelative(repo.readSymbolicLink());
+            if (symlinkTarget.exists()){
+              // NOTE we ignore when the external repositories link to something that
+              // doesn't exist. That is an internal bazel issue, or a bad input
+              // issue.
+              bindMounts.put(symlinkTarget, symlinkTarget);
+            }
+          }
+        }
+      }
+    } catch (IOException e) {
+      throw new UserExecException(
+          String.format("Error occurred while generating input mounts. %s", e.getMessage()));
+    }
+
     for (ImmutableMap.Entry<String, String> additionalMountPath :
         sandboxOptions.sandboxAdditionalMounts) {
       try {

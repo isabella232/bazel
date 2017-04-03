@@ -109,9 +109,6 @@ public final class SymlinkedExecRoot implements SandboxExecRoot {
 
   private void createSymlinksForInputs(Map<PathFragment, Path> inputs) throws IOException {
     // All input files are relative to the execroot.
-    if (!this.createSymlinks) {
-      return;
-    }
     for (Entry<PathFragment, Path> entry : inputs.entrySet()) {
       Path key = sandboxExecRoot.getRelative(entry.getKey());
       FileStatus keyStat = key.statNullable(Symlinks.NOFOLLOW);
