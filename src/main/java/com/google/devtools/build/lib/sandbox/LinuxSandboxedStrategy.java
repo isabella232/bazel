@@ -434,9 +434,9 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   public String getActionHashKey() {
     if (rootfsLabel != null) {
       String labelString = rootfsLabel.getDefaultCanonicalForm();
-      return "sandbox2" + labelString;
+      return "sandbox3" + labelString;
     } else {
-      return "sandbox2";
+      return "sandbox3";
     }
   }
 }
