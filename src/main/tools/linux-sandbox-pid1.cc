@@ -312,8 +312,8 @@ static void MountFilesystems() {
     }
     PRINT_DEBUG("bind mount: %s -> %s", source, target);
     CreateTarget(target + 1, IsDirectory(source));
-    if (mount(source, target + 1, NULL, MS_BIND, NULL) < 0) {
-      DIE("mount(%s, %s, NULL, MS_BIND, NULL)", source, target + 1);
+    if (mount(source, target + 1, NULL, MS_REC | MS_BIND, NULL) < 0) {
+      DIE("mount(%s, %s, NULL, MS_REC | MS_BIND, NULL)", source, target + 1);
     }
   }
 
