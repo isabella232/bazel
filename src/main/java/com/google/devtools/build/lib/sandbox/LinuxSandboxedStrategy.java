@@ -205,6 +205,16 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     return tmpfsPaths.build();
   }
 
+  private boolean isInMounts(Map<Path, Path> mounts, Path path) {
+    String pathString = path.toString();
+    for (Path blacklist: mounts.keySet()) {
+      if (pathString.startsWith(blacklist.toString())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private SortedMap<Path, Path> getReadOnlyBindMounts(
       BlazeDirectories blazeDirs, Path sandboxExecRoot) throws UserExecException {
     Path tmpPath = blazeDirs.getFileSystem().getPath("/tmp");
@@ -212,9 +222,10 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     // NOTE(naphat) mount embedded binaries
     Path mount = blazeDirs.getEmbeddedBinariesRoot();
     bindMounts.put(mount, mount);
+    Map<Path, Path> systemMounts = null;
     try {
-      bindMounts.putAll(handleRWMounts(mountUsualUnixDirs()));
-
+      systemMounts = mountUsualUnixDirs();
+      bindMounts.putAll(handleRWMounts(systemMounts));
     } catch (IOException e) {
       throw new UserExecException(
           String.format("Error occurred while generating system mounts. %s", e.getMessage()));
@@ -248,7 +259,9 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
                   // NOTE we ignore when the external repositories link to something that
                   // doesn't exist. That is an internal bazel issue, or a bad input
                   // issue.
-                  bindMounts.put(symlinkTarget, symlinkTarget);
+                  if (!isInMounts(systemMounts, symlinkTarget)) {
+                    bindMounts.put(symlinkTarget, symlinkTarget);
+                  }
                 }
               }
             }
@@ -258,7 +271,9 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
               // NOTE we ignore when the external repositories link to something that
               // doesn't exist. That is an internal bazel issue, or a bad input
               // issue.
-              bindMounts.put(symlinkTarget, symlinkTarget);
+              if (!isInMounts(systemMounts, symlinkTarget)) {
+                bindMounts.put(symlinkTarget, symlinkTarget);
+              }
             }
           }
         }
@@ -434,9 +449,9 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   public String getActionHashKey() {
     if (rootfsLabel != null) {
       String labelString = rootfsLabel.getDefaultCanonicalForm();
-      return "sandbox3" + labelString;
+      return "sandbox4" + labelString;
     } else {
-      return "sandbox3";
+      return "sandbox4";
     }
   }
 }
