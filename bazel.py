@@ -61,13 +61,15 @@ def set_java_home():
     sys.exit('No Java installed')
 
 def main():
+  start = time.time()
   metrics = {
     'debs': {},
-    'timestamps': {},
-    'durations': {},
-    'cmd': sys.argv
+    'bazel': {
+        'cmd': sys.argv,
+    },
+    'posted_timestamp': int(start),
   }
-  start = time.time()
+
   logfile = os.path.join(get_log_dir(), 'bazel-%.6f.log' % (start))
 
   metrics['debs'] = detect_versions()
@@ -86,9 +88,9 @@ def main():
 
   end = time.time()
 
-  metrics['timestamps']['start'] = start
-  metrics['durations']['exec'] = end-start
-  metrics['returncode'] = returncode
+  metrics['bazel']['time_initiated'] = int(start)
+  metrics['bazel']['duration_ms'] = int((end-start)*1000)
+  metrics['bazel']['exit_code'] = returncode
 
   parent_pid = os.getppid()
   with open('/proc/%d/cmdline' %(parent_pid), 'r') as parent_proc_file:
@@ -100,7 +102,7 @@ def main():
     # string.
     parent_proc = parent_proc_file.read().split('\x00')[:-1]
 
-  metrics['caller'] = parent_proc
+  metrics['bazel']['caller'] = parent_proc
 
   with open(logfile, 'w') as json_out:
     json.dump(metrics, json_out, indent=4, sort_keys=True)
