@@ -19,7 +19,7 @@ mkdir -p $pkg_dir/usr/bin $pkg_dir/etc/bash_completion.d
 
 # Do some hacking to support multiple java installations.
 cp ./bazel-bin/src/bazel $pkg_dir/usr/bin/bazel-bin
-cp bazel.sh $pkg_dir/usr/bin/bazel
+cp bazel.py $pkg_dir/usr/bin/bazel
 chmod +x $pkg_dir/usr/bin/bazel
 
 cp bazel.bazelrc $pkg_dir/usr/bin/bazel-bin.bazel-binrc
