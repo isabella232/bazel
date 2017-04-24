@@ -33,12 +33,6 @@ public class LinuxSandboxRootfsManager {
   private final String imagesRoot;
   private Reporter reporter;
 
-  // files that should be copied from host machine into rootfs
-  private static final String COPY_FROM_HOST[] = new String[]{
-    "/etc/hosts",
-    "/etc/resolv.conf",
-  };
-
   public static final Set<String> MOUNT_BLACKLIST = new HashSet<String>(
     Arrays.asList(new String[]{
     "dev",
@@ -84,16 +78,6 @@ public class LinuxSandboxRootfsManager {
       TarArchiveEntry tarEntry;
       while ((tarEntry = tarStream.getNextTarEntry()) != null) {
         this.extractTarEntry(basePath, tarStream, tarEntry);
-      }
-
-      for (String path : COPY_FROM_HOST) {
-        File systemFile = new File(path);
-        if (!systemFile.exists()) {
-          continue;
-        }
-        String rootfsPath = basePathString + path;
-        File rootfsFile = new File(rootfsPath);
-        Files.copy(systemFile.toPath(), rootfsFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
       }
 
       return basePathString;

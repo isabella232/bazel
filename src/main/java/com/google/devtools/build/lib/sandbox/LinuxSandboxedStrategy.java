@@ -62,6 +62,10 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     Arrays.asList(new String[]{"/etc", "/run", "/srv"})
   );
 
+  private static final Set<String> MOUNTS_FROM_HOST = new HashSet<String>(
+    Arrays.asList(new String[]{"/etc/hosts", "/etc/resolv.conf"})
+  );
+
   private static Boolean sandboxingSupported = null;
 
   public static boolean isSupported(CommandEnvironment env) {
@@ -237,6 +241,13 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     // if (blazeDirs.getOutputBase().startsWith(tmpPath)) {
      bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
     // }
+    FileSystem fs = blazeDirs.getFileSystem();
+    for (String entry: MOUNTS_FROM_HOST) {
+      Path entryPath = fs.getPath(entry);
+      if (entryPath.exists()) {
+        bindMounts.put(entryPath, entryPath);
+      }
+    }
     Path externalRepositoriesRoot = blazeDirs.getOutputBase().getChild("external");
     try {
       if (externalRepositoriesRoot.exists()) {
