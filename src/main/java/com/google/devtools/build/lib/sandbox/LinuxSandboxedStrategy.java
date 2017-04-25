@@ -89,6 +89,11 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   private final String rootfsBase;
   private final Label rootfsLabel;
 
+  // typically, we only mount the target of a local repository rule when doing so wouldn't
+  // override what is provided in the sandbox rootfs. However, for things in this list,
+  // mount them unconditionally.
+  private final Set<String> localRepoUnconditionalMounts;
+
   LinuxSandboxedStrategy(
       BuildRequest buildRequest,
       BlazeDirectories blazeDirs,
@@ -110,6 +115,11 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     this.fullySupported = fullySupported;
     this.rootfsBase = rootfsBase;
     this.rootfsLabel = rootfsLabel;
+    this.localRepoUnconditionalMounts = new HashSet<String>(
+      sandboxOptions.sandboxAdditionalLocalRepoMounts
+    );
+    // this is set by bazel itself to be $JAVA_HOME, before the sandbox is ever launched.
+    localRepoUnconditionalMounts.add("local_jdk");
   }
 
   /** Executes the given {@code spawn}. */
@@ -258,9 +268,9 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
 
         // we use readSymbolicLink() instead of resolveSymbolicLinks() as we
         // only want to resolve it one level
-
         for (Dirent repoBase: externalRepositoriesRoot.readdir(Symlinks.NOFOLLOW)) {
-          Path repo = externalRepositoriesRoot.getChild(repoBase.getName());
+          String externalRepoName = repoBase.getName();
+          Path repo = externalRepositoriesRoot.getChild(externalRepoName);
           if (repoBase.getType() == Dirent.Type.DIRECTORY) {
             for (Dirent subEntryBase: repo.readdir(Symlinks.NOFOLLOW)) {
               Path subEntry = repo.getChild(subEntryBase.getName());
@@ -270,7 +280,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
                   // NOTE we ignore when the external repositories link to something that
                   // doesn't exist. That is an internal bazel issue, or a bad input
                   // issue.
-                  if (!isInMounts(systemMounts, symlinkTarget)) {
+                  if (localRepoUnconditionalMounts.contains(externalRepoName) || !isInMounts(systemMounts, symlinkTarget)) {
                     bindMounts.put(symlinkTarget, symlinkTarget);
                   }
                 }

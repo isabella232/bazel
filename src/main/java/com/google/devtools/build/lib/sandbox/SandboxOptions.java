@@ -131,6 +131,17 @@ public class SandboxOptions extends OptionsBase {
   public Label sandboxRootfs;
 
   @Option(
+      name = "sandbox_add_local_repo_mount",
+      allowMultiple = true,
+      defaultValue = "",
+      category = "config",
+      help = "For sandbox with the rootfs, we only mount the targets of the local repos when they"
+          + " wouldn't override the content of the rootfs. This is an additional whitelist to"
+          + " mount the targets of these local repos unconditionally. This always includes local_jdk."
+  )
+  public List<String> sandboxAdditionalLocalRepoMounts;
+
+  @Option(
     name = "sandbox_rootfs_cache_path",
     category = "config",
     defaultValue = "",
