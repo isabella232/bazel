@@ -73,6 +73,25 @@ public final class CcSkylarkApiProvider extends SkylarkApiProvider {
   }
 
   @SkylarkCallable(
+      name = "pic_libs",
+      structField = true,
+      doc =
+          "Returns the immutable set of (preferably PIC) libraries for either "
+              + "FULLY STATIC mode (linkopts=[\"-static\"]) or MOSTLY STATIC mode (linkstatic=1) "
+              + "(possibly empty but never None)")
+  public NestedSet<Artifact> getPicLibraries() {
+    NestedSetBuilder<Artifact> libs = NestedSetBuilder.linkOrder();
+    CcLinkParamsInfo ccLinkParams = getInfo().get(CcLinkParamsInfo.PROVIDER);
+    if (ccLinkParams == null) {
+      return libs.build();
+    }
+    for (LinkerInput lib : ccLinkParams.getCcLinkParams(true, true).getLibraries()) {
+      libs.add(lib.getArtifact());
+    }
+    return libs.build();
+  }
+
+  @SkylarkCallable(
       name = "link_flags",
       structField = true,
       doc =
