@@ -36,8 +36,10 @@ import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpHead;
 import org.apache.http.client.methods.HttpPut;
+import org.apache.http.conn.HttpClientConnectionManager;
 import org.apache.http.entity.ByteArrayEntity;
-import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
 
 /**
@@ -85,15 +87,25 @@ public final class ConcurrentMapFactory {
   private static class RestUrlCache implements ConcurrentMap<String, byte[]> {
 
     final String baseUrl;
+    static final PoolingHttpClientConnectionManager poolingConnManager = new PoolingHttpClientConnectionManager();
+    static {
+      // We allow up to 20 parallel connections to the cache.
+      poolingConnManager.setDefaultMaxPerRoute(20);
+      poolingConnManager.setMaxTotal(20);
+    }
 
     RestUrlCache(String baseUrl) {
       this.baseUrl = baseUrl;
     }
 
+    private HttpClient getClient() {
+      return HttpClients.custom().setConnectionManager(poolingConnManager).build();
+    }
+
     @Override
     public boolean containsKey(Object key) {
       try {
-        HttpClient client = new DefaultHttpClient();
+        HttpClient client = getClient();
         HttpHead head = new HttpHead(baseUrl + "/" + key);
         HttpResponse response = client.execute(head);
         int statusCode = response.getStatusLine().getStatusCode();
@@ -107,7 +119,7 @@ public final class ConcurrentMapFactory {
     public byte[] get(Object key) {
       long startTime = Profiler.nanoTimeMaybe();
       try {
-        HttpClient client = new DefaultHttpClient();
+        HttpClient client = getClient();
         HttpGet get = new HttpGet(baseUrl + "/" + key);
         HttpResponse response = client.execute(get);
         int statusCode = response.getStatusLine().getStatusCode();
@@ -136,7 +148,7 @@ public final class ConcurrentMapFactory {
     public byte[] put(String key, byte[] value) {
       long startTime = Profiler.nanoTimeMaybe();
       try {
-        HttpClient client = new DefaultHttpClient();
+        HttpClient client = getClient();
         HttpPut put = new HttpPut(baseUrl + "/" + key);
         put.setEntity(new ByteArrayEntity(value));
         HttpResponse response = client.execute(put);
