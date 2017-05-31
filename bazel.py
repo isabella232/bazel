@@ -9,7 +9,7 @@ import signal
 import subprocess
 import sys
 import time
-import json
+import urllib2
 
 JAVA_HOME_CANDIDATES = ['/usr/lib/jvm/zulu-8-amd64', '/usr/lib/jvm/java-8-oracle', '/usr/lib/jvm/jdk-8-oracle-x64']
 BAZEL_BIN = '/usr/bin/bazel-bin'
@@ -32,6 +32,20 @@ def _mkdir_p(path):
             pass
         else:
             raise
+
+
+CACHE_METRICS_URL = 'http://localhost:4567/debug/vars'
+def collect_cache_metrics():
+    try:
+        # Don't block for more than 1 second
+        body = urllib2.urlopen(CACHE_METRICS_URL, timeout=1)
+        debug_vars_kv = json.loads(body.read())
+        # Filter out keys which start with "cache-"
+        return {k:v for k, v in debug_vars_kv.iteritems() if k.startswith('cache-')}
+    except Exception as e:
+        print >>sys.stderr, 'WARNING: Unable to collect cache metrics: %s' % (e)
+        print >>sys.stderr
+        return {}
 
 
 def write_metrics(name, data):
@@ -108,6 +122,11 @@ def detect_parent_process():
 
   return parent_proc
 
+
+def dict_subtract(end, start):
+    # Pick out keys which are present in both dicts
+    return {k: end[k]-start[k] for k in (start.viewkeys() & end.viewkeys())}
+
 def set_java_home():
   for jh in JAVA_HOME_CANDIDATES:
     if os.path.isdir(jh):
@@ -146,6 +165,7 @@ def main():
 
   metrics['debs'] = detect_versions()
 
+  initial_cache_metrics = collect_cache_metrics()
   returncode = 0
   cmd = get_bazel_bin() + sys.argv[1:]
   try:
@@ -157,11 +177,13 @@ def main():
     returncode = proc.wait()
 
   end = time.time()
+  end_cache_metrics = collect_cache_metrics()
 
   metrics['bazel']['time_initiated'] = int(start)
   metrics['bazel']['duration_ms'] = int((end-start)*1000)
   metrics['bazel']['exit_code'] = returncode
   metrics['bazel']['caller'] = detect_parent_process()
+  metrics['metrics'] = dict_subtract(end_cache_metrics, initial_cache_metrics)
   write_metrics('bazel', metrics)
 
   sys.exit(returncode)
