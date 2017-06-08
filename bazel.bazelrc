@@ -1,1 +1,1 @@
-startup --host_jvm_args='-Xmx1024m' --host_jvm_args=-Dbazel.DigestFunction=SHA1 --deep_execroot
+startup --host_jvm_args=-Dbazel.DigestFunction=SHA1 --deep_execroot
