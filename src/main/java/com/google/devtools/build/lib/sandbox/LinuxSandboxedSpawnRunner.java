@@ -87,6 +87,7 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   private final Path inaccessibleHelperFile;
   private final Path inaccessibleHelperDir;
   private final int timeoutGraceSeconds;
+  private final LinuxSandboxRootfsManager rootfsManager;
 
   LinuxSandboxedSpawnRunner(
       CommandEnvironment cmdEnv,
@@ -94,7 +95,8 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       Path inaccessibleHelperFile,
       Path inaccessibleHelperDir,
       int timeoutGraceSeconds) {
-    super(cmdEnv, sandboxBase);
+      LinuxSandboxRootfsManager rootfsManager) {
+    super(cmdEnv, sandboxBase)
     this.blazeDirs = cmdEnv.getDirectories();
     this.execRoot = cmdEnv.getExecRoot();
     this.allowNetwork = SandboxHelpers.shouldAllowNetwork(cmdEnv.getOptions());
@@ -102,6 +104,7 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     this.inaccessibleHelperFile = inaccessibleHelperFile;
     this.inaccessibleHelperDir = inaccessibleHelperDir;
     this.timeoutGraceSeconds = timeoutGraceSeconds;
+    this.rootfsManager = rootfsManager;
   }
 
   @Override
@@ -220,6 +223,12 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     writableDirs.addAll(super.getWritableDirs(sandboxExecRoot, env));
 
     FileSystem fs = sandboxExecRoot.getFileSystem();
+    if (rootfsManager != null) {
+       // DBX: Resolving symlinks is nonsensical for rootfs
+       writableDirs.add(fs.getPath("/dev/shm"));
+    } else {
+       writableDirs.add(fs.getPath("/dev/shm").resolveSymbolicLinks());
+    }
     writableDirs.add(fs.getPath("/dev/shm").resolveSymbolicLinks());
     writableDirs.add(fs.getPath("/tmp"));
 
@@ -231,6 +240,8 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     for (String tmpfsPath : getSandboxOptions().sandboxTmpfsPath) {
       tmpfsPaths.add(blazeDirs.getFileSystem().getPath(tmpfsPath));
     }
+    tmpfsPaths.add(blazeDirs.getFileSystem().getPath("/dev/shm")); // DBX temporary compatibility
+    tmpfsPaths.add(blazeDirs.getFileSystem().getPath("/tmp")); // DBX temporary compatibility
     return tmpfsPaths.build();
   }
 
@@ -238,12 +249,18 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       BlazeDirectories blazeDirs, Path sandboxExecRoot) throws UserExecException {
     Path tmpPath = blazeDirs.getFileSystem().getPath("/tmp");
     final SortedMap<Path, Path> bindMounts = Maps.newTreeMap();
-    if (blazeDirs.getWorkspace().startsWith(tmpPath)) {
-      bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+    if (rootfsManager != null) {
+      Path mount = blazeDirs.getEmbeddedBinariesRoot();
+      bindMounts.put(mount, mount);
+      try {
+        rootfsManager.addROMounts(bindMounts);
+      } catch (IOException e) {
+        throw new UserExecException(String.format("Error while generating rootfs mounts. %s", e.getMessage()));
+      }
     }
-    if (blazeDirs.getOutputBase().startsWith(tmpPath)) {
-      bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
-    }
+    // DBX: unconditionally mount this stuff, so it works in the rootfs
+    bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+    bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
     for (ImmutableMap.Entry<String, String> additionalMountPath :
         getSandboxOptions().sandboxAdditionalMounts) {
       try {
@@ -297,7 +314,7 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
                   "Mount target '%s' is not of the same type as mount source '%s'.",
                   target, source));
         }
-      } else {
+      } else if (false) { // DBX: targets often don't exist until we're in chrooted in the rootfs
         // Mount target should exist in the file system
         throw new UserExecException(
             String.format(
