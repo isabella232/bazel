@@ -51,7 +51,7 @@ def collect_cache_metrics():
 def write_metrics(name, data):
     """
     This func writes log file on disk in
-    ~/.logpusher/<name>/<timestamp>-<name>.log.
+    ~/.logpusher/<name>/<name>-<timestamp>.log
     Then it spawns logpusher to collect logs in background.
     If there is no logpusher in $PATH, this function is no-op.
     There must be key in data which is equal to name - it's application data. If there is no such
