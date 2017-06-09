@@ -22,6 +22,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
         "//src/main/java/com/google/devtools/build/lib:runtime",
         "//src/main/java/com/google/devtools/build/lib:util",
+        "//src/main/java/com/google/devtools/build/lib:unix",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/exec/apple",
         "//src/main/java/com/google/devtools/build/lib/exec/local",
@@ -29,6 +30,8 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/standalone",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/common/options",
+        "//third_party:apache_commons_codec",
+        "//third_party:apache_commons_compress",
         "//third_party:guava",
     ],
 )
