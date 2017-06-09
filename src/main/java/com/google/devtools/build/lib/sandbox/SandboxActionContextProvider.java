@@ -95,7 +95,8 @@ final class SandboxActionContextProvider extends ActionContextProvider {
             });
 
     // This is the preferred sandboxing strategy on Linux.
-    if (LinuxSandboxedSpawnRunner.isSupported(cmdEnv)) {
+    // DBX: assume sandboxing always works
+    if (true || LinuxSandboxedSpawnRunner.isSupported(cmdEnv)) {
       SpawnRunner spawnRunner =
           withFallback(
               cmdEnv,
