@@ -86,6 +86,7 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   private final LocalEnvProvider localEnvProvider;
   private final Optional<Duration> timeoutKillDelay;
   private final String productName;
+  private final LinuxSandboxRootfsManager rootfsManager;
 
   /**
    * Creates a sandboxed spawn runner that uses the {@code linux-sandbox} tool. If a spawn exceeds
@@ -156,7 +157,9 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       String productName,
       Path inaccessibleHelperFile,
       Path inaccessibleHelperDir,
-      Optional<Duration> timeoutKillDelay) {
+      Optional<Duration> timeoutKillDelay,
+      int timeoutGraceSeconds,
+      LinuxSandboxRootfsManager rootfsManager) {
     super(cmdEnv, sandboxBase);
     this.fileSystem = cmdEnv.getRuntime().getFileSystem();
     this.blazeDirs = cmdEnv.getDirectories();
@@ -166,8 +169,9 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     this.linuxSandbox = LinuxSandboxUtil.getLinuxSandbox(cmdEnv);
     this.inaccessibleHelperFile = inaccessibleHelperFile;
     this.inaccessibleHelperDir = inaccessibleHelperDir;
-    this.timeoutKillDelay = timeoutKillDelay;
-    this.localEnvProvider = new PosixLocalEnvProvider(cmdEnv.getClientEnv());
+    this.timeoutGraceSeconds = timeoutGraceSeconds;
+    this.localEnvProvider = LocalEnvProvider.ADD_TEMP_POSIX;
+    this.rootfsManager = rootfsManager;
   }
 
   @Override
@@ -241,6 +245,12 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     writableDirs.addAll(super.getWritableDirs(sandboxExecRoot, env));
 
     FileSystem fs = sandboxExecRoot.getFileSystem();
+    if (rootfsManager != null) {
+       // DBX: Resolving symlinks is nonsensical for rootfs
+       writableDirs.add(fs.getPath("/dev/shm"));
+    } else {
+       writableDirs.add(fs.getPath("/dev/shm").resolveSymbolicLinks());
+    }
     writableDirs.add(fs.getPath("/dev/shm").resolveSymbolicLinks());
     writableDirs.add(fs.getPath("/tmp"));
 
@@ -252,6 +262,8 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     for (String tmpfsPath : getSandboxOptions().sandboxTmpfsPath) {
       tmpfsPaths.add(fileSystem.getPath(tmpfsPath));
     }
+    tmpfsPaths.add(fileSystem.getPath("/dev/shm")); // DBX temporary compatibility
+    tmpfsPaths.add(fileSystem.getPath("/tmp")); // DBX temporary compatibility
     return tmpfsPaths.build();
   }
 
@@ -259,12 +271,18 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       BlazeDirectories blazeDirs, Path sandboxExecRoot) throws UserExecException {
     Path tmpPath = fileSystem.getPath("/tmp");
     final SortedMap<Path, Path> bindMounts = Maps.newTreeMap();
-    if (blazeDirs.getWorkspace().startsWith(tmpPath)) {
-      bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+    if (rootfsManager != null) {
+      Path mount = blazeDirs.getEmbeddedBinariesRoot();
+      bindMounts.put(mount, mount);
+      try {
+        rootfsManager.addROMounts(bindMounts);
+      } catch (IOException e) {
+        throw new UserExecException(String.format("Error while generating rootfs mounts. %s", e.getMessage()));
+      }
     }
-    if (blazeDirs.getOutputBase().startsWith(tmpPath)) {
-      bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
-    }
+    // DBX: unconditionally mount this stuff, so it works in the rootfs
+    bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+    bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
     for (ImmutableMap.Entry<String, String> additionalMountPath :
         getSandboxOptions().sandboxAdditionalMounts) {
       try {
@@ -318,7 +336,7 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
                   "Mount target '%s' is not of the same type as mount source '%s'.",
                   target, source));
         }
-      } else {
+      } else if (false) { // DBX: targets often don't exist until we're in chrooted in the rootfs
         // Mount target should exist in the file system
         throw new UserExecException(
             String.format(
