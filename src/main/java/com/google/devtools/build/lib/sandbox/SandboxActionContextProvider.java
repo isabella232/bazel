@@ -49,7 +49,8 @@ final class SandboxActionContextProvider extends ActionContextProvider {
     }
 
     // This is the preferred sandboxing strategy on Linux.
-    if (LinuxSandboxedStrategy.isSupported(cmdEnv)) {
+    // DBX: assume sandboxing always works
+    if (true || LinuxSandboxedStrategy.isSupported(cmdEnv)) {
       contexts.add(
           LinuxSandboxedStrategy.create(cmdEnv, buildRequest, sandboxBase, verboseFailures));
     }

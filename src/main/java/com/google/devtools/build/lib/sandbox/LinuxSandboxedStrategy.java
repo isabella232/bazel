@@ -58,6 +58,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   private final SpawnInputExpander spawnInputExpander;
   private final Path inaccessibleHelperFile;
   private final Path inaccessibleHelperDir;
+  private final LinuxSandboxRootfsManager rootfsManager;
 
   private LinuxSandboxedStrategy(
       CommandEnvironment cmdEnv,
@@ -65,7 +66,8 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
       Path sandboxBase,
       boolean verboseFailures,
       Path inaccessibleHelperFile,
-      Path inaccessibleHelperDir) {
+      Path inaccessibleHelperDir,
+      LinuxSandboxRootfsManager rootfsManager) {
     super(
         cmdEnv,
         buildRequest,
@@ -79,6 +81,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     this.spawnInputExpander = new SpawnInputExpander(false);
     this.inaccessibleHelperFile = inaccessibleHelperFile;
     this.inaccessibleHelperDir = inaccessibleHelperDir;
+    this.rootfsManager = rootfsManager;
   }
 
   static LinuxSandboxedStrategy create(
@@ -99,13 +102,29 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     inaccessibleHelperDir.setWritable(false);
     inaccessibleHelperDir.setExecutable(false);
 
+    SandboxOptions sandboxOptions = buildRequest.getOptions(SandboxOptions.class);
+    BlazeDirectories blazeDirs = cmdEnv.getDirectories();
+    String rootfsCachePath = sandboxOptions.sandboxRootfsCachePath;
+    if (rootfsCachePath == null || rootfsCachePath.isEmpty()) {
+	rootfsCachePath = blazeDirs.getOutputBase().getRelative("rootfs").getPathString();
+    }
+    LinuxSandboxRootfsManager rootfsManager = null;
+    if (sandboxOptions.sandboxRootfs != null) {
+      rootfsManager = LinuxSandboxRootfsManager.create(
+          blazeDirs.getFileSystem(),
+          sandboxOptions.sandboxRootfs,
+          rootfsCachePath,
+          cmdEnv);
+    }
+
     return new LinuxSandboxedStrategy(
         cmdEnv,
         buildRequest,
         sandboxBase,
         verboseFailures,
         inaccessibleHelperFile,
-        inaccessibleHelperDir);
+        inaccessibleHelperDir,
+        rootfsManager);
   }
 
   @Override
@@ -191,12 +210,18 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
       BlazeDirectories blazeDirs, Path sandboxExecRoot) throws UserExecException {
     Path tmpPath = blazeDirs.getFileSystem().getPath("/tmp");
     final SortedMap<Path, Path> bindMounts = Maps.newTreeMap();
-    if (blazeDirs.getWorkspace().startsWith(tmpPath)) {
-      bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+    if (rootfsManager != null) {
+      Path mount = blazeDirs.getEmbeddedBinariesRoot();
+      bindMounts.put(mount, mount);
+      try {
+        rootfsManager.addROMounts(bindMounts);
+      } catch (IOException e) {
+        throw new UserExecException(String.format("Error while generating rootfs mounts. %s", e.getMessage()));
+      }
     }
-    if (blazeDirs.getOutputBase().startsWith(tmpPath)) {
-      bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
-    }
+    // DBX: unconditionally mount this stuff, so it works in the rootfs
+    bindMounts.put(blazeDirs.getWorkspace(), blazeDirs.getWorkspace());
+    bindMounts.put(blazeDirs.getOutputBase(), blazeDirs.getOutputBase());
     for (ImmutableMap.Entry<String, String> additionalMountPath :
         sandboxOptions.sandboxAdditionalMounts) {
       try {
@@ -250,7 +275,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
                   "Mount target '%s' is not of the same type as mount source '%s'.",
                   target, source));
         }
-      } else {
+      } else if (false) { // DBX: targets often don't exist until we're in chrooted in the rootfs
         // Mount target should exist in the file system
         throw new UserExecException(
             String.format(
@@ -259,6 +284,15 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
                     + "the mount target path according to the type of mount source.",
                 target));
       }
+    }
+  }
+
+  public String getActionHashKey() {
+    if (rootfsManager != null) {
+      String labelString = rootfsManager.getRootfsLabel().getDefaultCanonicalForm();
+      return "sandbox5" + labelString;
+    } else {
+      return "sandbox5";
     }
   }
 }

@@ -121,6 +121,11 @@ public final class SandboxHelpers {
       return false;
     }
 
+    // DBX: network access is enabled for builds, but not for tests, by default.
+    if (spawn.getResourceOwner().getMnemonic().equals("TestRunner")) {
+      return false;
+    }
+
     // Network access is allowed by default.
     return true;
   }
