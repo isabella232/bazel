@@ -38,6 +38,7 @@ import org.apache.http.client.methods.HttpHead;
 import org.apache.http.client.methods.HttpPut;
 import org.apache.http.conn.HttpClientConnectionManager;
 import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
@@ -98,8 +99,8 @@ public final class ConcurrentMapFactory {
       this.baseUrl = baseUrl;
     }
 
-    private HttpClient getClient() {
-      return HttpClients.custom().setConnectionManager(poolingConnManager).build();
+    private CloseableHttpClient getClient() {
+      return HttpClients.custom().setConnectionManager(poolingConnManager).setConnectionManagerShared(true).build();
     }
 
     @Override
@@ -127,6 +128,8 @@ public final class ConcurrentMapFactory {
           return null;
         }
         if (HttpStatus.SC_OK != statusCode) {
+          // Release connection back to pool
+          EntityUtils.consume(response.getEntity());
           throw new RuntimeException("GET failed with status code " + statusCode);
         }
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -155,6 +158,8 @@ public final class ConcurrentMapFactory {
         int statusCode = response.getStatusLine().getStatusCode();
 
         if (HttpStatus.SC_OK != statusCode) {
+          // Release connection back to pool
+          EntityUtils.consume(response.getEntity());
           throw new RuntimeException("PUT failed with status code " + statusCode);
         }
       } catch (IOException e) {
