@@ -41,7 +41,7 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
     return "sandboxed";
   }
 
-  static LinuxSandboxedSpawnRunner create(
+  static public LinuxSandboxedSpawnRunner create(
       CommandEnvironment cmdEnv,
       Path sandboxBase,
       int timeoutGraceSeconds)
@@ -58,7 +58,7 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
     inaccessibleHelperDir.setWritable(false);
     inaccessibleHelperDir.setExecutable(false);
 
-    SandboxOptions sandboxOptions = buildRequest.getOptions(SandboxOptions.class);
+    SandboxOptions sandboxOptions = cmdEnv.getOptions().getOptions(SandboxOptions.class);
     BlazeDirectories blazeDirs = cmdEnv.getDirectories();
     String rootfsCachePath = sandboxOptions.sandboxRootfsCachePath;
     if (rootfsCachePath == null || rootfsCachePath.isEmpty()) {
