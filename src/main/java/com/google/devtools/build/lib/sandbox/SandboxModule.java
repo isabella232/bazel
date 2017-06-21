@@ -66,7 +66,7 @@ public final class SandboxModule extends BlazeModule {
   }
 
   /** Computes the path to the sandbox base tree for the given running command. */
-  private static Path computeSandboxBase(SandboxOptions options, CommandEnvironment env)
+  public static Path computeSandboxBase(SandboxOptions options, CommandEnvironment env)
       throws IOException {
     if (options.sandboxBase.isEmpty()) {
       return env.getOutputBase().getRelative("sandbox");

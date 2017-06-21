@@ -51,7 +51,7 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
    * @param sandboxfsProcess instance of the sandboxfs process to use; may be null for none, in
    *     which case the runner uses a symlinked sandbox
    */
-  static LinuxSandboxedSpawnRunner create(
+  public static LinuxSandboxedSpawnRunner create(
       CommandEnvironment cmdEnv, Path sandboxBase, Duration timeoutKillDelay,
       @Nullable SandboxfsProcess sandboxfsProcess) throws IOException {
     Path inaccessibleHelperFile = sandboxBase.getRelative("inaccessibleHelperFile");
