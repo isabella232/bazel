@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.remote.Digests.ActionKey;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
+import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -173,7 +174,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       RemoteActionCache remoteCache,
       ActionKey actionKey)
       throws ExecException, InterruptedException {
-    fallbackStrategy.exec(spawn, actionExecutionContext);
+    actionExecutionContext.getContext(LinuxSandboxedStrategy.class).exec(spawn, actionExecutionContext);
     if (remoteOptions.remoteUploadLocalResults && remoteCache != null && actionKey != null) {
       ArrayList<Path> outputFiles = new ArrayList<>();
       for (ActionInput output : spawn.getOutputFiles()) {
@@ -219,7 +220,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     EventHandler eventHandler = actionExecutionContext.getEventHandler();
 
     if (!spawn.isRemotable() || remoteCache == null) {
-      fallbackStrategy.exec(spawn, actionExecutionContext);
+      actionExecutionContext.getContext(LinuxSandboxedStrategy.class).exec(spawn, actionExecutionContext);
       return;
     }
     if (actionExecutionContext.reportsSubcommands()) {
