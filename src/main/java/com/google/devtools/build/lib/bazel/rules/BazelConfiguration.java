@@ -77,22 +77,6 @@ public class BazelConfiguration extends Fragment {
     return PathFragment.create("/bin/bash");
   }
 
-  @Override
-  public void setupActionEnvironment(Map<String, String> builder) {
-    // TODO(ulfjack): Avoid using System.getenv; it's the wrong environment!
-    builder.put("PATH", pathOrDefault(System.getenv("PATH"), getShellExecutable()));
-
-    String ldLibraryPath = System.getenv("LD_LIBRARY_PATH");
-    if (ldLibraryPath != null) {
-      builder.put("LD_LIBRARY_PATH", ldLibraryPath);
-    }
-
-    String tmpdir = System.getenv("TMPDIR");
-    if (tmpdir != null) {
-      builder.put("TMPDIR", tmpdir);
-    }
-  }
-
   private static String pathOrDefault(@Nullable String path, @Nullable PathFragment sh) {
     if (OS.getCurrent() != OS.WINDOWS) {
       return path == null ? "/bin:/usr/bin" : path;
