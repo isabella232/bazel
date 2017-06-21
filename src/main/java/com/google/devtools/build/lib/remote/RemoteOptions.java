@@ -44,6 +44,16 @@ public final class RemoteOptions extends OptionsBase {
   public int restCachePoolSize;
 
   @Option(
+    name = "rest_cache_url",
+    defaultValue = "null",
+    category = "remote",
+    help =
+        "DEPRECATED A base URL for a RESTful cache server for storing build artifacts."
+            + "It has to support PUT, GET, and HEAD requests."
+  )
+  public String restCacheUrl;
+
+  @Option(
     name = "hazelcast_node",
     defaultValue = "null",
     category = "remote",
@@ -117,7 +127,7 @@ public final class RemoteOptions extends OptionsBase {
 
   @Option(
     name = "remote_local_fallback",
-    defaultValue = "false",
+    defaultValue = "true",
     category = "remote",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},

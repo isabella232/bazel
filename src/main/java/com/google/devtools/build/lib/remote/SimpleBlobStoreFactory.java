@@ -220,7 +220,7 @@ public final class SimpleBlobStoreFactory {
   }
 
   public static SimpleBlobStore createRest(RemoteOptions options) {
-    return new RestBlobStore(options.remoteRestCache, options.restCachePoolSize);
+    return new RestBlobStore(options.remoteRestCache != null ? options.remoteRestCache : options.restCacheUrl, options.restCachePoolSize);
   }
 
   public static SimpleBlobStore create(RemoteOptions options) {
@@ -246,6 +246,6 @@ public final class SimpleBlobStoreFactory {
   }
 
   private static boolean isRestUrlOptions(RemoteOptions options) {
-    return options.remoteRestCache != null;
+    return options.remoteRestCache != null || options.restCacheUrl != null;
   }
 }

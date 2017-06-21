@@ -200,6 +200,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
 
   private ImmutableSet<Path> getTmpfsPaths() {
     ImmutableSet.Builder<Path> tmpfsPaths = ImmutableSet.builder();
+    tmpfsPaths.add(blazeDirs.getFileSystem().getPath("/tmp")); // DBX temporary compatibility
     for (String tmpfsPath : sandboxOptions.sandboxTmpfsPath) {
       tmpfsPaths.add(blazeDirs.getFileSystem().getPath(tmpfsPath));
     }

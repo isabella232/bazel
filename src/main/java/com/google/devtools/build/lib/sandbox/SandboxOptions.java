@@ -119,7 +119,7 @@ public class SandboxOptions extends OptionsBase {
 
   @Option(
     name = "sandbox_fake_username",
-    defaultValue = "false",
+    defaultValue = "true",
     category = "strategy",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
