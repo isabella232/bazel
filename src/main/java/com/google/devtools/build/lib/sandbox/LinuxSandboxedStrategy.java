@@ -64,7 +64,7 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
    * @param productName the product name to use
    * @param timeoutKillDelay an additional grace period before killing timing out commands
    */
-  static LinuxSandboxedSpawnRunner create(
+  public static LinuxSandboxedSpawnRunner create(
       CommandEnvironment cmdEnv, Path sandboxBase, String productName, Duration timeoutKillDelay)
       throws IOException {
     return create(cmdEnv, sandboxBase, productName, Optional.of(timeoutKillDelay));

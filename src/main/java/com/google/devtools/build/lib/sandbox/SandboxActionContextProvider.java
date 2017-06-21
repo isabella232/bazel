@@ -39,7 +39,7 @@ import java.util.Optional;
 /**
  * Provides the sandboxed spawn strategy.
  */
-final class SandboxActionContextProvider extends ActionContextProvider {
+public final class SandboxActionContextProvider extends ActionContextProvider {
   private final ImmutableList<ActionContext> contexts;
 
   private SandboxActionContextProvider(ImmutableList<ActionContext> contexts) {
@@ -92,7 +92,7 @@ final class SandboxActionContextProvider extends ActionContextProvider {
     return new SandboxActionContextProvider(contexts.build());
   }
 
-  private static SpawnRunner withFallback(CommandEnvironment env, SpawnRunner sandboxSpawnRunner) {
+  public static SpawnRunner withFallback(CommandEnvironment env, SpawnRunner sandboxSpawnRunner) {
     return new SandboxFallbackSpawnRunner(sandboxSpawnRunner,  createFallbackRunner(env));
   }
 
