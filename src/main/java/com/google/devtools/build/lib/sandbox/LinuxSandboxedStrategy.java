@@ -40,7 +40,7 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
     return "sandboxed";
   }
 
-  static LinuxSandboxedSpawnRunner create(
+  static public LinuxSandboxedSpawnRunner create(
       CommandEnvironment cmdEnv, Path sandboxBase, String productName, int timeoutGraceSeconds)
       throws IOException {
     Path inaccessibleHelperFile = sandboxBase.getRelative("inaccessibleHelperFile");
