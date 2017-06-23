@@ -16,10 +16,13 @@ package com.google.devtools.build.lib.remote;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.actions.ActionStatusMessage;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -35,6 +38,7 @@ import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
 import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.remoteexecution.v1test.Action;
@@ -49,6 +53,7 @@ import com.google.protobuf.TextFormat;
 import com.google.protobuf.TextFormat.ParseException;
 import io.grpc.StatusRuntimeException;
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -233,21 +238,35 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     try {
       // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
       ActionInputFileCache inputFileCache = actionExecutionContext.getActionInputFileCache();
-      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
-      SortedMap<PathFragment, ActionInput> inputMap =
-          spawnInputExpander.getInputMapping(
-              spawn,
-              actionExecutionContext.getArtifactExpander(),
-              actionExecutionContext.getActionInputFileCache(),
-              actionExecutionContext.getContext(FilesetActionContext.class));
-      TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
-      repository.computeMerkleDigests(inputRoot);
       Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
+      Hasher hasher = Hashing.sha256().newHasher();
+      String key = actionExecutionContext.getContext(LinuxSandboxedStrategy.class).getActionHashKey();
+      hasher.putBytes(key.getBytes());
+      Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
+      for (ActionInput input : spawnInputs) {
+        hasher.putString(input.getExecPathString(), Charset.defaultCharset());
+        byte[] digest = null;
+        try {
+          // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
+          // changes. It might not be sufficient to identify the input file globally in the
+          // remote action cache. Consider upgrading this to a better hash algorithm with
+          // less collision.
+          digest = inputFileCache.getDigest(input);
+        } catch (IOException e) {
+        }
+        if (digest == null) {
+          // Happens for error-propogating middlemen. Such artifacts do
+          // not cause invalidation of their reverse dependencies.
+          Preconditions.checkState(input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact(), input);
+          continue;
+        }
+        hasher.putBytes(digest);
+      }
       Action action =
           buildAction(
               spawn.getOutputFiles(),
               Digests.computeDigest(command),
-              repository.getMerkleDigest(inputRoot),
+              Digests.buildDigest(hasher.hash().asBytes(), 64),
               // TODO(olaola): set sensible local and remote timouts.
               Spawns.getTimeoutSeconds(spawn, 120));
 
@@ -274,6 +293,16 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         execLocally(spawn, actionExecutionContext, remoteCache, actionKey);
         return;
       }
+
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
+      SortedMap<PathFragment, ActionInput> inputMap =
+          spawnInputExpander.getInputMapping(
+              spawn,
+              actionExecutionContext.getArtifactExpander(),
+              actionExecutionContext.getActionInputFileCache(),
+              actionExecutionContext.getContext(FilesetActionContext.class));
+      TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
+      repository.computeMerkleDigests(inputRoot);
 
       // Upload the command and all the inputs into the remote cache.
       remoteCache.ensureInputsPresent(repository, execRoot, inputRoot, command);
