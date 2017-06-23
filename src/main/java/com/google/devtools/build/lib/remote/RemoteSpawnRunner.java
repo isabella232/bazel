@@ -16,13 +16,17 @@ package com.google.devtools.build.lib.remote;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.Spawns;
+import com.google.devtools.build.lib.actions.cache.Metadata;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
@@ -34,6 +38,7 @@ import com.google.devtools.build.lib.exec.SpawnRunner;
 import com.google.devtools.build.lib.remote.Digests.ActionKey;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.util.io.FileOutErr;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.remoteexecution.v1test.Action;
@@ -45,6 +50,7 @@ import com.google.devtools.remoteexecution.v1test.ExecuteResponse;
 import com.google.devtools.remoteexecution.v1test.Platform;
 import io.grpc.Status.Code;
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -102,16 +108,32 @@ class RemoteSpawnRunner implements SpawnRunner {
     policy.report(ProgressStatus.EXECUTING, "remote");
     // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
     ActionInputFileCache inputFileCache = policy.getActionInputFileCache();
-    TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
-    SortedMap<PathFragment, ActionInput> inputMap = policy.getInputMapping();
-    TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
-    repository.computeMerkleDigests(inputRoot);
+    SortedMap<PathFragment, ActionInput> inputMap = null;
     Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
+    Hasher hasher = Hashing.sha256().newHasher();
+    //String key = actionExecutionContext.getContext(LinuxSandboxedStrategy.class).getActionHashKey();
+    //hasher.putBytes(key.getBytes());
+    Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
+    for (ActionInput input : spawnInputs) {
+      hasher.putString(input.getExecPathString(), Charset.defaultCharset());
+      Metadata md = null;
+      try {
+	md = inputFileCache.getMetadata(input);
+      } catch (IOException e) {
+      }
+      if (md == null || md.getDigest() == null) {
+	// Happens for error-propogating middlemen. Such artifacts do
+	// not cause invalidation of their reverse dependencies.
+	Preconditions.checkState(input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact(), input);
+	continue;
+      }
+      hasher.putBytes(md.getDigest());
+    }
     Action action =
         buildAction(
             spawn.getOutputFiles(),
             Digests.computeDigest(command),
-            repository.getMerkleDigest(inputRoot),
+            Digests.buildDigest(hasher.hash().asBytes(), 64),
             platform,
             policy.getTimeout());
 
@@ -151,6 +173,11 @@ class RemoteSpawnRunner implements SpawnRunner {
     }
 
     try {
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
+      inputMap = policy.getInputMapping();
+      TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
+      repository.computeMerkleDigests(inputRoot);
+
       // Upload the command and all the inputs into the remote cache.
       remoteCache.ensureInputsPresent(repository, execRoot, inputRoot, command);
     } catch (IOException e) {
@@ -265,6 +292,7 @@ class RemoteSpawnRunner implements SpawnRunner {
 
   private Map<Path, Long> getInputCtimes(SortedMap<PathFragment, ActionInput> inputMap) {
     HashMap<Path, Long>  ctimes = new HashMap<>();
+    if (inputMap == null) { return ctimes; }
     for (Map.Entry<PathFragment, ActionInput> e : inputMap.entrySet()) {
       ActionInput input = e.getValue();
       if (input == SpawnInputExpander.EMPTY_FILE || input instanceof VirtualActionInput) {

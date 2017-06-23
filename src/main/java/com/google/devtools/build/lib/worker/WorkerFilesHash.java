@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Spawn;
+import com.google.devtools.build.lib.actions.cache.DigestUtils;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
@@ -74,7 +75,7 @@ class WorkerFilesHash {
         if (localArtifact != null) {
           workerFilesMap.put(
               root.getRelative(mapping.getKey()),
-              HashCode.fromBytes(actionInputFileCache.getMetadata(localArtifact).getDigest()));
+              HashCode.fromBytes(DigestUtils.getDigestOrFail(localArtifact.getPath(), localArtifact.getPath().getFileSize())));
         }
       }
     }
