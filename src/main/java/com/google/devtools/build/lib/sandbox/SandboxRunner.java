@@ -48,6 +48,7 @@ abstract class SandboxRunner {
    * @param outErr - error output to capture sandbox's and command's stderr
    * @param timeout - after how many seconds should the process be killed
    * @param allowNetwork - whether networking should be allowed for the process
+   * @param requiresRoot - whether the process requires to be run as a fake root user
    * @param sandboxDebug - whether debugging message should be printed
    */
   void run(
@@ -56,11 +57,12 @@ abstract class SandboxRunner {
       OutErr outErr,
       int timeout,
       boolean allowNetwork,
+      boolean requiresRoot,
       boolean sandboxDebug)
       throws ExecException {
     Command cmd;
     try {
-      cmd = getCommand(arguments, environment, timeout, allowNetwork);
+      cmd = getCommand(arguments, environment, timeout, allowNetwork, requiresRoot);
     } catch (IOException e) {
       throw new UserExecException("I/O error during sandboxed execution", e);
     }
@@ -108,9 +110,10 @@ abstract class SandboxRunner {
    * @param environment - environment variables to pass to the spawn.
    * @param timeout - after how many seconds should the process be killed
    * @param allowNetwork - whether networking should be allowed for the process
+   * @param requiresRoot - whether the process requires to be run as a fake root user
    */
   protected abstract Command getCommand(
-      List<String> arguments, Map<String, String> environment, int timeout, boolean allowNetwork)
+      List<String> arguments, Map<String, String> environment, int timeout, boolean allowNetwork, boolean requiresRoot)
       throws IOException;
 
   /**

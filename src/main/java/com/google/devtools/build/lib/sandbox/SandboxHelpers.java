@@ -67,6 +67,15 @@ public final class SandboxHelpers {
     return outputFiles.build();
   }
 
+  static boolean requiresRoot(Spawn spawn) {
+    // If the Spawn requests to be run as root user, do so.
+    if (spawn.getExecutionInfo().containsKey("requires-fake-root")) {
+      return true;
+    }
+
+    return false;
+  }
+
   static boolean shouldAllowNetwork(BuildRequest buildRequest, Spawn spawn) {
     // Allow network access, when --java_debug is specified, otherwise we can't connect to the
     // remote debug server of the test. This intentionally overrides the "block-network" execution

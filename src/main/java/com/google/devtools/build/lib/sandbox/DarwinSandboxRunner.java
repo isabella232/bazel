@@ -107,7 +107,7 @@ final class DarwinSandboxRunner extends SandboxRunner {
 
   @Override
   protected Command getCommand(
-      List<String> arguments, Map<String, String> environment, int timeout, boolean allowNetwork)
+      List<String> arguments, Map<String, String> environment, int timeout, boolean allowNetwork, boolean requiresRoot)
       throws IOException {
     writeConfig(allowNetwork);
 

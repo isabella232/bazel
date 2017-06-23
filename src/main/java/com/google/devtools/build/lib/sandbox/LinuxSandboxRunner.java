@@ -107,9 +107,9 @@ final class LinuxSandboxRunner extends SandboxRunner {
 
   @Override
   protected Command getCommand(
-      List<String> spawnArguments, Map<String, String> env, int timeout, boolean allowNetwork)
+      List<String> spawnArguments, Map<String, String> env, int timeout, boolean allowNetwork, boolean requiresRoot)
       throws IOException {
-    writeConfig(timeout, allowNetwork);
+    writeConfig(timeout, allowNetwork, requiresRoot);
 
     List<String> commandLineArgs = new ArrayList<>(3 + spawnArguments.size());
     commandLineArgs.add(execRoot.getRelative("_bin/linux-sandbox").getPathString());
@@ -119,7 +119,7 @@ final class LinuxSandboxRunner extends SandboxRunner {
     return new Command(commandLineArgs.toArray(new String[0]), env, sandboxExecRoot.getPathFile());
   }
 
-  private void writeConfig(int timeout, boolean allowNetwork) throws IOException {
+  private void writeConfig(int timeout, boolean allowNetwork, boolean requiresRoot) throws IOException {
     List<String> fileArgs = new ArrayList<>();
 
     if (sandboxDebug) {
@@ -170,6 +170,11 @@ final class LinuxSandboxRunner extends SandboxRunner {
     if (!allowNetwork) {
       // Block network access out of the namespace.
       fileArgs.add("-N");
+    }
+
+    if (requiresRoot) {
+      // Run sandboxed process as fake root user.
+      fileArgs.add("-R");
     }
 
     FileSystemUtils.writeLinesAs(argumentsFilePath, StandardCharsets.ISO_8859_1, fileArgs);
