@@ -207,6 +207,10 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         actionExecutionContext
             .getEventHandler()
             .handle(Event.warn(spawn.getMnemonic() + " failed uploading results (" + e + ")"));
+      } catch (RuntimeException e) {
+        actionExecutionContext
+            .getEventHandler()
+            .handle(Event.warn(spawn.getMnemonic() + " failed uploading results (" + e + ")"));
       }
     }
   }
@@ -355,6 +359,17 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     } catch (UnsupportedOperationException e) {
       eventHandler.handle(
           Event.warn(mnemonic + " unsupported operation for action cache (" + e + ")"));
+    } catch (RuntimeException e) {
+      String stackTrace = "";
+      if (verboseFailures) {
+        stackTrace = "\n" + Throwables.getStackTraceAsString(e);
+      }
+      eventHandler.handle(Event.warn(mnemonic + " remote work failed (" + e + ")" + stackTrace));
+      if (remoteOptions.remoteLocalFallback) {
+        execLocally(spawn, actionExecutionContext, remoteCache, actionKey);
+      } else {
+        throw new UserExecException(e);
+      }
     }
   }
 
