@@ -192,7 +192,12 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
     writableDirs.addAll(super.getWritableDirs(sandboxExecRoot, env));
 
     FileSystem fs = sandboxExecRoot.getFileSystem();
-    writableDirs.add(fs.getPath("/dev/shm").resolveSymbolicLinks());
+    if (rootfsManager != null) {
+	// DBX: Resolving symlinks is nonsensical for rootfs
+	writableDirs.add(fs.getPath("/dev/shm"));
+    } else {
+	writableDirs.add(fs.getPath("/dev/shm").resolveSymbolicLinks());
+    }
     writableDirs.add(fs.getPath("/tmp"));
 
     return writableDirs.build();
@@ -201,6 +206,7 @@ public class LinuxSandboxedStrategy extends SandboxStrategy {
   private ImmutableSet<Path> getTmpfsPaths() {
     ImmutableSet.Builder<Path> tmpfsPaths = ImmutableSet.builder();
     tmpfsPaths.add(blazeDirs.getFileSystem().getPath("/tmp")); // DBX temporary compatibility
+    tmpfsPaths.add(blazeDirs.getFileSystem().getPath("/dev/shm")); // DBX temporary compatibility
     for (String tmpfsPath : sandboxOptions.sandboxTmpfsPath) {
       tmpfsPaths.add(blazeDirs.getFileSystem().getPath(tmpfsPath));
     }
