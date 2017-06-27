@@ -145,6 +145,8 @@ public final class SymlinkedExecRoot implements SandboxExecRoot {
       Path source = sandboxExecRoot.getRelative(output);
       Path target = execRoot.getRelative(output);
       if (source.isFile() || source.isSymbolicLink()) {
+        // Ensure parent directory exists in target, otherwise Files.move throws an exception
+        target.getParentDirectory().createDirectory();
         Files.move(source.getPathFile(), target.getPathFile());
       } else if (source.isDirectory()) {
         try {
