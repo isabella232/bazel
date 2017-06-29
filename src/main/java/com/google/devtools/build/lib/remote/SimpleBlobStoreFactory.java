@@ -165,11 +165,11 @@ public final class SimpleBlobStoreFactory {
       try {
         HttpClient client = clientFactory.build();
         HttpGet get = new HttpGet(baseUrl + "/" + key);
-        return client.execute(
+        ByteArrayOutputStream buffer = client.execute(
             get,
-            new ResponseHandler<byte[]>() {
+            new ResponseHandler<ByteArrayOutputStream>() {
               @Override
-              public byte[] handleResponse(HttpResponse response) throws IOException {
+              public ByteArrayOutputStream handleResponse(HttpResponse response) throws IOException {
                 int statusCode = response.getStatusLine().getStatusCode();
                 if (HttpStatus.SC_NOT_FOUND == statusCode
                     || HttpStatus.SC_NO_CONTENT == statusCode) {
@@ -181,9 +181,10 @@ public final class SimpleBlobStoreFactory {
                 ByteArrayOutputStream buffer = new ByteArrayOutputStream();
                 response.getEntity().writeTo(buffer);
                 buffer.flush();
-                return buffer.toByteArray();
+                return buffer;
               }
             });
+        return (buffer != null) ? buffer.toByteArray() : null;
       } catch (IOException e) {
         throw new RuntimeException(e);
       }
