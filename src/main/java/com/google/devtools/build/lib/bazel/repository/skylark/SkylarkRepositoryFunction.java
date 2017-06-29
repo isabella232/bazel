@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.bazel.repository.downloader.HttpDownloader;
+import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
@@ -39,10 +40,30 @@ import javax.annotation.Nullable;
  */
 public class SkylarkRepositoryFunction extends RepositoryFunction {
 
+  /**
+   * An exception thrown when a dependency is missing to notify the SkyFunction from a skylark
+   * evaluation.
+   */
+  private static class SkylarkRepositoryMissingDependencyException extends EvalException {
+
+    SkylarkRepositoryMissingDependencyException() {
+      super(Location.BUILTIN, "Internal exception");
+    }
+  }
+
   private final HttpDownloader httpDownloader;
 
   public SkylarkRepositoryFunction(HttpDownloader httpDownloader) {
     this.httpDownloader = httpDownloader;
+  }
+
+  /**
+   * Skylark repository context functions can throw the result of this function to notify the
+   * SkylarkRepositoryFunction that a dependency was missing and the evaluation of the function must
+   * be restarted.
+   */
+  static EvalException restart() {
+    return new SkylarkRepositoryMissingDependencyException();
   }
 
   @Nullable
@@ -85,7 +106,7 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
             Transience.PERSISTENT);
       }
     } catch (EvalException e) {
-      if (e.getCause() instanceof RepositoryMissingDependencyException) {
+      if (e.getCause() instanceof SkylarkRepositoryMissingDependencyException) {
         // A dependency is missing, cleanup and returns null
         try {
           if (outputDirectory.exists()) {
@@ -114,6 +135,15 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
   @SuppressWarnings("unchecked")
   private static Iterable<String> getEnviron(Rule rule) {
     return (Iterable<String>) rule.getAttributeContainer().getAttr("$environ");
+  }
+
+  @Override
+  public boolean verifyMarkerData(Rule rule, Map<String, String> markerData, Environment env)
+      throws InterruptedException {
+    if (verifyEnvironMarkerData(markerData, env, getEnviron(rule))) {
+      return SkylarkRepositoryContext.verifyMarkerDataForFiles(markerData, env);
+    }
+    return false;
   }
 
   @Override
