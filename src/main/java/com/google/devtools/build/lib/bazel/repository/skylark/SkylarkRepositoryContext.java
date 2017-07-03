@@ -19,6 +19,7 @@ import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.io.BaseEncoding;
 import com.google.devtools.build.lib.bazel.repository.DecompressorDescriptor;
 import com.google.devtools.build.lib.bazel.repository.DecompressorValue;
 import com.google.devtools.build.lib.bazel.repository.cache.RepositoryCache.KeyType;
@@ -733,8 +734,14 @@ public class SkylarkRepositoryContext {
           "Not a file: " + rootedPath.asPath().getPathString());
     }
 
+    byte[] digest;
+    try {
+      digest = fileValue.realRootedPath().asPath().getDigest();
+    } catch (IOException e) {
+      throw new EvalException(Location.BUILTIN, e);
+    }
     // A label do not contains space so it safe to use as a key.
-    markerData.put("FILE:" + label, Integer.toString(fileValue.realFileStateValue().hashCode()));
+    markerData.put("FILE:" + label, BaseEncoding.base16().lowerCase().encode(digest));
     return new SkylarkPath(rootedPath.asPath());
   }
 
@@ -752,7 +759,7 @@ public class SkylarkRepositoryContext {
         return false;
       }
 
-      return Objects.equals(value, Integer.toString(fileValue.realFileStateValue().hashCode()));
+      return Objects.equals(value, BaseEncoding.base16().lowerCase().encode(fileValue.realRootedPath().asPath().getDigest()));
     } catch (LabelSyntaxException e) {
       throw new IllegalStateException(
           "Key " + key + " is not a correct file key (should be in form FILE:label)", e);
