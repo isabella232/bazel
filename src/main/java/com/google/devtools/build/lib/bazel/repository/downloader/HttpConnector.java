@@ -125,7 +125,7 @@ class HttpConnector {
           // message.
           if (e.getMessage() == null) {
             throw new UnrecoverableHttpException(
-                "Failed to even get an error message from " + url);
+                "Failed to even get an error message from " + url + ": " + e);
           }
           if (!e.getMessage().startsWith("Server returned")) {
             throw e;
