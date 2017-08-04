@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.remote.blobstore;
 
 import com.google.common.io.ByteStreams;
 import java.io.IOException;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
@@ -25,6 +26,7 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpHead;
 import org.apache.http.client.methods.HttpPut;
 import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 
@@ -107,9 +109,11 @@ public final class RestBlobStore implements SimpleBlobStore {
   public void put(String key, InputStream in) throws IOException {
     HttpClient client = clientFactory.build();
     HttpPut put = new HttpPut(baseUrl + "/" + key);
-    // For now, upload a byte array instead of a stream, due to Hazelcast crashing on the stream.
-    // See https://github.com/hazelcast/hazelcast/issues/10878.
-    put.setEntity(new ByteArrayEntity(ByteStreams.toByteArray(in)));
+    if (in instanceof FileInputStream) {
+	put.setEntity(new InputStreamEntity(in, ((FileInputStream)in).getChannel().size()));
+    } else {
+	put.setEntity(new ByteArrayEntity(ByteStreams.toByteArray(in)));
+    }
     put.setHeader("Content-Type", "application/octet-stream");
     client.execute(
         put,

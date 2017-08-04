@@ -92,8 +92,10 @@ public final class SimpleBlobStoreActionCache implements RemoteActionCache {
   }
 
   private Digest uploadFileContents(Path file) throws IOException, InterruptedException {
-    // This unconditionally reads the whole file into memory first!
-    return uploadBlob(ByteString.readFrom(file.getInputStream()).toByteArray());
+    Digest digest = Digests.computeDigest(file);
+    try (InputStream in = file.getInputStream()) {
+      return uploadBlob(digest, in);
+    }
   }
 
   private Digest uploadFileContents(
