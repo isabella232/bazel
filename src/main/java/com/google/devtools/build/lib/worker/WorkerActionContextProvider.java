@@ -32,25 +32,30 @@ import com.google.devtools.build.lib.util.OS;
 /**
  * Factory for the Worker-based execution strategy.
  */
-final class WorkerActionContextProvider extends ActionContextProvider {
+final public class WorkerActionContextProvider extends ActionContextProvider {
   private final ImmutableList<ActionContext> strategies;
 
   public WorkerActionContextProvider(CommandEnvironment env, WorkerPool workers) {
     ImmutableMultimap<String, String> extraFlags =
         ImmutableMultimap.copyOf(env.getOptions().getOptions(WorkerOptions.class).workerExtraFlags);
 
-    WorkerSpawnRunner spawnRunner =
-        new WorkerSpawnRunner(
-            env.getExecRoot(),
-            workers,
-            extraFlags,
-            env.getReporter(),
-            createFallbackRunner(env));
+    WorkerSpawnRunner spawnRunner = createWorkerRunner(env, workers);
 
     WorkerSpawnStrategy workerSpawnStrategy = new WorkerSpawnStrategy(spawnRunner);
     TestActionContext workerTestStrategy =
         new WorkerTestStrategy(env, env.getOptions(), workers, extraFlags);
     this.strategies = ImmutableList.of(workerSpawnStrategy, workerTestStrategy);
+  }
+
+  public static WorkerSpawnRunner createWorkerRunner(CommandEnvironment env, WorkerPool workers) {
+    ImmutableMultimap.Builder<String, String> extraFlags = ImmutableMultimap.builder();
+    extraFlags.putAll(env.getOptions().getOptions(WorkerOptions.class).workerExtraFlags);
+    return new WorkerSpawnRunner(
+        env.getExecRoot(),
+        workers,
+        extraFlags.build(),
+        env.getReporter(),
+        createFallbackRunner(env));
   }
 
   private static SpawnRunner createFallbackRunner(CommandEnvironment env) {

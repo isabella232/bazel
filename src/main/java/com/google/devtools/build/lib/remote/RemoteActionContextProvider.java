@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.exec.apple.XCodeLocalEnvProvider;
 import com.google.devtools.build.lib.exec.local.LocalEnvProvider;
 import com.google.devtools.build.lib.exec.local.LocalExecutionOptions;
 import com.google.devtools.build.lib.exec.local.LocalSpawnRunner;
+import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.sandbox.SandboxActionContextProvider;
@@ -34,6 +35,9 @@ import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.worker.WorkerActionContextProvider;
+import com.google.devtools.build.lib.worker.WorkerModule;
+import com.google.devtools.build.lib.worker.WorkerOptions;
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.time.Duration;
@@ -91,7 +95,29 @@ final class RemoteActionContextProvider extends ActionContextProvider {
               cache,
               executor,
               digestUtil);
-      return ImmutableList.of(new RemoteSpawnStrategy(spawnRunner));
+
+      WorkerModule workerModule = null;
+      for (BlazeModule mod : env.getRuntime().getBlazeModules()) {
+        if (mod instanceof WorkerModule) {
+          workerModule = (WorkerModule)mod;
+        }
+      }
+      checkNotNull(workerModule);
+      SpawnRunner spawnWrkRunner =
+          new RemoteSpawnRunner(
+              env.getExecRoot(),
+              remoteOptions,
+              WorkerActionContextProvider.createWorkerRunner(env, workerModule.ensureWorkers(env.getOptions().getOptions(WorkerOptions.class))),
+              executionOptions.verboseFailures,
+              env.getReporter(),
+              buildRequestId,
+              commandId,
+              cache,
+              executor,
+              digestUtil);
+      RemoteWorkerSpawnStrategy remoteWorkerStrategy = new RemoteWorkerSpawnStrategy(spawnWrkRunner);
+
+      return ImmutableList.of(new RemoteSpawnStrategy(spawnRunner), remoteWorkerStrategy);
     }
   }
 
