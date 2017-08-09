@@ -30,6 +30,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/sandbox",
         "//src/main/java/com/google/devtools/build/lib/standalone",
+        "//src/main/java/com/google/devtools/build/lib/worker",
         "//src/main/java/com/google/devtools/common/options",
         "//third_party:apache_httpclient",
         "//third_party:apache_httpcore",
