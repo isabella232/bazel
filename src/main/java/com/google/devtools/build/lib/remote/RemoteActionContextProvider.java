@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.exec.local.LocalSpawnRunner;
 import com.google.devtools.build.lib.exec.local.PosixLocalEnvProvider;
 import com.google.devtools.build.lib.exec.local.WindowsLocalEnvProvider;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
+import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.sandbox.LinuxSandboxedStrategy;
 import com.google.devtools.build.lib.sandbox.SandboxActionContextProvider;
@@ -39,6 +40,9 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.worker.WorkerActionContextProvider;
+import com.google.devtools.build.lib.worker.WorkerModule;
+import com.google.devtools.build.lib.worker.WorkerOptions;
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.time.Duration;
@@ -121,7 +125,7 @@ final class RemoteActionContextProvider extends ActionContextProvider {
               executor,
               digestUtil,
               logDir);
-      RemoteWorkerSpawnStrategy remoteWorkerStrategy = new RemoteWorkerSpawnStrategy(spawnWrkRunner);
+      RemoteWorkerSpawnStrategy remoteWorkerStrategy = new RemoteWorkerSpawnStrategy(env.getExecRoot(), spawnWrkRunner);
 
       return ImmutableList.of(new RemoteSpawnStrategy(env.getExecRoot(), spawnRunner), remoteWorkerStrategy);
     }

@@ -56,6 +56,7 @@ import com.google.protobuf.TextFormat;
 import com.google.protobuf.TextFormat.ParseException;
 import io.grpc.Context;
 import io.grpc.Status.Code;
+import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -130,16 +131,41 @@ class RemoteSpawnRunner implements SpawnRunner {
     context.report(ProgressStatus.EXECUTING, getName());
     // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
     ActionInputFileCache inputFileCache = context.getActionInputFileCache();
-    TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache, digestUtil);
-    SortedMap<PathFragment, ActionInput> inputMap = context.getInputMapping();
-    TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
-    repository.computeMerkleDigests(inputRoot);
+
+    SortedMap<PathFragment, ActionInput> inputMap = null;
+    Hasher hasher = Hashing.sha256().newHasher();
+    String extra = LinuxSandboxedSpawnRunner.globalRemoteCacheKey;
+    if (extra != null) {
+      hasher.putBytes(extra.getBytes());
+    }
+    Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
+    for (ActionInput input : spawnInputs) {
+      hasher.putBytes(input.getExecPathString().getBytes(StandardCharsets.UTF_8));
+      Metadata md = null;
+      try {
+	md = inputFileCache.getMetadata(input);
+      } catch (IOException e) {
+      }
+      if (md == null || md.getDigest() == null) {
+        // Happens for error-propogating middlemen. Such artifacts do not cause invalidation of
+	// their reverse dependencies.
+        if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
+          continue;
+        }
+        if (md != null && !md.getType().isFile()) {
+          // Depending on a directory is unsound. bail
+          return fallbackRunner.exec(spawn, context);
+        }
+        throw new RuntimeException("unclear what " + input.toString() + " is exactly");
+      }
+      hasher.putBytes(md.getDigest());
+    }
     Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
     Action action =
         buildAction(
             spawn.getOutputFiles(),
             digestUtil.compute(command),
-            repository.getMerkleDigest(inputRoot),
+            digestUtil.buildDigest(hasher.hash().asBytes(), 64),
             spawn.getExecutionPlatform(),
             context.getTimeout(),
             Spawns.mayBeCached(spawn));
@@ -184,6 +210,32 @@ class RemoteSpawnRunner implements SpawnRunner {
         // Remote execution is disabled and so execute the spawn on the local machine.
         return execLocally(spawn, context, inputMap, uploadLocalResults, remoteCache, actionKey);
       }
+
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache, digestUtil);
+      inputMap = new TreeMap<>();
+      spawnInputs = spawn.getInputFiles();
+      for (ActionInput input : spawnInputs) {
+        Metadata md = null;
+        try {
+          md = inputFileCache.getMetadata(input);
+        } catch (IOException e) {
+        }
+        if (md == null || md.getDigest() == null) {
+          // Happens for error-propogating middlemen. Such artifacts do not cause invalidation of
+          // their reverse dependencies.
+          if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
+            continue;
+          }
+          if (md != null && !md.getType().isFile()) {
+            // Depending on a directory is unsound. bail
+            return fallbackRunner.exec(spawn, context);
+          }
+          throw new RuntimeException("unclear what " + input.toString() + " is exactly");
+        }
+        inputMap.put(input.getExecPath(), input);
+      }
+      TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
+      repository.computeMerkleDigests(inputRoot);
 
       try {
         // Upload the command and all the inputs into the remote cache.

@@ -67,8 +67,10 @@ public class WorkerModule extends BlazeModule {
 
   @Subscribe
   public void buildStarting(BuildStartingEvent event) {
-    options = event.getRequest().getOptions(WorkerOptions.class);
+    ensureWorkers(event.getRequest().getOptions(WorkerOptions.class));
+  }
 
+  public WorkerPool ensureWorkers(WorkerOptions options) {
     if (workerFactory == null) {
       Path workerDir =
           env.getOutputBase().getRelative(env.getRuntime().getProductName() + "-workers");
@@ -119,6 +121,7 @@ public class WorkerModule extends BlazeModule {
       workerPoolConfig = newConfig;
       workerPool = new WorkerPool(workerFactory, workerPoolConfig, options.highPriorityWorkers);
     }
+    return workerPool;
   }
 
   @Override
