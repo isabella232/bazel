@@ -47,7 +47,7 @@ import java.util.Set;
 import java.util.SortedMap;
 
 /** Spawn runner that uses linux sandboxing APIs to execute a local subprocess. */
-final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
+public final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   public static boolean isSupported(CommandEnvironment cmdEnv) {
     if (OS.getCurrent() != OS.LINUX) {
@@ -172,6 +172,20 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     this.timeoutGraceSeconds = timeoutGraceSeconds;
     this.localEnvProvider = LocalEnvProvider.ADD_TEMP_POSIX;
     this.rootfsManager = rootfsManager;
+    if (remoteCacheKey() != null) {
+      globalRemoteCacheKey = remoteCacheKey();
+    }
+  }
+
+  public static String globalRemoteCacheKey = null;
+
+  private String remoteCacheKey() {
+    if (rootfsManager != null) {
+      String labelString = rootfsManager.getRootfsLabel().getDefaultCanonicalForm();
+      return "sandbox6" + labelString;
+    } else {
+      return "sandbox6";
+    }
   }
 
   @Override
