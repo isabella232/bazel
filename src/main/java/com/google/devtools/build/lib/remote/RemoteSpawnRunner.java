@@ -122,10 +122,16 @@ class RemoteSpawnRunner implements SpawnRunner {
       } catch (IOException e) {
       }
       if (md == null || md.getDigest() == null) {
-	// Happens for error-propogating middlemen. Such artifacts do
+        // Happens for error-propogating middlemen. Such artifacts do
 	// not cause invalidation of their reverse dependencies.
-	Preconditions.checkState(input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact(), input);
-	continue;
+        if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
+          continue;
+        }
+        if (md != null && !md.isFile()) {
+          // Depending on a directory is unsound. bail
+          return fallbackRunner.exec(spawn, policy);
+        }
+        throw new RuntimeException("unclear what " + input.toString() + " is exactly");
       }
       hasher.putBytes(md.getDigest());
     }
