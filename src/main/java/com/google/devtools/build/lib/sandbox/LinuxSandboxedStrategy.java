@@ -90,13 +90,4 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
         sandboxfsProcess,
         rootfsManager);
   }
-
-  public String getActionHashKey() {
-    // if (rootfsManager != null) {
-    //   String labelString = rootfsManager.getRootfsLabel().getDefaultCanonicalForm();
-    //   return "sandbox6" + labelString;
-    // } else {
-      return "sandbox6";
-   //    }
-  }
 }

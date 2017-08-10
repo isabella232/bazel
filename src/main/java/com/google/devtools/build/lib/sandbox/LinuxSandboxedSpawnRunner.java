@@ -44,7 +44,7 @@ import java.util.SortedMap;
 import javax.annotation.Nullable;
 
 /** Spawn runner that uses linux sandboxing APIs to execute a local subprocess. */
-final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
+public final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   public static boolean isSupported(CommandEnvironment cmdEnv) {
     if (OS.getCurrent() != OS.LINUX) {
