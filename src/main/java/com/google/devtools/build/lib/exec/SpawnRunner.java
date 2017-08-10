@@ -202,4 +202,7 @@ public interface SpawnRunner {
       Spawn spawn,
       SpawnExecutionPolicy policy)
           throws InterruptedException, IOException, ExecException;
+
+  /* DBX extension. */
+  default String remoteCacheKey() { return null; }
 }

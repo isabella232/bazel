@@ -108,6 +108,16 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   }
 
   @Override
+  public String remoteCacheKey() {
+    if (rootfsManager != null) {
+      String labelString = rootfsManager.getRootfsLabel().getDefaultCanonicalForm();
+      return "sandbox6" + labelString;
+    } else {
+      return "sandbox6";
+    }
+  }
+
+  @Override
   protected SpawnResult actuallyExec(Spawn spawn, SpawnExecutionPolicy policy)
       throws IOException, ExecException, InterruptedException {
     // Each invocation of "exec" gets its own sandbox.

@@ -111,8 +111,10 @@ class RemoteSpawnRunner implements SpawnRunner {
     SortedMap<PathFragment, ActionInput> inputMap = null;
     Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
     Hasher hasher = Hashing.sha256().newHasher();
-    //String key = actionExecutionContext.getContext(LinuxSandboxedStrategy.class).getActionHashKey();
-    //hasher.putBytes(key.getBytes());
+    String extra = fallbackRunner.remoteCacheKey();
+    if (extra != null) {
+      hasher.putBytes(extra.getBytes());
+    }
     Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
     for (ActionInput input : spawnInputs) {
       hasher.putString(input.getExecPathString(), Charset.defaultCharset());

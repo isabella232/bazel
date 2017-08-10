@@ -126,5 +126,10 @@ public final class SandboxActionContextProvider extends ActionContextProvider {
         return sandboxSpawnRunner.exec(spawn, policy);
       }
     }
+
+    @Override
+    public String remoteCacheKey() {
+      return sandboxSpawnRunner.remoteCacheKey();
+    }
   }
 }
