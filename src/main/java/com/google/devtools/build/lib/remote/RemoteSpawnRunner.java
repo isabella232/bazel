@@ -219,6 +219,7 @@ class RemoteSpawnRunner implements SpawnRunner {
     return new SpawnResult.Builder()
         .setStatus(Status.SUCCESS)  // Even if the action failed with non-zero exit code.
         .setExitCode(result.getExitCode())
+        .setCacheHit(true) // DBX addition (N.B. WRONG IF REMOTE EXECUTION USED)
         .build();
   }
 

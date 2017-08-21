@@ -14,8 +14,11 @@
 
 package com.google.devtools.build.lib.exec;
 
+import static com.google.common.base.Strings.isNullOrEmpty;
+
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
@@ -29,6 +32,7 @@ import com.google.devtools.build.lib.actions.SandboxedSpawnActionContext;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.Spawns;
+import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.exec.SpawnCache.CacheHandle;
 import com.google.devtools.build.lib.exec.SpawnResult.Status;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
@@ -39,6 +43,9 @@ import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -103,6 +110,10 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
       throw new EnvironmentalExecException("Unexpected IO error.", e);
     }
 
+    if (spawn.getMnemonic().equals("TestRunner")) {
+      recordTestCaching(actionExecutionContext, spawn, result);
+    }
+
     if ((result.status() != Status.SUCCESS) || (result.exitCode() != 0)) {
       String cwd = actionExecutionContext.getExecRoot().getPathString();
       String message =
@@ -113,6 +124,27 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
               cwd);
       throw new SpawnExecException(
           message, result, /*forciblyRunRemotely=*/false, /*catastrophe=*/false);
+    }
+  }
+
+  private static final Object fileLock = new Object();
+
+  private static void recordTestCaching(ActionExecutionContext aec, Spawn spawn, SpawnResult result) {
+    String file = aec.getOptions().getOptions(ExecutionOptions.class).dbxCachedTestFile;
+    if (isNullOrEmpty(file)) {
+      return;
+    }
+    String cached = result.isCacheHit() ? "cached: " : "uncached: ";
+    try {
+      synchronized (fileLock) {
+        Files.write(
+            Paths.get(file),
+            ImmutableList.of(cached + spawn.getResourceOwner().getOwner().getLabel().toString()),
+            StandardOpenOption.APPEND,
+            StandardOpenOption.CREATE);
+      }
+    } catch (IOException e) {
+      aec.getEventHandler().handle(Event.error("couldn't write to test output file: " + e.toString()));
     }
   }
 
