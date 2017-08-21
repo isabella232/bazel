@@ -342,4 +342,15 @@ public class ExecutionOptions extends OptionsBase {
           + "This flag may be passed more than once";
     }
   }
+
+  @Option(
+    name = "dbx_haxx_test_caching_file",
+    defaultValue = "",
+    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    help = "A file to record whether executed tests are remotely cached or not. " +
+    "Note that this only applies to remotely cached tests not local ones. " +
+    "(i.e., if the test says \"(cached)\" in the output, it won't be in this file.)"
+  )
+  public String dbxCachedTestFile;
 }
