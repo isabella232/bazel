@@ -37,6 +37,7 @@ import com.google.devtools.build.lib.exec.SpawnResult.Status;
 import com.google.devtools.build.lib.exec.SpawnRunner;
 import com.google.devtools.build.lib.remote.Digests.ActionKey;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
+import com.google.devtools.build.lib.sandbox.LinuxSandboxedSpawnRunner;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
@@ -111,7 +112,7 @@ class RemoteSpawnRunner implements SpawnRunner {
     SortedMap<PathFragment, ActionInput> inputMap = null;
     Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
     Hasher hasher = Hashing.sha256().newHasher();
-    String extra = fallbackRunner.remoteCacheKey();
+    String extra = LinuxSandboxedSpawnRunner.globalRemoteCacheKey;
     if (extra != null) {
       hasher.putBytes(extra.getBytes());
     }
