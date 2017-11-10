@@ -15,7 +15,7 @@ function fail() {
 
 trap cleanup EXIT
 
-mkdir -p $pkg_dir/usr/bin $pkg_dir/etc/bash_completion.d
+mkdir -p $pkg_dir/usr/bin $pkg_dir/etc/bash_completion.d $pkg_dir/usr/share/zsh/vendor-completions
 
 if [[ -z "$BUILD_BAZEL" ]]; then
   fail "Please set BUILD_BAZEL env var to upstream Bazel binary."
@@ -29,6 +29,7 @@ chmod +x $pkg_dir/usr/bin/bazel
 cp bazel.bazelrc $pkg_dir/usr/bin/bazel-bin.bazel-binrc
 
 cp ./bazel-bin/scripts/bazel-complete.bash $pkg_dir/etc/bash_completion.d/bazel || fail "Can't package bash_completion"
+cp scripts/zsh_completion/_bazel $pkg_dir/usr/share/zsh/vendor-completions
 
 if [[ "$1" != "" ]]; then
   timestamp=$1
