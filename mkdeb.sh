@@ -21,7 +21,7 @@ if [[ -z "$BUILD_BAZEL" ]]; then
   fail "Please set BUILD_BAZEL env var to upstream Bazel binary."
 fi
 
-CC=gcc-4.9 "$BUILD_BAZEL" build --embed_label $(git rev-parse @) -c opt --stamp src:bazel_with_jdk scripts:bash_completion
+"$BUILD_BAZEL" build --embed_label $(git rev-parse @) -c opt --stamp src:bazel_with_jdk scripts:bash_completion
 cp ./bazel-bin/src/bazel_with_jdk $pkg_dir/usr/bin/bazel-bin
 cp bazel.py $pkg_dir/usr/bin/bazel
 chmod +x $pkg_dir/usr/bin/bazel
