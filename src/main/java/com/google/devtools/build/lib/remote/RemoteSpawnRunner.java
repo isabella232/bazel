@@ -17,14 +17,18 @@ package com.google.devtools.build.lib.remote;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
 import com.google.devtools.build.lib.actions.Spawns;
+import com.google.devtools.build.lib.actions.cache.Metadata;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
@@ -119,17 +123,42 @@ class RemoteSpawnRunner implements SpawnRunner {
     policy.report(ProgressStatus.EXECUTING, "remote");
     // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
     ActionInputFileCache inputFileCache = policy.getActionInputFileCache();
-    TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache, digestUtil);
-    SortedMap<PathFragment, ActionInput> inputMap = policy.getInputMapping();
-    TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
-    repository.computeMerkleDigests(inputRoot);
+
+    SortedMap<PathFragment, ActionInput> inputMap = null;
+    Hasher hasher = Hashing.sha256().newHasher();
+    String extra = LinuxSandboxedSpawnRunner.globalRemoteCacheKey;
+    if (extra != null) {
+      hasher.putBytes(extra.getBytes());
+    }
+    Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
+    for (ActionInput input : spawnInputs) {
+      hasher.putBytes(input.getExecPathString().getBytes(StandardCharsets.UTF_8));
+      Metadata md = null;
+      try {
+	md = inputFileCache.getMetadata(input);
+      } catch (IOException e) {
+      }
+      if (md == null || md.getDigest() == null) {
+        // Happens for error-propogating middlemen. Such artifacts do not cause invalidation of
+	// their reverse dependencies.
+        if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
+          continue;
+        }
+        if (md != null && !md.isFile()) {
+          // Depending on a directory is unsound. bail
+          return fallbackRunner.exec(spawn, policy);
+        }
+        throw new RuntimeException("unclear what " + input.toString() + " is exactly");
+      }
+      hasher.putBytes(md.getDigest());
+    }
     Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
     Action action =
         buildAction(
             execRoot,
             spawn.getOutputFiles(),
             digestUtil.compute(command),
-            repository.getMerkleDigest(inputRoot),
+            Digests.buildDigest(hasher.hash().asBytes(), 64),
             platform,
             policy.getTimeout(),
             Spawns.mayBeCached(spawn));
@@ -171,6 +200,11 @@ class RemoteSpawnRunner implements SpawnRunner {
         // Remote execution is disabled and so execute the spawn on the local machine.
         return execLocally(spawn, policy, inputMap, uploadLocalResults, remoteCache, actionKey);
       }
+
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
+      inputMap = policy.getInputMapping();
+      TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
+      repository.computeMerkleDigests(inputRoot);
 
       try {
         // Upload the command and all the inputs into the remote cache.
@@ -309,6 +343,9 @@ class RemoteSpawnRunner implements SpawnRunner {
 
   private Map<Path, Long> getInputCtimes(SortedMap<PathFragment, ActionInput> inputMap) {
     HashMap<Path, Long>  ctimes = new HashMap<>();
+    if (inputMap == null) {
+      return ctimes;
+    }
     for (Map.Entry<PathFragment, ActionInput> e : inputMap.entrySet()) {
       ActionInput input = e.getValue();
       if (input instanceof VirtualActionInput) {

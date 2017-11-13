@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
+import com.google.devtools.build.lib.actions.cache.DigestUtils;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.cache.Metadata;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -79,6 +80,10 @@ class WorkerFilesHash {
                 root.getRelative(mapping.getKey()),
                 HashCode.fromBytes(metadata.getDigest()));
           }
+          workerFilesMap.put(
+              root.getRelative(mapping.getKey()),
+              // DBX: We use DigestUtil directly here since runfiles artifacts may not be in the input file cache.
+              HashCode.fromBytes(DigestUtils.getDigestOrFail(localArtifact.getPath(), localArtifact.getPath().getFileSize())));
         }
       }
     }
