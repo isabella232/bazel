@@ -13,7 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote;
 
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -28,6 +31,7 @@ import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.SpawnCache;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
+import com.google.devtools.build.lib.sandbox.LinuxSandboxedSpawnRunner;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.DigestUtil.ActionKey;
@@ -40,6 +44,7 @@ import com.google.devtools.remoteexecution.v1test.ActionResult;
 import com.google.devtools.remoteexecution.v1test.Command;
 import io.grpc.Context;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.NoSuchElementException;
 import java.util.SortedMap;
@@ -98,18 +103,39 @@ final class RemoteSpawnCache implements SpawnCache {
       context.report(ProgressStatus.CHECKING_CACHE, "remote-cache");
     }
 
-    // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
-    TreeNodeRepository repository =
-        new TreeNodeRepository(execRoot, context.getActionInputFileCache(), digestUtil);
-    SortedMap<PathFragment, ActionInput> inputMap = context.getInputMapping();
-    TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
-    repository.computeMerkleDigests(inputRoot);
+    Hasher hasher = Hashing.sha256().newHasher();
+    String extra = LinuxSandboxedSpawnRunner.globalRemoteCacheKey;
+    if (extra != null) {
+      hasher.putBytes(extra.getBytes());
+    }
+    Iterable<? extends ActionInput> spawnInputs = spawn.getInputFiles();
+    for (ActionInput input : spawnInputs) {
+      hasher.putBytes(input.getExecPathString().getBytes(StandardCharsets.UTF_8));
+      Metadata md = null;
+      try {
+          md = context.getActionInputFileCache().getMetadata(input);
+      } catch (IOException e) {
+      }
+      if (md == null || md.getDigest() == null) {
+        // Happens for error-propogating middlemen. Such artifacts do not cause invalidation of
+        // their reverse dependencies.
+        if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
+          continue;
+        }
+        if (md != null && !md.getType().isFile()) {
+          // Depending on a directory is unsound. bail
+          return SpawnCache.NO_RESULT_NO_STORE;
+        }
+        throw new RuntimeException("unclear what " + input.toString() + " is exactly");
+      }
+      hasher.putBytes(md.getDigest());
+    }
     Command command = RemoteSpawnRunner.buildCommand(spawn.getArguments(), spawn.getEnvironment());
     Action action =
         RemoteSpawnRunner.buildAction(
             spawn.getOutputFiles(),
             digestUtil.compute(command),
-            repository.getMerkleDigest(inputRoot),
+            digestUtil.buildDigest(hasher.hash().asBytes(), 64),
             spawn.getExecutionPlatform(),
             context.getTimeout(),
             Spawns.mayBeCached(spawn));
@@ -204,7 +230,7 @@ final class RemoteSpawnCache implements SpawnCache {
         public void close() {}
 
         private void checkForConcurrentModifications() throws IOException {
-          for (ActionInput input : inputMap.values()) {
+          for (ActionInput input : context.getInputMapping().values()) {
             if (input instanceof VirtualActionInput) {
               continue;
             }

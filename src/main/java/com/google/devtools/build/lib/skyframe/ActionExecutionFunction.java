@@ -227,8 +227,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
    */
   @Nullable
   private AllInputs collectInputs(Action action, Environment env) throws InterruptedException {
-    Iterable<Artifact> allKnownInputs = Iterables.concat(
-        action.getInputs(), action.getRunfilesSupplier().getArtifacts());
+    Iterable<Artifact> allKnownInputs = action.getInputs();
     if (action.inputsDiscovered()) {
       return new AllInputs(allKnownInputs);
     }

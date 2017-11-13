@@ -349,7 +349,8 @@ public final class RunfilesSupport {
     PathFragment outputManifestPath = runfilesDir.getRelative("MANIFEST");
 
     BuildConfiguration config = context.getConfiguration();
-    Artifact outputManifest = context.getDerivedArtifact(
+    // DBX: Constant metadata means the absolute paths in the manifest won't break remote caching.
+    Artifact outputManifest = context.getAnalysisEnvironment().getConstantMetadataArtifact(
         outputManifestPath, context.getBinDirectory());
     context
         .getAnalysisEnvironment()
