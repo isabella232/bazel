@@ -296,12 +296,55 @@ static void MountFilesystems() {
   }
 
   for (const std::string &tmpfs_dir : opt.tmpfs_dirs) {
-    PRINT_DEBUG("tmpfs: %s", tmpfs_dir.c_str());
-    CreateTarget(tmpfs_dir.c_str(), true);
-    if (mount("tmpfs", tmpfs_dir.c_str(), "tmpfs",
-              MS_NOSUID | MS_NODEV | MS_NOATIME, nullptr) < 0) {
-      DIE("mount(tmpfs, %s, tmpfs, MS_NOSUID | MS_NODEV | MS_NOATIME, nullptr)",
-          tmpfs_dir.c_str());
+    if (strncmp(tmpfs_dir.c_str(), sandbox_root_dir.c_str(), tmpfs_dir.size()) == 0) {
+      // If sandbox root is under one of the tmpfs dir (e.g., when attempting to tmpfs mount
+      // /dev/shm if sandbox root is /dev/shm/foobar)
+      //
+      // IMPORTANT:
+      // - /dev/shm should be exclusive to the current sandbox. No changes to /dev/shm
+      //   should leak out of the sandbox into the host system or other sandboxes.
+      PRINT_DEBUG("tmpfs overlaps with working dir: %s", tmpfs_dir.c_str());
+
+      // Using example tmpfs_dir = /dev/shm and working_dir = /dev/shm/bazel-sandbox/1234/execroot/__main__
+      // Sandbox root = /dev/shm/bazel-sandbox/1234/root (PWD).
+      // Create dev/shm in PWD and bind mount current /dev/shm into dev/shm.
+      CreateTarget(tmpfs_dir.c_str() + 1, true);
+      if (mount(tmpfs_dir.c_str(), tmpfs_dir.c_str() + 1, nullptr, MS_BIND,
+                nullptr) < 0) {
+        DIE("mount(%s, %s, nullptr, MS_BIND, nullptr)", tmpfs_dir.c_str(),
+            tmpfs_dir.c_str() + 1);
+      }
+
+      // Mount empty tmpfs over /dev/shm
+      PRINT_DEBUG("tmpfs: %s", tmpfs_dir.c_str());
+      CreateTarget(tmpfs_dir.c_str(), true);
+      if (mount("tmpfs", tmpfs_dir.c_str(), "tmpfs",
+                MS_NOSUID | MS_NODEV | MS_NOATIME, nullptr) < 0) {
+        DIE("mount(tmpfs, %s, tmpfs, MS_NOSUID | MS_NODEV | MS_NOATIME, nullptr)",
+            tmpfs_dir.c_str());
+      }
+
+      // Create /dev/shm/bazel-sandbox/1234/execroot/__main__
+      CreateTarget(opt.working_dir.c_str(), true);
+      // Bind mount dev/shm/bazel-sandbox/1234/execroot/__main__ to /dev/shm/bazel-sandbox/1234/execroot/__main__
+      // At this point, we have a reference to working dir in /dev/shm/bazel-sandbox/1234/execroot/__main__
+      if (mount(opt.working_dir.c_str() + 1, opt.working_dir.c_str(), nullptr, MS_BIND,
+                nullptr) < 0) {
+        DIE("mount(%s, %s, nullptr, MS_BIND, nullptr)", opt.working_dir.c_str() + 1,
+            opt.working_dir.c_str());
+      }
+
+      // PWD is still /dev/shm/bazel-sandbox/1234/root (in the old /dev/shm mount)
+      // This needs to be maintained because we run `pivot_root` from this dir and `pivot_root`
+      // requires old and new roots to be in the same mount point.
+    } else {
+      PRINT_DEBUG("tmpfs: %s", tmpfs_dir.c_str());
+      CreateTarget(tmpfs_dir.c_str(), true);
+      if (mount("tmpfs", tmpfs_dir.c_str(), "tmpfs",
+            MS_NOSUID | MS_NODEV | MS_NOATIME, nullptr) < 0) {
+        DIE("mount(tmpfs, %s, tmpfs, MS_NOSUID | MS_NODEV | MS_NOATIME, nullptr)",
+            tmpfs_dir.c_str());
+      }
     }
   }
 
@@ -313,7 +356,7 @@ static void MountFilesystems() {
   if (mount(opt.working_dir.c_str(), opt.working_dir.c_str() + 1, nullptr, MS_BIND,
             nullptr) < 0) {
     DIE("mount(%s, %s, nullptr, MS_BIND, nullptr)", opt.working_dir.c_str(),
-        opt.working_dir.c_str());
+        opt.working_dir.c_str() + 1);
   }
 
   for (size_t i = 0; i < opt.bind_mount_sources.size(); i++) {
