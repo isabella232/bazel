@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
+import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.HashSet;
@@ -170,6 +171,24 @@ public class SymlinkedSandboxedSpawn implements SandboxedSpawn {
     }
   }
 
+  private static void moveOrCopyNode(Path from, Path to) throws IOException {
+    File fromFile = from.getPathFile();
+    File toFile = to.getPathFile();
+
+    // If we can just rename the file (from and to in the same mountpoint), do that.
+    if (!fromFile.renameTo(toFile)) {
+      if (from.isSymbolicLink()) {
+        // For symlinks, copy over the link (do not attempt to read the contents of the dereferenced
+        // link)
+        PathFragment targetFragment = from.readSymbolicLinkUnchecked();
+        to.createSymbolicLink(targetFragment);
+      } else {
+        // For regular files that can't be renamed, copy.
+        Files.copy(fromFile, toFile);
+      }
+    }
+  }
+
   /** Moves all {@code outputs} to {@code execRoot}. */
   @Override
   public void copyOutputs(Path execRoot) throws IOException {
@@ -181,7 +200,7 @@ public class SymlinkedSandboxedSpawn implements SandboxedSpawn {
         // outputs have already been created, but the spawn outputs may be different from the
         // overall action outputs. This is the case for test actions.
         FileSystemUtils.createDirectoryAndParents(target.getParentDirectory());
-        Files.move(source.getPathFile(), target.getPathFile());
+        moveOrCopyNode(source, target);
       } else if (source.isDirectory()) {
         try {
           source.renameTo(target);
