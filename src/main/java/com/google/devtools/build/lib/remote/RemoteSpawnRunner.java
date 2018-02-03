@@ -158,7 +158,7 @@ class RemoteSpawnRunner implements SpawnRunner {
             execRoot,
             spawn.getOutputFiles(),
             digestUtil.compute(command),
-            Digests.buildDigest(hasher.hash().asBytes(), 64),
+            DigestUtil.buildDigest(hasher.hash().asBytes(), 64),
             platform,
             policy.getTimeout(),
             Spawns.mayBeCached(spawn));
@@ -201,7 +201,7 @@ class RemoteSpawnRunner implements SpawnRunner {
         return execLocally(spawn, policy, inputMap, uploadLocalResults, remoteCache, actionKey);
       }
 
-      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache, digestUtil);
       inputMap = policy.getInputMapping();
       TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
       repository.computeMerkleDigests(inputRoot);

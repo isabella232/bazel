@@ -103,14 +103,16 @@ public final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner 
       Path sandboxBase,
       String productName,
       Path inaccessibleHelperFile,
-      Path inaccessibleHelperDir) {
+      Path inaccessibleHelperDir,
+      LinuxSandboxRootfsManager rootfsManager) {
     this(
         cmdEnv,
         sandboxBase,
         productName,
         inaccessibleHelperFile,
         inaccessibleHelperDir,
-        Optional.empty());
+        Optional.empty(),
+        rootfsManager);
   }
 
   /**
@@ -130,14 +132,16 @@ public final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner 
       String productName,
       Path inaccessibleHelperFile,
       Path inaccessibleHelperDir,
-      Duration timeoutKillDelay) {
+      Duration timeoutKillDelay,
+      LinuxSandboxRootfsManager rootfsManager) {
     this(
         cmdEnv,
         sandboxBase,
         productName,
         inaccessibleHelperFile,
         inaccessibleHelperDir,
-        Optional.of(timeoutKillDelay));
+        Optional.of(timeoutKillDelay),
+        rootfsManager);
   }
 
   /**
@@ -158,7 +162,6 @@ public final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner 
       Path inaccessibleHelperFile,
       Path inaccessibleHelperDir,
       Optional<Duration> timeoutKillDelay,
-      int timeoutGraceSeconds,
       LinuxSandboxRootfsManager rootfsManager) {
     super(cmdEnv, sandboxBase);
     this.fileSystem = cmdEnv.getRuntime().getFileSystem();
@@ -169,8 +172,8 @@ public final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner 
     this.linuxSandbox = LinuxSandboxUtil.getLinuxSandbox(cmdEnv);
     this.inaccessibleHelperFile = inaccessibleHelperFile;
     this.inaccessibleHelperDir = inaccessibleHelperDir;
-    this.timeoutGraceSeconds = timeoutGraceSeconds;
-    this.localEnvProvider = LocalEnvProvider.ADD_TEMP_POSIX;
+    this.timeoutKillDelay = timeoutKillDelay;
+    this.localEnvProvider = new PosixLocalEnvProvider(cmdEnv.getClientEnv());
     this.rootfsManager = rootfsManager;
     if (remoteCacheKey() != null) {
       globalRemoteCacheKey = remoteCacheKey();
