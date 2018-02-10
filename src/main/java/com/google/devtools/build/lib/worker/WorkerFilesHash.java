@@ -74,12 +74,6 @@ class WorkerFilesHash {
       for (Entry<PathFragment, Artifact> mapping : rootAndMappings.getValue().entrySet()) {
         Artifact localArtifact = mapping.getValue();
         if (localArtifact != null) {
-          Metadata metadata = actionInputFileCache.getMetadata(localArtifact);
-          if (metadata.getType().isFile()) {
-            workerFilesMap.put(
-                root.getRelative(mapping.getKey()),
-                HashCode.fromBytes(metadata.getDigest()));
-          }
           workerFilesMap.put(
               root.getRelative(mapping.getKey()),
               // DBX: We use DigestUtil directly here since runfiles artifacts may not be in the input file cache.
