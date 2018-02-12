@@ -63,6 +63,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.annotation.Nullable;
@@ -202,7 +203,29 @@ class RemoteSpawnRunner implements SpawnRunner {
       }
 
       TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache, digestUtil);
-      inputMap = policy.getInputMapping();
+      inputMap = new TreeMap<>();
+      // Compute inputMap correctly
+      spawnInputs = spawn.getInputFiles();
+      for (ActionInput input : spawnInputs) {
+        Metadata md = null;
+        try {
+          md = inputFileCache.getMetadata(input);
+        } catch (IOException e) {
+        }
+        if (md == null || md.getDigest() == null) {
+          // Happens for error-propogating middlemen. Such artifacts do not cause invalidation of
+          // their reverse dependencies.
+          if (input instanceof Artifact && ((Artifact)input).isMiddlemanArtifact()) {
+            continue;
+          }
+          if (md != null && !md.isFile()) {
+            // Depending on a directory is unsound. bail
+            return fallbackRunner.exec(spawn, policy);
+          }
+          throw new RuntimeException("unclear what " + input.toString() + " is exactly");
+        }
+        inputMap.put(input.getExecPath(), input);
+      }
       TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
       repository.computeMerkleDigests(inputRoot);
 
