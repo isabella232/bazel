@@ -136,20 +136,4 @@ public final class SandboxHelpers {
         .testArguments
         .contains("--wrapper_script_flag=--debug");
   }
-
-  /** Returns true if this specific spawn requires network access. */
-  static boolean shouldAllowNetwork(Spawn spawn) {
-    // If the Spawn requests to block network access, do so.
-    if (spawn.getExecutionInfo().containsKey("block-network")) {
-      return false;
-    }
-
-    // DBX: network access is enabled for builds, but not for tests, by default.
-    if (spawn.getResourceOwner().getMnemonic().equals("TestRunner")) {
-      return false;
-    }
-
-    // Network access is allowed by default.
-    return true;
-  }
 }
