@@ -92,6 +92,9 @@ public class TestTargetProperties {
       executionInfo.put(ExecutionRequirements.LOCAL, "");
     }
 
+    // DBX: Disable network access for tests.
+    executionInfo.put("block-network", "");
+
     if (executionRequirements != null) {
       // This will overwrite whatever TargetUtils put there, which might be confusing.
       executionInfo.putAll(executionRequirements.getExecutionInfo());
