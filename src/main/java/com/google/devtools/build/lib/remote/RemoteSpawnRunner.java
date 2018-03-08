@@ -171,7 +171,7 @@ class RemoteSpawnRunner implements SpawnRunner {
     Context previous = withMetadata.attach();
     try {
       boolean acceptCachedResult = options.remoteAcceptCached && Spawns.mayBeCached(spawn);
-      boolean uploadLocalResults = options.remoteUploadLocalResults;
+      boolean uploadLocalResults = options.remoteUploadLocalResults && Spawns.mayBeCached(spawn);
 
       try {
         // Try to lookup the action in the action cache.
