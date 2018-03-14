@@ -431,6 +431,9 @@ class RemoteSpawnRunner implements SpawnRunner {
               && result.exitCode() == 0;
       remoteCache.upload(actionKey, execRoot, outputFiles, policy.getFileOutErr(), uploadAction);
     } catch (IOException e) {
+      if (e instanceof AbstractRemoteActionCache.OutputIsSymlinkException) {
+        throw new com.google.devtools.build.lib.actions.UserExecException(e);
+      }
       if (verboseFailures) {
         report(Event.debug("Upload to remote cache failed: " + e.getMessage()));
       } else {

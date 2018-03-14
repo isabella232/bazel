@@ -258,6 +258,12 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     }
   }
 
+  public class OutputIsSymlinkException extends IOException {
+    OutputIsSymlinkException(String message) {
+      super(message);
+    }
+  }
+
   /**
    * The UploadManifest is used to mutualize upload between the RemoteActionCache implementations.
    */
@@ -287,6 +293,9 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
      */
     public void addFiles(Collection<Path> files) throws IOException, InterruptedException {
       for (Path file : files) {
+        if (file.isSymbolicLink()) {
+          throw new OutputIsSymlinkException(String.format("refusing to upload %s, since it is a symlink", file.toString()));
+        }
         // TODO(ulfjack): Maybe pass in a SpawnResult here, add a list of output files to that, and
         // rely on the local spawn runner to stat the files, instead of statting here.
         if (!file.exists()) {
