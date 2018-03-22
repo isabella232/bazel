@@ -158,7 +158,12 @@ def main():
   returncode = 0
   cmd = get_bazel_bin() + sys.argv[1:]
   try:
-    proc = subprocess.Popen(cmd)
+    cmd_env = os.environ.copy()
+    # Delete TMPDIR from env.
+    # Any path set in TMPDIR may not exist in the rootfs, and can break sandboxed actions.
+    cmd_env.pop('TMPDIR', None)
+
+    proc = subprocess.Popen(cmd, env=cmd_env)
     SignalForwarder(proc)
     returncode = proc.wait()
   except KeyboardInterrupt:
