@@ -42,8 +42,6 @@ def collect_cache_metrics():
         # Filter out keys which start with "cache-"
         return {k:v for k, v in debug_vars_kv.iteritems() if k.startswith('cache-')}
     except Exception as e:
-        print >>sys.stderr, 'WARNING: Unable to collect cache metrics: %s' % (e)
-        print >>sys.stderr
         return {}
 
 
