@@ -129,6 +129,11 @@ public final class Runfiles {
   // equals to the third one if they are not the same instance (which they almost never are)
   //
   // Goodnight, prince(ss)?, and sweet dreams.
+  @SkylarkModule(
+    name = "SymlinkEntry",
+    category = SkylarkModuleCategory.NONE,
+    doc = "An interface for a set of runfiles."
+  )
   private static final class SymlinkEntry implements SkylarkValue {
     private final PathFragment path;
     private final Artifact artifact;
@@ -138,10 +143,24 @@ public final class Runfiles {
       this.artifact = Preconditions.checkNotNull(artifact);
     }
 
+    @SkylarkCallable(
+      name = "path",
+      doc = "The symlink path in runfiles",
+      structField = true
+    )
+    public String getPathString() {
+      return getPath().getPathString();
+    }
+
     public PathFragment getPath() {
       return path;
     }
 
+    @SkylarkCallable(
+      name = "artifact",
+      doc = "Target artifact of the symlink",
+      structField = true
+    )
     public Artifact getArtifact() {
       return artifact;
     }
@@ -154,7 +173,7 @@ public final class Runfiles {
     @Override
     public void repr(SkylarkPrinter printer) {
       printer.append("SymlinkEntry(path = ");
-      printer.repr(getPath().toString());
+      printer.repr(getPathString());
       printer.append(", artifact = ");
       getArtifact().repr(printer);
       printer.append(")");
@@ -587,6 +606,11 @@ public final class Runfiles {
   /**
    * Returns the root symlinks.
    */
+  @SkylarkCallable(
+    name = "root_symlinks",
+    doc = "Returns the set of root symlinks.",
+    structField = true
+  )
   public NestedSet<SymlinkEntry> getRootSymlinks() {
     return rootSymlinks;
   }
