@@ -36,7 +36,12 @@ if [[ "$1" != "" ]]; then
 else
   timestamp=$(python -c "import time; print time.strftime('%Y%m%d%H%M%S', time.gmtime(time.time()))")
 fi
-fpm --verbose --debug --prefix / -C $pkg_dir --deb-no-default-config-files -s dir -t deb -n "bazel" --provides bazel --conflicts bazel-beta --replaces bazel-beta -v 1.0.$timestamp usr etc
+
+# Note we depend on "gcc" only because bazel barfs if a compiler isn't installed
+# on the system even if the build doesn't use the system compiler. We should
+# drop the gcc dependency if that problem is ever fixed.
+
+fpm --verbose --debug --prefix / -C $pkg_dir --deb-no-default-config-files -d gcc -s dir -t deb -n "bazel" --provides bazel --conflicts bazel-beta --replaces bazel-beta -v 1.0.$timestamp usr etc
 
 # Beta package
-fpm --verbose --debug --prefix / -C $pkg_dir --deb-no-default-config-files -s dir -t deb -n "bazel-beta" --provides bazel --conflicts bazel --replaces bazel -v 1.0.$timestamp usr etc
+fpm --verbose --debug --prefix / -C $pkg_dir --deb-no-default-config-files -d gcc -s dir -t deb -n "bazel-beta" --provides bazel --conflicts bazel --replaces bazel -v 1.0.$timestamp usr etc
