@@ -217,7 +217,7 @@ public final class RemoteOptions extends OptionsBase {
 
   @Option(
     name = "remote_allow_symlink_upload",
-    defaultValue = "true",
+    defaultValue = "false",
     category = "remote",
     documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
     effectTags = {OptionEffectTag.EXECUTION},
